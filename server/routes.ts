@@ -340,7 +340,238 @@ export async function registerRoutes(
     }
   });
 
+  // Boost optimization - suggest student swaps to improve balance
+  app.post("/api/boost", async (req, res) => {
+    try {
+      const placements = await storage.getPlacements();
+      const students = await storage.getStudents();
+      const classConfigs = await storage.getClassConfigs();
+      const characteristics = await storage.getCharacteristics();
+      const rules = await storage.getRules();
+
+      if (placements.length === 0) {
+        return res.status(400).json({ error: "No placements found. Generate classes first." });
+      }
+
+      // Calculate current balance scores for each class
+      const classStudents: Map<string, Student[]> = new Map();
+      for (const config of classConfigs) {
+        const placementIds = placements.filter(p => p.classId === config.id).map(p => p.studentId);
+        classStudents.set(config.id, students.filter(s => placementIds.includes(s.id)));
+      }
+
+      // Build separation constraints
+      const separations: Map<string, Set<string>> = new Map();
+      for (const rule of rules) {
+        if (rule.type === "separate") {
+          if (!separations.has(rule.studentId1)) separations.set(rule.studentId1, new Set());
+          if (!separations.has(rule.studentId2)) separations.set(rule.studentId2, new Set());
+          separations.get(rule.studentId1)!.add(rule.studentId2);
+          separations.get(rule.studentId2)!.add(rule.studentId1);
+        }
+      }
+
+      // Build pairing constraints 
+      const pairings: Map<string, Set<string>> = new Map();
+      for (const rule of rules) {
+        if (rule.type === "pair") {
+          if (!pairings.has(rule.studentId1)) pairings.set(rule.studentId1, new Set());
+          if (!pairings.has(rule.studentId2)) pairings.set(rule.studentId2, new Set());
+          pairings.get(rule.studentId1)!.add(rule.studentId2);
+          pairings.get(rule.studentId2)!.add(rule.studentId1);
+        }
+      }
+
+      // Calculate balance score for a class
+      const calculateClassBalance = (classStudentList: Student[]): number => {
+        if (characteristics.length === 0 || classStudentList.length === 0) return 100;
+        
+        let totalScore = 0;
+        for (const char of characteristics) {
+          const distribution: Record<string, number> = {};
+          for (const s of classStudentList) {
+            const val = s.characteristics?.[char.name] || "unknown";
+            distribution[val] = (distribution[val] || 0) + 1;
+          }
+          
+          const values = Object.values(distribution);
+          if (values.length > 1) {
+            const mean = values.reduce((a, b) => a + b, 0) / values.length;
+            const variance = values.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / values.length;
+            const maxVariance = Math.pow(classStudentList.length, 2);
+            totalScore += Math.max(0, 100 - (variance / maxVariance) * 100);
+          } else {
+            totalScore += 100;
+          }
+        }
+        return totalScore / characteristics.length;
+      };
+
+      // Calculate overall balance
+      const calculateOverallBalance = (): number => {
+        let total = 0;
+        let count = 0;
+        for (const [_, classList] of classStudents) {
+          total += calculateClassBalance(classList);
+          count++;
+        }
+        return count > 0 ? total / count : 100;
+      };
+
+      // Check if a swap would violate rules
+      const wouldViolateRules = (student: Student, targetClassId: string): boolean => {
+        const targetStudents = classStudents.get(targetClassId) || [];
+        
+        // Check separation rules
+        const mustSeparate = separations.get(student.id);
+        if (mustSeparate) {
+          for (const other of targetStudents) {
+            if (mustSeparate.has(other.id)) return true;
+          }
+        }
+        
+        // Check if pairing partner would be left behind
+        const mustPair = pairings.get(student.id);
+        if (mustPair) {
+          // Find student's current class
+          const currentClassId = placements.find(p => p.studentId === student.id)?.classId;
+          if (currentClassId) {
+            const currentStudents = classStudents.get(currentClassId) || [];
+            for (const partnerId of mustPair) {
+              const partnerInCurrentClass = currentStudents.some(s => s.id === partnerId);
+              const partnerInTargetClass = targetStudents.some(s => s.id === partnerId);
+              if (partnerInCurrentClass && !partnerInTargetClass) {
+                return true; // Would separate paired students
+              }
+            }
+          }
+        }
+        
+        return false;
+      };
+
+      const currentOverallBalance = calculateOverallBalance();
+      const suggestions: BoostSuggestion[] = [];
+
+      // Try swapping students between classes
+      const classIds = Array.from(classStudents.keys());
+      
+      for (let i = 0; i < classIds.length; i++) {
+        for (let j = i + 1; j < classIds.length; j++) {
+          const class1Id = classIds[i];
+          const class2Id = classIds[j];
+          const class1Students = classStudents.get(class1Id) || [];
+          const class2Students = classStudents.get(class2Id) || [];
+          
+          // Try each pair of students
+          for (const student1 of class1Students) {
+            for (const student2 of class2Students) {
+              // Skip if either swap would violate rules
+              if (wouldViolateRules(student1, class2Id) || wouldViolateRules(student2, class1Id)) {
+                continue;
+              }
+              
+              // Simulate the swap
+              const newClass1 = class1Students.filter(s => s.id !== student1.id).concat([student2]);
+              const newClass2 = class2Students.filter(s => s.id !== student2.id).concat([student1]);
+              
+              // Calculate new balance
+              const tempClassStudents = new Map(classStudents);
+              tempClassStudents.set(class1Id, newClass1);
+              tempClassStudents.set(class2Id, newClass2);
+              
+              let newTotal = 0;
+              for (const [cid, classList] of tempClassStudents) {
+                newTotal += calculateClassBalance(classList);
+              }
+              const newOverallBalance = newTotal / classIds.length;
+              
+              // Only suggest swaps that improve balance
+              const improvement = newOverallBalance - currentOverallBalance;
+              if (improvement > 0.5) { // Minimum 0.5% improvement
+                suggestions.push({
+                  id: `swap-${student1.id}-${student2.id}`,
+                  type: "swap",
+                  student1: {
+                    id: student1.id,
+                    name: `${student1.firstName} ${student1.lastName}`,
+                    currentClass: classConfigs.find(c => c.id === class1Id)?.name || class1Id,
+                    currentClassId: class1Id,
+                  },
+                  student2: {
+                    id: student2.id,
+                    name: `${student2.firstName} ${student2.lastName}`,
+                    currentClass: classConfigs.find(c => c.id === class2Id)?.name || class2Id,
+                    currentClassId: class2Id,
+                  },
+                  improvement: Math.round(improvement * 10) / 10,
+                  reason: `Swapping these students would improve overall balance by ${improvement.toFixed(1)}%`,
+                });
+              }
+            }
+          }
+        }
+      }
+
+      // Sort suggestions by improvement (highest first)
+      suggestions.sort((a, b) => b.improvement - a.improvement);
+
+      // Return top 10 suggestions
+      res.json({
+        currentBalance: Math.round(currentOverallBalance * 10) / 10,
+        suggestions: suggestions.slice(0, 10),
+      });
+    } catch (error) {
+      console.error("Boost error:", error);
+      res.status(500).json({ error: "Failed to generate optimization suggestions" });
+    }
+  });
+
+  // Apply a boost suggestion (swap two students)
+  app.post("/api/boost/apply", async (req, res) => {
+    try {
+      const { student1Id, student1NewClassId, student2Id, student2NewClassId } = req.body;
+      
+      const placements = await storage.getPlacements();
+      
+      const placement1 = placements.find(p => p.studentId === student1Id);
+      const placement2 = placements.find(p => p.studentId === student2Id);
+      
+      if (!placement1 || !placement2) {
+        return res.status(404).json({ error: "One or both students not found in placements" });
+      }
+      
+      // Update both placements
+      await storage.updatePlacement(placement1.id, { classId: student1NewClassId });
+      await storage.updatePlacement(placement2.id, { classId: student2NewClassId });
+      
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to apply boost suggestion" });
+    }
+  });
+
   return httpServer;
+}
+
+// Boost suggestion interface
+interface BoostSuggestion {
+  id: string;
+  type: "swap";
+  student1: {
+    id: string;
+    name: string;
+    currentClass: string;
+    currentClassId: string;
+  };
+  student2: {
+    id: string;
+    name: string;
+    currentClass: string;
+    currentClassId: string;
+  };
+  improvement: number;
+  reason: string;
 }
 
 // Helper function to check conflicts for a student placement

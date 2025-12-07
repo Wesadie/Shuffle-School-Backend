@@ -12,6 +12,8 @@ export const students = pgTable("students", {
   gender: text("gender"),
   characteristics: jsonb("characteristics").$type<Record<string, string>>().default({}),
   notes: text("notes"),
+  parentRequests: text("parent_requests"),
+  parentNotes: text("parent_notes"),
 });
 
 export const insertStudentSchema = createInsertSchema(students).omit({ id: true });
@@ -93,6 +95,30 @@ export interface BalanceMetric {
   name: string;
   distribution: { className: string; values: Record<string, number> }[];
   score: number;
+}
+
+export interface BoostSuggestion {
+  id: string;
+  type: "swap";
+  student1: {
+    id: string;
+    name: string;
+    currentClass: string;
+    currentClassId: string;
+  };
+  student2: {
+    id: string;
+    name: string;
+    currentClass: string;
+    currentClassId: string;
+  };
+  improvement: number;
+  reason: string;
+}
+
+export interface BoostResponse {
+  currentBalance: number;
+  suggestions: BoostSuggestion[];
 }
 
 // Keep legacy user for compatibility

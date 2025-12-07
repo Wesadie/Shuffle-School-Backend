@@ -116,6 +116,8 @@ export class MemStorage implements IStorage {
       gender: insertStudent.gender ?? null,
       characteristics: insertStudent.characteristics ?? {},
       notes: insertStudent.notes ?? null,
+      parentRequests: insertStudent.parentRequests ?? null,
+      parentNotes: insertStudent.parentNotes ?? null,
     };
     this.students.set(id, student);
     return student;

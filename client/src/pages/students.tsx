@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Plus, Trash2, Edit2, Search, Users, ChevronUp, ChevronDown } from "lucide-react";
+import { Plus, Trash2, Edit2, Search, Users, ChevronUp, ChevronDown, MessageSquare } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -56,6 +57,8 @@ export default function StudentsPage() {
     gender: "",
     notes: "",
     characteristics: {},
+    parentRequests: "",
+    parentNotes: "",
   });
 
   const { data: students = [], isLoading } = useQuery<Student[]>({
@@ -125,6 +128,8 @@ export default function StudentsPage() {
       gender: "",
       notes: "",
       characteristics: {},
+      parentRequests: "",
+      parentNotes: "",
     });
   };
 
@@ -195,6 +200,8 @@ export default function StudentsPage() {
       gender: student.gender || "",
       notes: student.notes || "",
       characteristics: student.characteristics || {},
+      parentRequests: student.parentRequests || "",
+      parentNotes: student.parentNotes || "",
     });
   };
 
@@ -350,7 +357,19 @@ export default function StudentsPage() {
                         />
                       </TableCell>
                       <TableCell className="font-medium">
-                        {student.lastName}, {student.firstName}
+                        <div className="flex items-center gap-2">
+                          <span>{student.lastName}, {student.firstName}</span>
+                          {student.parentRequests && (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <MessageSquare className="h-4 w-4 text-muted-foreground" data-testid={`icon-parent-request-${student.id}`} />
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                <p className="max-w-xs">Parent request on file</p>
+                              </TooltipContent>
+                            </Tooltip>
+                          )}
+                        </div>
                       </TableCell>
                       <TableCell>
                         <Badge variant="outline">Grade {student.grade}</Badge>
@@ -552,6 +571,30 @@ export default function StudentsPage() {
                 placeholder="Add any additional notes about this student..."
                 rows={3}
                 data-testid="textarea-notes"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="parentRequests">Parent Requests</Label>
+              <Textarea
+                id="parentRequests"
+                value={formData.parentRequests}
+                onChange={(e) => setFormData({ ...formData, parentRequests: e.target.value })}
+                placeholder="Document any parent placement requests (e.g., 'Please place with Sarah', 'Avoid being in same class as John')..."
+                rows={3}
+                data-testid="textarea-parent-requests"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="parentNotes">Parent Notes</Label>
+              <Textarea
+                id="parentNotes"
+                value={formData.parentNotes}
+                onChange={(e) => setFormData({ ...formData, parentNotes: e.target.value })}
+                placeholder="Additional notes from parent communications..."
+                rows={2}
+                data-testid="textarea-parent-notes"
               />
             </div>
           </div>

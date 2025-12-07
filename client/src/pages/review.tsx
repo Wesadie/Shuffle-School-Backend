@@ -2,7 +2,8 @@ import { useState, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { 
   Users, AlertTriangle, CheckCircle, ArrowRight, Download, 
-  GripVertical, Link2, Unlink, BarChart3, RefreshCw 
+  GripVertical, Link2, Unlink, BarChart3, RefreshCw, Zap,
+  ArrowRightLeft, Check, X, Loader2
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -21,7 +22,7 @@ import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Link } from "wouter";
 import type { 
   ClassConfig, Student, Placement, Rule, Characteristic, 
-  ConflictWarning 
+  ConflictWarning, BoostResponse, BoostSuggestion
 } from "@shared/schema";
 
 interface ClassWithStudents {
@@ -34,6 +35,7 @@ export default function ReviewPage() {
   const { toast } = useToast();
   const [draggedStudent, setDraggedStudent] = useState<Student | null>(null);
   const [dragOverClass, setDragOverClass] = useState<string | null>(null);
+  const [showBoostPanel, setShowBoostPanel] = useState(false);
 
   const { data: classConfigs = [], isLoading: configsLoading } = useQuery<ClassConfig[]>({
     queryKey: ["/api/class-configs"],
@@ -68,6 +70,33 @@ export default function ReviewPage() {
         description: error?.message || "An error occurred",
         variant: "destructive" 
       });
+    },
+  });
+
+  const { data: boostData, isLoading: boostLoading, refetch: refetchBoost } = useQuery<BoostResponse>({
+    queryKey: ["/api/boost"],
+    queryFn: async () => {
+      const res = await apiRequest("POST", "/api/boost", {});
+      return res.json() as Promise<BoostResponse>;
+    },
+    enabled: showBoostPanel,
+  });
+
+  const applyBoostMutation = useMutation({
+    mutationFn: (suggestion: BoostSuggestion) =>
+      apiRequest("POST", "/api/boost/apply", {
+        student1Id: suggestion.student1.id,
+        student1NewClassId: suggestion.student2.currentClassId,
+        student2Id: suggestion.student2.id,
+        student2NewClassId: suggestion.student1.currentClassId,
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/placements"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/boost"] });
+      toast({ title: "Swap applied successfully" });
+    },
+    onError: () => {
+      toast({ title: "Failed to apply swap", variant: "destructive" });
     },
   });
 
@@ -251,7 +280,7 @@ export default function ReviewPage() {
             Drag and drop students between classes to fine-tune placements
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <Badge 
             variant={conflicts.length === 0 ? "default" : "destructive"}
             className="gap-1"
@@ -266,6 +295,15 @@ export default function ReviewPage() {
             <BarChart3 className="h-3 w-3" />
             {overallBalance}% Balanced
           </Badge>
+          <Button
+            variant={showBoostPanel ? "default" : "outline"}
+            size="sm"
+            onClick={() => setShowBoostPanel(!showBoostPanel)}
+            data-testid="button-toggle-boost"
+          >
+            <Zap className="h-4 w-4 mr-1" />
+            Boost
+          </Button>
         </div>
       </div>
 
@@ -290,6 +328,101 @@ export default function ReviewPage() {
             </p>
           )}
         </div>
+      )}
+
+      {showBoostPanel && (
+        <Card data-testid="card-boost-panel">
+          <CardHeader className="pb-3">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Zap className="h-5 w-5 text-amber-500" />
+                <CardTitle className="text-base">Boost Optimization</CardTitle>
+              </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => refetchBoost()}
+                disabled={boostLoading}
+                data-testid="button-refresh-boost"
+              >
+                <RefreshCw className={`h-4 w-4 ${boostLoading ? "animate-spin" : ""}`} />
+              </Button>
+            </div>
+            <CardDescription>
+              Intelligent suggestions to improve class balance
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {boostLoading ? (
+              <div className="flex items-center justify-center py-8">
+                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                <span className="ml-2 text-sm text-muted-foreground">Analyzing placements...</span>
+              </div>
+            ) : boostData?.suggestions && boostData.suggestions.length > 0 ? (
+              <div className="space-y-3">
+                <p className="text-sm text-muted-foreground">
+                  Found {boostData.suggestions.length} swap{boostData.suggestions.length !== 1 ? "s" : ""} that could improve balance
+                </p>
+                <ScrollArea className="h-64">
+                  <div className="space-y-2">
+                    {boostData.suggestions.map((suggestion) => (
+                      <div
+                        key={suggestion.id}
+                        className="flex items-center gap-3 p-3 rounded-md bg-muted/50 group"
+                        data-testid={`boost-suggestion-${suggestion.id}`}
+                      >
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 text-sm">
+                            <span className="font-medium truncate">{suggestion.student1.name}</span>
+                            <Badge variant="outline" className="text-xs flex-shrink-0">
+                              {suggestion.student1.currentClass}
+                            </Badge>
+                          </div>
+                          <div className="flex items-center gap-2 my-1">
+                            <ArrowRightLeft className="h-3 w-3 text-muted-foreground flex-shrink-0" />
+                          </div>
+                          <div className="flex items-center gap-2 text-sm">
+                            <span className="font-medium truncate">{suggestion.student2.name}</span>
+                            <Badge variant="outline" className="text-xs flex-shrink-0">
+                              {suggestion.student2.currentClass}
+                            </Badge>
+                          </div>
+                        </div>
+                        <div className="flex flex-col items-end gap-1">
+                          <Badge variant="secondary" className="text-xs">
+                            +{suggestion.improvement}%
+                          </Badge>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => applyBoostMutation.mutate(suggestion)}
+                            disabled={applyBoostMutation.isPending}
+                            data-testid={`button-apply-boost-${suggestion.id}`}
+                          >
+                            {applyBoostMutation.isPending ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <Check className="h-4 w-4" />
+                            )}
+                            Apply
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </ScrollArea>
+              </div>
+            ) : (
+              <div className="flex flex-col items-center justify-center py-8 text-center">
+                <CheckCircle className="h-8 w-8 text-green-500 mb-2" />
+                <p className="text-sm font-medium">Already Optimized</p>
+                <p className="text-xs text-muted-foreground">
+                  No beneficial swaps found. Classes are well balanced.
+                </p>
+              </div>
+            )}
+          </CardContent>
+        </Card>
       )}
 
       <div className="grid gap-6 lg:grid-cols-3">
