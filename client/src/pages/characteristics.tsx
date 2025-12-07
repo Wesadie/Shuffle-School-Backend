@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Plus, Trash2, Edit2, Sliders, GripVertical, Tag } from "lucide-react";
+import { Plus, Trash2, Edit2, Sliders, Tag, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -26,11 +26,37 @@ import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import type { Characteristic, InsertCharacteristic } from "@shared/schema";
 
+interface CharacteristicTemplate {
+  name: string;
+  type: "category" | "scale";
+  options: string[];
+  priority: number;
+  category: string;
+}
+
+const characteristicTemplates: CharacteristicTemplate[] = [
+  { name: "Academic Level", type: "category", options: ["High", "Medium", "Low"], priority: 3, category: "Academic" },
+  { name: "Reading Level", type: "category", options: ["Above Grade", "At Grade", "Below Grade"], priority: 2, category: "Academic" },
+  { name: "Math Level", type: "category", options: ["Above Grade", "At Grade", "Below Grade"], priority: 2, category: "Academic" },
+  { name: "Gifted/Talented", type: "category", options: ["Yes", "No"], priority: 2, category: "Academic" },
+  { name: "Special Education", type: "category", options: ["IEP", "504 Plan", "None"], priority: 3, category: "Special Services" },
+  { name: "English Language Learner", type: "category", options: ["Native", "Advanced", "Intermediate", "Beginner"], priority: 2, category: "Special Services" },
+  { name: "Learning Support Tier", type: "category", options: ["Tier 1", "Tier 2", "Tier 3"], priority: 2, category: "Special Services" },
+  { name: "Behavior", type: "category", options: ["Excellent", "Good", "Needs Support"], priority: 3, category: "Behavioral" },
+  { name: "Social-Emotional", type: "category", options: ["Strong", "Developing", "Needs Support"], priority: 2, category: "Behavioral" },
+  { name: "Self-Regulation", type: "category", options: ["Independent", "Developing", "Needs Assistance"], priority: 2, category: "Behavioral" },
+  { name: "Leadership", type: "category", options: ["Strong Leader", "Emerging", "Follower"], priority: 1, category: "Behavioral" },
+  { name: "Learning Style", type: "category", options: ["Visual", "Auditory", "Kinesthetic"], priority: 1, category: "Learning Profile" },
+  { name: "Work Habits", type: "category", options: ["Consistent", "Variable", "Needs Structure"], priority: 2, category: "Learning Profile" },
+  { name: "Attention/Focus", type: "category", options: ["Strong", "Moderate", "Needs Support"], priority: 2, category: "Learning Profile" },
+];
+
 export default function CharacteristicsPage() {
   const { toast } = useToast();
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [editingChar, setEditingChar] = useState<Characteristic | null>(null);
   const [optionInput, setOptionInput] = useState("");
+  const [showTemplates, setShowTemplates] = useState(false);
 
   const [formData, setFormData] = useState<Partial<InsertCharacteristic>>({
     name: "",
@@ -117,7 +143,7 @@ export default function CharacteristicsPage() {
   const removeOption = (option: string) => {
     setFormData({
       ...formData,
-      options: formData.options?.filter((o) => o !== option),
+      options: (formData.options as string[] | undefined)?.filter((o) => o !== option),
     });
   };
 
@@ -136,6 +162,37 @@ export default function CharacteristicsPage() {
     2: "Medium",
     3: "High",
   };
+
+  const addFromTemplate = (template: CharacteristicTemplate) => {
+    const existingNames = characteristics.map(c => c.name.toLowerCase());
+    if (existingNames.includes(template.name.toLowerCase())) {
+      toast({ 
+        title: "Already exists", 
+        description: `"${template.name}" is already defined`,
+        variant: "destructive" 
+      });
+      return;
+    }
+    createMutation.mutate({
+      name: template.name,
+      type: template.type,
+      options: template.options,
+      priority: template.priority,
+    });
+  };
+
+  const getAvailableTemplates = () => {
+    const existingNames = characteristics.map(c => c.name.toLowerCase());
+    return characteristicTemplates.filter(t => !existingNames.includes(t.name.toLowerCase()));
+  };
+
+  const templatesByCategory = getAvailableTemplates().reduce((acc, template) => {
+    if (!acc[template.category]) {
+      acc[template.category] = [];
+    }
+    acc[template.category].push(template);
+    return acc;
+  }, {} as Record<string, CharacteristicTemplate[]>);
 
   if (isLoading) {
     return (
@@ -159,11 +216,67 @@ export default function CharacteristicsPage() {
             Define characteristics to balance across classes (e.g., academic level, behavior)
           </p>
         </div>
-        <Button onClick={() => setIsAddDialogOpen(true)} data-testid="button-add-characteristic">
-          <Plus className="h-4 w-4 mr-2" />
-          Add Characteristic
-        </Button>
+        <div className="flex gap-2 flex-wrap">
+          <Button 
+            variant="outline" 
+            onClick={() => setShowTemplates(!showTemplates)}
+            data-testid="button-toggle-templates"
+          >
+            <Sparkles className="h-4 w-4 mr-2" />
+            {showTemplates ? "Hide Templates" : "Quick Add"}
+          </Button>
+          <Button onClick={() => setIsAddDialogOpen(true)} data-testid="button-add-characteristic">
+            <Plus className="h-4 w-4 mr-2" />
+            Add Custom
+          </Button>
+        </div>
       </div>
+
+      {showTemplates && Object.keys(templatesByCategory).length > 0 && (
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-lg flex items-center gap-2">
+              <Sparkles className="h-5 w-5" />
+              Quick Add Templates
+            </CardTitle>
+            <CardDescription>
+              Click to instantly add common characteristics. Already added ones are hidden.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {Object.entries(templatesByCategory).map(([category, templates]) => (
+              <div key={category} className="space-y-2">
+                <h4 className="text-sm font-medium text-muted-foreground">{category}</h4>
+                <div className="flex flex-wrap gap-2">
+                  {templates.map((template) => (
+                    <Button
+                      key={template.name}
+                      variant="outline"
+                      size="sm"
+                      onClick={() => addFromTemplate(template)}
+                      disabled={createMutation.isPending}
+                      data-testid={`button-template-${template.name.toLowerCase().replace(/\s+/g, '-')}`}
+                    >
+                      <Plus className="h-3 w-3 mr-1" />
+                      {template.name}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
+      {showTemplates && Object.keys(templatesByCategory).length === 0 && (
+        <Card>
+          <CardContent className="py-6">
+            <p className="text-center text-muted-foreground">
+              All template characteristics have been added. You can create custom ones using the "Add Custom" button.
+            </p>
+          </CardContent>
+        </Card>
+      )}
 
       {characteristics.length === 0 ? (
         <Card>
@@ -332,7 +445,7 @@ export default function CharacteristicsPage() {
                 </div>
                 {formData.options && formData.options.length > 0 && (
                   <div className="flex flex-wrap gap-2 mt-2">
-                    {formData.options.map((option) => (
+                    {(formData.options as string[]).map((option) => (
                       <Badge
                         key={option}
                         variant="secondary"
