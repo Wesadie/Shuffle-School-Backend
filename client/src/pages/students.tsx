@@ -622,6 +622,45 @@ export default function StudentsPage() {
               </div>
             </div>
 
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="medication">Medication</Label>
+                <Input
+                  id="medication"
+                  value={(formData.characteristics as Record<string, string>)?.["Medication"] || ""}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      characteristics: {
+                        ...formData.characteristics,
+                        ["Medication"]: e.target.value,
+                      },
+                    })
+                  }
+                  placeholder="Enter medication details"
+                  data-testid="input-medication"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="learnerSupport">Learner Support</Label>
+                <Input
+                  id="learnerSupport"
+                  value={(formData.characteristics as Record<string, string>)?.["Learner Support"] || ""}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      characteristics: {
+                        ...formData.characteristics,
+                        ["Learner Support"]: e.target.value,
+                      },
+                    })
+                  }
+                  placeholder="Enter learner support details"
+                  data-testid="input-learner-support"
+                />
+              </div>
+            </div>
+
             {characteristics.length > 0 && (
               <div className="space-y-4">
                 <Label>Characteristics</Label>
