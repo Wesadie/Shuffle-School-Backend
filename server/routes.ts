@@ -1,16 +1,634 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
+import {
+  insertStudentSchema,
+  insertRuleSchema,
+  insertCharacteristicSchema,
+  insertClassConfigSchema,
+  insertPlacementSchema,
+  type Student,
+  type Rule,
+  type ClassConfig,
+  type Characteristic,
+  type ConflictWarning,
+  type ClassGenerationResult,
+  type GeneratedClass,
+} from "@shared/schema";
+import { z } from "zod";
 
 export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
-  // put application routes here
-  // prefix all routes with /api
+  // Students CRUD
+  app.get("/api/students", async (req, res) => {
+    const students = await storage.getStudents();
+    res.json(students);
+  });
 
-  // use storage to perform CRUD operations on the storage interface
-  // e.g. storage.insertUser(user) or storage.getUserByUsername(username)
+  app.get("/api/students/:id", async (req, res) => {
+    const student = await storage.getStudent(req.params.id);
+    if (!student) {
+      return res.status(404).json({ error: "Student not found" });
+    }
+    res.json(student);
+  });
+
+  app.post("/api/students", async (req, res) => {
+    try {
+      const data = insertStudentSchema.parse(req.body);
+      const student = await storage.createStudent(data);
+      res.status(201).json(student);
+    } catch (error) {
+      res.status(400).json({ error: "Invalid student data" });
+    }
+  });
+
+  app.patch("/api/students/:id", async (req, res) => {
+    const student = await storage.updateStudent(req.params.id, req.body);
+    if (!student) {
+      return res.status(404).json({ error: "Student not found" });
+    }
+    res.json(student);
+  });
+
+  app.delete("/api/students/:id", async (req, res) => {
+    const deleted = await storage.deleteStudent(req.params.id);
+    if (!deleted) {
+      return res.status(404).json({ error: "Student not found" });
+    }
+    res.status(204).send();
+  });
+
+  app.post("/api/students/bulk-import", async (req, res) => {
+    try {
+      const { students } = req.body;
+      if (!Array.isArray(students)) {
+        return res.status(400).json({ error: "students must be an array" });
+      }
+      const result = await storage.bulkImportStudents(students);
+      res.status(201).json(result);
+    } catch (error) {
+      res.status(400).json({ error: "Failed to import students" });
+    }
+  });
+
+  app.delete("/api/students", async (req, res) => {
+    await storage.deleteAllStudents();
+    res.status(204).send();
+  });
+
+  app.post("/api/students/bulk-delete", async (req, res) => {
+    try {
+      const { ids } = req.body;
+      if (!Array.isArray(ids)) {
+        return res.status(400).json({ error: "ids must be an array" });
+      }
+      let deletedCount = 0;
+      for (const id of ids) {
+        const deleted = await storage.deleteStudent(id);
+        if (deleted) deletedCount++;
+      }
+      res.json({ count: deletedCount });
+    } catch (error) {
+      res.status(400).json({ error: "Failed to delete students" });
+    }
+  });
+
+  // Rules CRUD
+  app.get("/api/rules", async (req, res) => {
+    const rules = await storage.getRules();
+    res.json(rules);
+  });
+
+  app.get("/api/rules/:id", async (req, res) => {
+    const rule = await storage.getRule(req.params.id);
+    if (!rule) {
+      return res.status(404).json({ error: "Rule not found" });
+    }
+    res.json(rule);
+  });
+
+  app.post("/api/rules", async (req, res) => {
+    try {
+      const data = insertRuleSchema.parse(req.body);
+      const rule = await storage.createRule(data);
+      res.status(201).json(rule);
+    } catch (error) {
+      res.status(400).json({ error: "Invalid rule data" });
+    }
+  });
+
+  app.patch("/api/rules/:id", async (req, res) => {
+    const rule = await storage.updateRule(req.params.id, req.body);
+    if (!rule) {
+      return res.status(404).json({ error: "Rule not found" });
+    }
+    res.json(rule);
+  });
+
+  app.delete("/api/rules/:id", async (req, res) => {
+    const deleted = await storage.deleteRule(req.params.id);
+    if (!deleted) {
+      return res.status(404).json({ error: "Rule not found" });
+    }
+    res.status(204).send();
+  });
+
+  // Characteristics CRUD
+  app.get("/api/characteristics", async (req, res) => {
+    const characteristics = await storage.getCharacteristics();
+    res.json(characteristics);
+  });
+
+  app.get("/api/characteristics/:id", async (req, res) => {
+    const characteristic = await storage.getCharacteristic(req.params.id);
+    if (!characteristic) {
+      return res.status(404).json({ error: "Characteristic not found" });
+    }
+    res.json(characteristic);
+  });
+
+  app.post("/api/characteristics", async (req, res) => {
+    try {
+      const data = insertCharacteristicSchema.parse(req.body);
+      const characteristic = await storage.createCharacteristic(data);
+      res.status(201).json(characteristic);
+    } catch (error) {
+      res.status(400).json({ error: "Invalid characteristic data" });
+    }
+  });
+
+  app.patch("/api/characteristics/:id", async (req, res) => {
+    const characteristic = await storage.updateCharacteristic(req.params.id, req.body);
+    if (!characteristic) {
+      return res.status(404).json({ error: "Characteristic not found" });
+    }
+    res.json(characteristic);
+  });
+
+  app.delete("/api/characteristics/:id", async (req, res) => {
+    const deleted = await storage.deleteCharacteristic(req.params.id);
+    if (!deleted) {
+      return res.status(404).json({ error: "Characteristic not found" });
+    }
+    res.status(204).send();
+  });
+
+  // Class Configs CRUD
+  app.get("/api/class-configs", async (req, res) => {
+    const configs = await storage.getClassConfigs();
+    res.json(configs);
+  });
+
+  app.get("/api/class-configs/:id", async (req, res) => {
+    const config = await storage.getClassConfig(req.params.id);
+    if (!config) {
+      return res.status(404).json({ error: "Class config not found" });
+    }
+    res.json(config);
+  });
+
+  app.post("/api/class-configs", async (req, res) => {
+    try {
+      const data = insertClassConfigSchema.parse(req.body);
+      const config = await storage.createClassConfig(data);
+      res.status(201).json(config);
+    } catch (error) {
+      res.status(400).json({ error: "Invalid class config data" });
+    }
+  });
+
+  app.patch("/api/class-configs/:id", async (req, res) => {
+    const config = await storage.updateClassConfig(req.params.id, req.body);
+    if (!config) {
+      return res.status(404).json({ error: "Class config not found" });
+    }
+    res.json(config);
+  });
+
+  app.delete("/api/class-configs/:id", async (req, res) => {
+    const deleted = await storage.deleteClassConfig(req.params.id);
+    if (!deleted) {
+      return res.status(404).json({ error: "Class config not found" });
+    }
+    res.status(204).send();
+  });
+
+  app.delete("/api/class-configs", async (req, res) => {
+    await storage.deleteAllClassConfigs();
+    res.status(204).send();
+  });
+
+  // Placements CRUD
+  app.get("/api/placements", async (req, res) => {
+    const placements = await storage.getPlacements();
+    res.json(placements);
+  });
+
+  app.get("/api/placements/:id", async (req, res) => {
+    const placement = await storage.getPlacement(req.params.id);
+    if (!placement) {
+      return res.status(404).json({ error: "Placement not found" });
+    }
+    res.json(placement);
+  });
+
+  app.post("/api/placements", async (req, res) => {
+    try {
+      const data = insertPlacementSchema.parse(req.body);
+      const placement = await storage.createPlacement(data);
+      res.status(201).json(placement);
+    } catch (error) {
+      res.status(400).json({ error: "Invalid placement data" });
+    }
+  });
+
+  app.patch("/api/placements/:id", async (req, res) => {
+    const placement = await storage.updatePlacement(req.params.id, req.body);
+    if (!placement) {
+      return res.status(404).json({ error: "Placement not found" });
+    }
+    res.json(placement);
+  });
+
+  app.delete("/api/placements/:id", async (req, res) => {
+    const deleted = await storage.deletePlacement(req.params.id);
+    if (!deleted) {
+      return res.status(404).json({ error: "Placement not found" });
+    }
+    res.status(204).send();
+  });
+
+  app.delete("/api/placements", async (req, res) => {
+    await storage.deleteAllPlacements();
+    res.status(204).send();
+  });
+
+  // Move student (reassign to different class)
+  app.post("/api/placements/move", async (req, res) => {
+    try {
+      const { studentId, targetClassId } = req.body;
+      
+      const placements = await storage.getPlacements();
+      const existingPlacement = placements.find(p => p.studentId === studentId);
+      
+      if (existingPlacement) {
+        const updated = await storage.updatePlacement(existingPlacement.id, {
+          classId: targetClassId,
+        });
+        
+        // Check for conflicts after move
+        const rules = await storage.getRules();
+        const conflicts = await checkConflicts(studentId, targetClassId, rules, placements.filter(p => p.id !== existingPlacement.id).concat(updated!));
+        
+        res.json({ placement: updated, conflicts });
+      } else {
+        const newPlacement = await storage.createPlacement({
+          studentId,
+          classId: targetClassId,
+        });
+        res.status(201).json({ placement: newPlacement, conflicts: [] });
+      }
+    } catch (error) {
+      res.status(400).json({ error: "Failed to move student" });
+    }
+  });
+
+  // Class generation algorithm
+  app.post("/api/generate-classes", async (req, res) => {
+    try {
+      const { grade } = req.body;
+      
+      const allStudents = await storage.getStudents();
+      const students = grade ? allStudents.filter(s => s.grade === grade) : allStudents;
+      const classConfigs = await storage.getClassConfigs();
+      const rules = await storage.getRules();
+      const characteristics = await storage.getCharacteristics();
+
+      const targetConfigs = grade ? classConfigs.filter(c => c.grade === grade) : classConfigs;
+
+      if (targetConfigs.length === 0) {
+        return res.status(400).json({ error: "No class configurations found for the specified grade" });
+      }
+
+      if (students.length === 0) {
+        return res.status(400).json({ error: "No students found for the specified grade" });
+      }
+
+      // Clear existing placements for regeneration
+      await storage.deleteAllPlacements();
+
+      // Generate balanced class assignments
+      const result = await generateBalancedClasses(students, targetConfigs, rules, characteristics);
+
+      // Save placements
+      for (const generatedClass of result.classes) {
+        for (const student of generatedClass.students) {
+          await storage.createPlacement({
+            studentId: student.id,
+            classId: generatedClass.classConfig.id,
+          });
+        }
+      }
+
+      res.json(result);
+    } catch (error) {
+      console.error("Generation error:", error);
+      res.status(500).json({ error: "Failed to generate classes" });
+    }
+  });
 
   return httpServer;
+}
+
+// Helper function to check conflicts for a student placement
+async function checkConflicts(
+  studentId: string,
+  classId: string,
+  rules: Rule[],
+  placements: { studentId: string; classId: string }[]
+): Promise<ConflictWarning[]> {
+  const conflicts: ConflictWarning[] = [];
+  const classmates = placements.filter(p => p.classId === classId && p.studentId !== studentId);
+  
+  for (const rule of rules) {
+    const isStudent1 = rule.studentId1 === studentId;
+    const isStudent2 = rule.studentId2 === studentId;
+    
+    if (!isStudent1 && !isStudent2) continue;
+    
+    const otherId = isStudent1 ? rule.studentId2 : rule.studentId1;
+    const otherInSameClass = classmates.some(p => p.studentId === otherId);
+    
+    if (rule.type === "separate" && otherInSameClass) {
+      conflicts.push({
+        type: "separation",
+        message: `Students should be separated: ${rule.reason || "No reason given"}`,
+        studentIds: [rule.studentId1, rule.studentId2],
+        ruleId: rule.id,
+      });
+    }
+    
+    if (rule.type === "pair" && !otherInSameClass) {
+      conflicts.push({
+        type: "pairing",
+        message: `Students should be together: ${rule.reason || "No reason given"}`,
+        studentIds: [rule.studentId1, rule.studentId2],
+        ruleId: rule.id,
+      });
+    }
+  }
+  
+  return conflicts;
+}
+
+// Class generation algorithm with balancing
+async function generateBalancedClasses(
+  students: Student[],
+  classConfigs: ClassConfig[],
+  rules: Rule[],
+  characteristics: Characteristic[]
+): Promise<ClassGenerationResult> {
+  const numClasses = classConfigs.length;
+  const classAssignments: Map<string, Student[]> = new Map();
+  
+  // Initialize empty classes
+  classConfigs.forEach(config => {
+    classAssignments.set(config.id, []);
+  });
+
+  // Build pairing and separation maps
+  const pairings: Map<string, Set<string>> = new Map();
+  const separations: Map<string, Set<string>> = new Map();
+  
+  for (const rule of rules) {
+    if (rule.type === "pair") {
+      if (!pairings.has(rule.studentId1)) pairings.set(rule.studentId1, new Set());
+      if (!pairings.has(rule.studentId2)) pairings.set(rule.studentId2, new Set());
+      pairings.get(rule.studentId1)!.add(rule.studentId2);
+      pairings.get(rule.studentId2)!.add(rule.studentId1);
+    } else if (rule.type === "separate") {
+      if (!separations.has(rule.studentId1)) separations.set(rule.studentId1, new Set());
+      if (!separations.has(rule.studentId2)) separations.set(rule.studentId2, new Set());
+      separations.get(rule.studentId1)!.add(rule.studentId2);
+      separations.get(rule.studentId2)!.add(rule.studentId1);
+    }
+  }
+
+  // Group students by pairing requirements first
+  const pairingGroups: Student[][] = [];
+  const processedStudents = new Set<string>();
+
+  for (const student of students) {
+    if (processedStudents.has(student.id)) continue;
+    
+    const group: Student[] = [student];
+    processedStudents.add(student.id);
+    
+    const toProcess = [student.id];
+    while (toProcess.length > 0) {
+      const currentId = toProcess.pop()!;
+      const pairedWith = pairings.get(currentId);
+      if (pairedWith) {
+        for (const pairedId of pairedWith) {
+          if (!processedStudents.has(pairedId)) {
+            const pairedStudent = students.find(s => s.id === pairedId);
+            if (pairedStudent) {
+              group.push(pairedStudent);
+              processedStudents.add(pairedId);
+              toProcess.push(pairedId);
+            }
+          }
+        }
+      }
+    }
+    
+    pairingGroups.push(group);
+  }
+
+  // Sort groups by size (larger groups first) to handle constraints early
+  pairingGroups.sort((a, b) => b.length - a.length);
+
+  // Assign groups to classes using a balanced approach
+  const classConfigList = Array.from(classConfigs);
+  
+  for (const group of pairingGroups) {
+    // Find the best class for this group
+    let bestClassId = classConfigList[0].id;
+    let bestScore = -Infinity;
+    
+    for (const config of classConfigList) {
+      const currentStudents = classAssignments.get(config.id)!;
+      
+      // Check capacity
+      if (currentStudents.length + group.length > (config.capacity || 30)) {
+        continue;
+      }
+      
+      // Check separations
+      let separationViolations = 0;
+      for (const student of group) {
+        const mustSeparate = separations.get(student.id);
+        if (mustSeparate) {
+          for (const existing of currentStudents) {
+            if (mustSeparate.has(existing.id)) {
+              separationViolations++;
+            }
+          }
+        }
+      }
+      
+      // Calculate balance score based on characteristics
+      let balanceScore = 0;
+      for (const char of characteristics) {
+        const charName = char.name;
+        const priority = char.priority || 1;
+        
+        // Count distribution in this class
+        const distribution: Record<string, number> = {};
+        for (const s of currentStudents) {
+          const val = s.characteristics?.[charName] || "unknown";
+          distribution[val] = (distribution[val] || 0) + 1;
+        }
+        for (const s of group) {
+          const val = s.characteristics?.[charName] || "unknown";
+          distribution[val] = (distribution[val] || 0) + 1;
+        }
+        
+        // Lower variance = better balance
+        const values = Object.values(distribution);
+        if (values.length > 0) {
+          const mean = values.reduce((a, b) => a + b, 0) / values.length;
+          const variance = values.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / values.length;
+          balanceScore -= variance * priority;
+        }
+      }
+      
+      // Prefer smaller classes to balance sizes
+      const sizeBalance = -(currentStudents.length + group.length);
+      
+      // Calculate total score
+      const totalScore = balanceScore + sizeBalance * 10 - separationViolations * 1000;
+      
+      if (totalScore > bestScore) {
+        bestScore = totalScore;
+        bestClassId = config.id;
+      }
+    }
+    
+    // Assign group to best class
+    const targetClass = classAssignments.get(bestClassId)!;
+    targetClass.push(...group);
+  }
+
+  // Generate conflict warnings
+  const conflicts: ConflictWarning[] = [];
+  
+  for (const [classId, classStudents] of classAssignments) {
+    const config = classConfigs.find(c => c.id === classId)!;
+    
+    // Check capacity
+    if (classStudents.length > (config.capacity || 30)) {
+      conflicts.push({
+        type: "capacity",
+        message: `${config.name} exceeds capacity (${classStudents.length}/${config.capacity || 30})`,
+        studentIds: classStudents.map(s => s.id),
+      });
+    }
+    
+    // Check separation violations
+    for (let i = 0; i < classStudents.length; i++) {
+      const student = classStudents[i];
+      const mustSeparate = separations.get(student.id);
+      if (mustSeparate) {
+        for (let j = i + 1; j < classStudents.length; j++) {
+          if (mustSeparate.has(classStudents[j].id)) {
+            const rule = rules.find(
+              r => r.type === "separate" &&
+                ((r.studentId1 === student.id && r.studentId2 === classStudents[j].id) ||
+                 (r.studentId2 === student.id && r.studentId1 === classStudents[j].id))
+            );
+            conflicts.push({
+              type: "separation",
+              message: `Separation rule violated: ${rule?.reason || "Students should be in different classes"}`,
+              studentIds: [student.id, classStudents[j].id],
+              ruleId: rule?.id,
+            });
+          }
+        }
+      }
+    }
+  }
+
+  // Check pairing violations (students who should be together but aren't)
+  for (const rule of rules) {
+    if (rule.type === "pair") {
+      let student1Class: string | null = null;
+      let student2Class: string | null = null;
+      
+      for (const [classId, classStudents] of classAssignments) {
+        if (classStudents.some(s => s.id === rule.studentId1)) student1Class = classId;
+        if (classStudents.some(s => s.id === rule.studentId2)) student2Class = classId;
+      }
+      
+      if (student1Class && student2Class && student1Class !== student2Class) {
+        conflicts.push({
+          type: "pairing",
+          message: `Pairing rule violated: ${rule.reason || "Students should be in the same class"}`,
+          studentIds: [rule.studentId1, rule.studentId2],
+          ruleId: rule.id,
+        });
+      }
+    }
+  }
+
+  // Build result
+  const generatedClasses: GeneratedClass[] = classConfigs.map(config => {
+    const classStudents = classAssignments.get(config.id) || [];
+    
+    // Calculate balance scores for each characteristic
+    const balanceScores: Record<string, number> = {};
+    for (const char of characteristics) {
+      const distribution: Record<string, number> = {};
+      for (const s of classStudents) {
+        const val = s.characteristics?.[char.name] || "unknown";
+        distribution[val] = (distribution[val] || 0) + 1;
+      }
+      
+      const values = Object.values(distribution);
+      if (values.length > 1) {
+        const mean = values.reduce((a, b) => a + b, 0) / values.length;
+        const variance = values.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / values.length;
+        const maxVariance = Math.pow(classStudents.length, 2);
+        balanceScores[char.id] = Math.max(0, 100 - (variance / maxVariance) * 100);
+      } else {
+        balanceScores[char.id] = 100;
+      }
+    }
+    
+    return {
+      classConfig: config,
+      students: classStudents,
+      balanceScores,
+    };
+  });
+
+  // Calculate overall balance
+  let totalScore = 0;
+  let scoreCount = 0;
+  for (const gc of generatedClasses) {
+    for (const score of Object.values(gc.balanceScores)) {
+      totalScore += score;
+      scoreCount++;
+    }
+  }
+  const overallBalance = scoreCount > 0 ? totalScore / scoreCount : 100;
+
+  return {
+    classes: generatedClasses,
+    overallBalance,
+    conflicts,
+  };
 }
