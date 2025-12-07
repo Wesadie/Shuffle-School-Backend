@@ -201,6 +201,52 @@ export default function ReviewPage() {
     return Math.round(balanceMetrics.reduce((sum, m) => sum + m.score, 0) / balanceMetrics.length);
   }, [balanceMetrics]);
 
+  const classStatistics = useMemo(() => {
+    const percentageFieldNames = ["Aggregate %", "Maths %", "English %", "Afrikaans/Isizulu %"];
+    
+    const charNameToId: Record<string, string> = {};
+    characteristics.forEach(char => {
+      charNameToId[char.name] = char.id;
+    });
+
+    return classesWithStudents.map(({ config, students: classStudents }) => {
+      const averages: Record<string, number | null> = {};
+      percentageFieldNames.forEach(fieldName => {
+        const charId = charNameToId[fieldName];
+        const values = classStudents
+          .map(s => {
+            const chars = s.characteristics as Record<string, string>;
+            const val = charId ? chars?.[charId] : chars?.[fieldName];
+            return val ? parseFloat(val) : null;
+          })
+          .filter((v): v is number => v !== null && !isNaN(v));
+        
+        averages[fieldName] = values.length > 0 
+          ? Math.round(values.reduce((sum, v) => sum + v, 0) / values.length * 10) / 10
+          : null;
+      });
+
+      const genderLower = (g?: string | null) => (g || '').toLowerCase().trim();
+      const maleCount = classStudents.filter(s => {
+        const g = genderLower(s.gender);
+        return g === 'male' || g === 'm' || g === 'boy';
+      }).length;
+      const femaleCount = classStudents.filter(s => {
+        const g = genderLower(s.gender);
+        return g === 'female' || g === 'f' || g === 'girl';
+      }).length;
+
+      return {
+        classId: config.id,
+        className: config.name,
+        averages,
+        maleCount,
+        femaleCount,
+        totalStudents: classStudents.length,
+      };
+    });
+  }, [classesWithStudents, characteristics]);
+
   const handleDragStart = (student: Student) => {
     setDraggedStudent(student);
   };
@@ -620,6 +666,47 @@ export default function ReviewPage() {
                   {conflicts.length}
                 </span>
               </div>
+
+              {classStatistics.length > 0 && placements.length > 0 && (
+                <div className="pt-4 border-t space-y-4">
+                  <p className="text-sm font-medium">Class Statistics</p>
+                  {classStatistics.map((stat) => (
+                    <div key={stat.classId} className="space-y-2" data-testid={`class-stats-${stat.classId}`}>
+                      <p className="text-sm font-medium text-muted-foreground">{stat.className}</p>
+                      <div className="pl-2 space-y-1 text-xs">
+                        <div className="flex justify-between gap-2">
+                          <span className="text-muted-foreground">Gender</span>
+                          <span className="font-medium">{stat.maleCount} M / {stat.femaleCount} F</span>
+                        </div>
+                        {stat.averages["Aggregate %"] !== null && (
+                          <div className="flex justify-between gap-2">
+                            <span className="text-muted-foreground">Aggregate Avg</span>
+                            <span className="font-medium">{stat.averages["Aggregate %"]}%</span>
+                          </div>
+                        )}
+                        {stat.averages["Maths %"] !== null && (
+                          <div className="flex justify-between gap-2">
+                            <span className="text-muted-foreground">Maths Avg</span>
+                            <span className="font-medium">{stat.averages["Maths %"]}%</span>
+                          </div>
+                        )}
+                        {stat.averages["English %"] !== null && (
+                          <div className="flex justify-between gap-2">
+                            <span className="text-muted-foreground">English Avg</span>
+                            <span className="font-medium">{stat.averages["English %"]}%</span>
+                          </div>
+                        )}
+                        {stat.averages["Afrikaans/Isizulu %"] !== null && (
+                          <div className="flex justify-between gap-2">
+                            <span className="text-muted-foreground">Afrikaans/Isizulu Avg</span>
+                            <span className="font-medium">{stat.averages["Afrikaans/Isizulu %"]}%</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </CardContent>
           </Card>
         </div>
