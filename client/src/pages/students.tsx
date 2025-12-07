@@ -625,39 +625,49 @@ export default function StudentsPage() {
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="medication">Medication</Label>
-                <Input
-                  id="medication"
+                <Select
                   value={(formData.characteristics as Record<string, string>)?.["Medication"] || ""}
-                  onChange={(e) =>
+                  onValueChange={(value) =>
                     setFormData({
                       ...formData,
                       characteristics: {
                         ...formData.characteristics,
-                        ["Medication"]: e.target.value,
+                        ["Medication"]: value,
                       },
                     })
                   }
-                  placeholder="Enter medication details"
-                  data-testid="input-medication"
-                />
+                >
+                  <SelectTrigger data-testid="select-medication">
+                    <SelectValue placeholder="Select" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Yes">Yes</SelectItem>
+                    <SelectItem value="No">No</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
               <div className="space-y-2">
                 <Label htmlFor="learnerSupport">Learner Support</Label>
-                <Input
-                  id="learnerSupport"
+                <Select
                   value={(formData.characteristics as Record<string, string>)?.["Learner Support"] || ""}
-                  onChange={(e) =>
+                  onValueChange={(value) =>
                     setFormData({
                       ...formData,
                       characteristics: {
                         ...formData.characteristics,
-                        ["Learner Support"]: e.target.value,
+                        ["Learner Support"]: value,
                       },
                     })
                   }
-                  placeholder="Enter learner support details"
-                  data-testid="input-learner-support"
-                />
+                >
+                  <SelectTrigger data-testid="select-learner-support">
+                    <SelectValue placeholder="Select" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Yes">Yes</SelectItem>
+                    <SelectItem value="No">No</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
             </div>
 
