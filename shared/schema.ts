@@ -137,6 +137,22 @@ export const insertSurveySchema = createInsertSchema(surveys).omit({ id: true })
 export type InsertSurvey = z.infer<typeof insertSurveySchema>;
 export type Survey = typeof surveys.$inferSelect;
 
+// Scenarios for saving and comparing placement snapshots
+export const scenarios = pgTable("scenarios", {
+  id: varchar("id", { length: 36 }).primaryKey(),
+  name: text("name").notNull(),
+  createdAt: text("created_at").notNull(),
+  placements: jsonb("placements").$type<{ studentId: string; classId: string }[]>().default([]),
+  balanceMetrics: jsonb("balance_metrics").$type<{
+    overallBalance: number;
+    classBalances: { classId: string; className: string; balance: number }[];
+  }>().default({ overallBalance: 0, classBalances: [] }),
+});
+
+export const insertScenarioSchema = createInsertSchema(scenarios).omit({ id: true });
+export type InsertScenario = z.infer<typeof insertScenarioSchema>;
+export type Scenario = typeof scenarios.$inferSelect;
+
 // Keep legacy user for compatibility
 export const users = pgTable("users", {
   id: varchar("id", { length: 36 }).primaryKey(),

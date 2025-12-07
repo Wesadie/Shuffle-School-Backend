@@ -8,6 +8,7 @@ import {
   insertClassConfigSchema,
   insertPlacementSchema,
   insertSurveySchema,
+  insertScenarioSchema,
   type Student,
   type Rule,
   type ClassConfig,
@@ -595,6 +596,131 @@ export async function registerRoutes(
       return res.status(404).json({ error: "Survey not found" });
     }
     res.status(204).send();
+  });
+
+  // Scenarios CRUD
+  app.get("/api/scenarios", async (req, res) => {
+    const scenarios = await storage.getScenarios();
+    res.json(scenarios);
+  });
+
+  app.get("/api/scenarios/:id", async (req, res) => {
+    const scenario = await storage.getScenario(req.params.id);
+    if (!scenario) {
+      return res.status(404).json({ error: "Scenario not found" });
+    }
+    res.json(scenario);
+  });
+
+  app.post("/api/scenarios", async (req, res) => {
+    try {
+      // Get current placements and calculate balance metrics
+      const placements = await storage.getPlacements();
+      const students = await storage.getStudents();
+      const classConfigs = await storage.getClassConfigs();
+      const characteristics = await storage.getCharacteristics();
+
+      if (placements.length === 0) {
+        return res.status(400).json({ error: "No placements found. Generate classes first." });
+      }
+
+      // Calculate balance scores for each class
+      const classBalances: { classId: string; className: string; balance: number }[] = [];
+      let totalBalance = 0;
+
+      for (const config of classConfigs) {
+        const classPlacementStudentIds = placements.filter(p => p.classId === config.id).map(p => p.studentId);
+        const classStudents = students.filter(s => classPlacementStudentIds.includes(s.id));
+
+        let classScore = 0;
+        if (classStudents.length === 0) {
+          classScore = 0;
+        } else if (characteristics.length > 0) {
+          let charTotal = 0;
+          for (const char of characteristics) {
+            const distribution: Record<string, number> = {};
+            for (const s of classStudents) {
+              const val = s.characteristics?.[char.name] || "unknown";
+              distribution[val] = (distribution[val] || 0) + 1;
+            }
+
+            const values = Object.values(distribution);
+            if (values.length > 1) {
+              const mean = values.reduce((a, b) => a + b, 0) / values.length;
+              const variance = values.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / values.length;
+              const maxVariance = Math.pow(classStudents.length, 2);
+              charTotal += Math.max(0, 100 - (variance / maxVariance) * 100);
+            } else {
+              charTotal += 100;
+            }
+          }
+          classScore = charTotal / characteristics.length;
+        } else {
+          classScore = 100;
+        }
+
+        classBalances.push({
+          classId: config.id,
+          className: config.name,
+          balance: Math.round(classScore * 10) / 10,
+        });
+        totalBalance += classScore;
+      }
+
+      const overallBalance = classBalances.length > 0 ? Math.round((totalBalance / classBalances.length) * 10) / 10 : 0;
+
+      const scenarioData = {
+        name: req.body.name,
+        createdAt: new Date().toISOString(),
+        placements: placements.map(p => ({ studentId: p.studentId, classId: p.classId })),
+        balanceMetrics: { overallBalance, classBalances },
+      };
+
+      const data = insertScenarioSchema.parse(scenarioData);
+      const scenario = await storage.createScenario(data);
+      res.status(201).json(scenario);
+    } catch (error) {
+      console.error("Scenario creation error:", error);
+      res.status(400).json({ error: "Invalid scenario data" });
+    }
+  });
+
+  app.delete("/api/scenarios/:id", async (req, res) => {
+    const deleted = await storage.deleteScenario(req.params.id);
+    if (!deleted) {
+      return res.status(404).json({ error: "Scenario not found" });
+    }
+    res.status(204).send();
+  });
+
+  // Restore placements from a scenario
+  app.post("/api/scenarios/:id/restore", async (req, res) => {
+    try {
+      const scenario = await storage.getScenario(req.params.id);
+      if (!scenario) {
+        return res.status(404).json({ error: "Scenario not found" });
+      }
+
+      const placementsToRestore = scenario.placements || [];
+      if (placementsToRestore.length === 0) {
+        return res.status(400).json({ error: "Scenario has no placements to restore" });
+      }
+
+      // Clear current placements
+      await storage.deleteAllPlacements();
+
+      // Restore placements from scenario
+      for (const placement of placementsToRestore) {
+        await storage.createPlacement({
+          studentId: placement.studentId,
+          classId: placement.classId,
+        });
+      }
+
+      res.json({ success: true, placementsRestored: placementsToRestore.length });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to restore scenario" });
+    }
   });
 
   return httpServer;

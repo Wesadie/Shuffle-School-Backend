@@ -1,5 +1,5 @@
 import { useLocation, Link } from "wouter";
-import { Users, Link2, Sliders, Sparkles, ClipboardList, Download, Upload, ClipboardCheck, Network } from "lucide-react";
+import { Users, Link2, Sliders, Sparkles, ClipboardList, Download, Upload, ClipboardCheck, Network, Layers } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -59,6 +59,12 @@ const navItems = [
     url: "/sociogram",
     icon: Network,
     description: "Visual student network",
+  },
+  {
+    title: "Scenarios",
+    url: "/scenarios",
+    icon: Layers,
+    description: "Compare placements",
   },
 ];
 

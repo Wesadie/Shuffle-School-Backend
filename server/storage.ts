@@ -13,6 +13,8 @@ import {
   type InsertPlacement,
   type Survey,
   type InsertSurvey,
+  type Scenario,
+  type InsertScenario,
 } from "@shared/schema";
 import { randomUUID } from "crypto";
 
@@ -69,6 +71,12 @@ export interface IStorage {
   createSurvey(survey: InsertSurvey): Promise<Survey>;
   updateSurvey(id: string, survey: Partial<InsertSurvey>): Promise<Survey | undefined>;
   deleteSurvey(id: string): Promise<boolean>;
+
+  // Scenarios
+  getScenarios(): Promise<Scenario[]>;
+  getScenario(id: string): Promise<Scenario | undefined>;
+  createScenario(scenario: InsertScenario): Promise<Scenario>;
+  deleteScenario(id: string): Promise<boolean>;
 }
 
 export class MemStorage implements IStorage {
@@ -79,6 +87,7 @@ export class MemStorage implements IStorage {
   private classConfigs: Map<string, ClassConfig>;
   private placements: Map<string, Placement>;
   private surveys: Map<string, Survey>;
+  private scenarios: Map<string, Scenario>;
 
   constructor() {
     this.users = new Map();
@@ -88,6 +97,7 @@ export class MemStorage implements IStorage {
     this.classConfigs = new Map();
     this.placements = new Map();
     this.surveys = new Map();
+    this.scenarios = new Map();
   }
 
   // Users
@@ -359,6 +369,32 @@ export class MemStorage implements IStorage {
 
   async deleteSurvey(id: string): Promise<boolean> {
     return this.surveys.delete(id);
+  }
+
+  // Scenarios
+  async getScenarios(): Promise<Scenario[]> {
+    return Array.from(this.scenarios.values());
+  }
+
+  async getScenario(id: string): Promise<Scenario | undefined> {
+    return this.scenarios.get(id);
+  }
+
+  async createScenario(insertScenario: InsertScenario): Promise<Scenario> {
+    const id = randomUUID();
+    const scenario: Scenario = {
+      id,
+      name: insertScenario.name,
+      createdAt: insertScenario.createdAt,
+      placements: insertScenario.placements ?? [],
+      balanceMetrics: insertScenario.balanceMetrics ?? { overallBalance: 0, classBalances: [] },
+    };
+    this.scenarios.set(id, scenario);
+    return scenario;
+  }
+
+  async deleteScenario(id: string): Promise<boolean> {
+    return this.scenarios.delete(id);
   }
 }
 
