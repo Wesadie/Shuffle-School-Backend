@@ -105,7 +105,9 @@ export default function ReviewPage() {
       const classPlacementIds = placements
         .filter((p) => p.classId === config.id)
         .map((p) => p.studentId);
-      const classStudents = students.filter((s) => classPlacementIds.includes(s.id));
+      const classStudents = students
+        .filter((s) => classPlacementIds.includes(s.id))
+        .sort((a, b) => (a.lastName || "").localeCompare(b.lastName || ""));
       const classPlacements = placements.filter((p) => p.classId === config.id);
       return { config, students: classStudents, placements: classPlacements };
     });
@@ -519,7 +521,7 @@ export default function ReviewPage() {
                               <GripVertical className="h-4 w-4 text-muted-foreground flex-shrink-0" />
                               <div className="flex-1 min-w-0">
                                 <p className="text-sm font-medium truncate">
-                                  {student.firstName} {student.lastName}
+                                  {student.lastName}, {student.firstName}
                                 </p>
                                 <div className="flex items-center gap-1 flex-wrap">
                                   {student.gender && (
