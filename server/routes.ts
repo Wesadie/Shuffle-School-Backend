@@ -178,6 +178,24 @@ export async function registerRoutes(
     res.status(204).send();
   });
 
+  app.post("/api/characteristics/reorder", async (req, res) => {
+    try {
+      const { orderedIds } = req.body;
+      if (!Array.isArray(orderedIds)) {
+        return res.status(400).json({ error: "orderedIds must be an array" });
+      }
+      const totalCount = orderedIds.length;
+      for (let i = 0; i < orderedIds.length; i++) {
+        const priority = totalCount - i;
+        await storage.updateCharacteristic(orderedIds[i], { priority });
+      }
+      const characteristics = await storage.getCharacteristics();
+      res.json(characteristics);
+    } catch (error) {
+      res.status(400).json({ error: "Failed to reorder characteristics" });
+    }
+  });
+
   // Class Configs CRUD
   app.get("/api/class-configs", async (req, res) => {
     const configs = await storage.getClassConfigs();

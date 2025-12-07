@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Plus, Trash2, Edit2, Sliders, Tag, Sparkles } from "lucide-react";
+import { Plus, Trash2, Edit2, Sliders, Tag, Sparkles, GripVertical } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -57,12 +57,12 @@ export default function CharacteristicsPage() {
   const [editingChar, setEditingChar] = useState<Characteristic | null>(null);
   const [optionInput, setOptionInput] = useState("");
   const [showTemplates, setShowTemplates] = useState(false);
+  const [draggedId, setDraggedId] = useState<string | null>(null);
 
   const [formData, setFormData] = useState<Partial<InsertCharacteristic>>({
     name: "",
     type: "category",
     options: [],
-    priority: 1,
   });
 
   const { data: characteristics = [], isLoading } = useQuery<Characteristic[]>({
@@ -112,10 +112,19 @@ export default function CharacteristicsPage() {
       name: "",
       type: "category",
       options: [],
-      priority: 1,
     });
     setOptionInput("");
   };
+
+  const reorderMutation = useMutation({
+    mutationFn: (orderedIds: string[]) => apiRequest("POST", "/api/characteristics/reorder", { orderedIds }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/characteristics"] });
+    },
+    onError: () => {
+      toast({ title: "Failed to reorder characteristics", variant: "destructive" });
+    },
+  });
 
   const handleSubmit = () => {
     if (!formData.name) {
@@ -153,14 +162,47 @@ export default function CharacteristicsPage() {
       name: char.name,
       type: char.type,
       options: char.options || [],
-      priority: char.priority || 1,
     });
   };
 
-  const priorityLabels: Record<number, string> = {
-    1: "Low",
-    2: "Medium",
-    3: "High",
+  const sortedCharacteristics = [...characteristics].sort((a, b) => (b.priority || 0) - (a.priority || 0));
+
+  const handleDragStart = (e: React.DragEvent, id: string) => {
+    setDraggedId(id);
+    e.dataTransfer.effectAllowed = "move";
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+  };
+
+  const handleDrop = (e: React.DragEvent, targetId: string) => {
+    e.preventDefault();
+    if (!draggedId || draggedId === targetId) {
+      setDraggedId(null);
+      return;
+    }
+
+    const draggedIndex = sortedCharacteristics.findIndex(c => c.id === draggedId);
+    const targetIndex = sortedCharacteristics.findIndex(c => c.id === targetId);
+
+    if (draggedIndex === -1 || targetIndex === -1) {
+      setDraggedId(null);
+      return;
+    }
+
+    const newOrder = [...sortedCharacteristics];
+    const [removed] = newOrder.splice(draggedIndex, 1);
+    newOrder.splice(targetIndex, 0, removed);
+
+    const orderedIds = newOrder.map(c => c.id);
+    reorderMutation.mutate(orderedIds);
+    setDraggedId(null);
+  };
+
+  const handleDragEnd = () => {
+    setDraggedId(null);
   };
 
   const addFromTemplate = (template: CharacteristicTemplate) => {
@@ -177,7 +219,6 @@ export default function CharacteristicsPage() {
       name: template.name,
       type: template.type,
       options: template.options,
-      priority: template.priority,
     });
   };
 
@@ -296,69 +337,71 @@ export default function CharacteristicsPage() {
           </CardContent>
         </Card>
       ) : (
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {characteristics
-            .sort((a, b) => (b.priority || 1) - (a.priority || 1))
-            .map((char) => (
-              <Card key={char.id} data-testid={`card-characteristic-${char.id}`}>
-                <CardHeader className="pb-3">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="space-y-1">
+        <div className="space-y-2">
+          <p className="text-sm text-muted-foreground mb-3">
+            Drag to reorder priority. Items at the top have higher priority for balancing.
+          </p>
+          {sortedCharacteristics.map((char, index) => (
+            <Card
+              key={char.id}
+              draggable
+              onDragStart={(e) => handleDragStart(e, char.id)}
+              onDragOver={handleDragOver}
+              onDrop={(e) => handleDrop(e, char.id)}
+              onDragEnd={handleDragEnd}
+              className={`cursor-grab active:cursor-grabbing transition-opacity ${
+                draggedId === char.id ? "opacity-50" : ""
+              }`}
+              data-testid={`card-characteristic-${char.id}`}
+            >
+              <CardHeader className="py-3">
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-2 text-muted-foreground">
+                    <GripVertical className="h-5 w-5" />
+                    <span className="font-medium text-sm w-6">{index + 1}</span>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <CardTitle className="text-base flex items-center gap-2">
                         <Tag className="h-4 w-4 text-muted-foreground" />
                         {char.name}
                       </CardTitle>
-                      <CardDescription className="flex items-center gap-2">
-                        <Badge variant="outline" className="text-xs">
-                          {char.type === "category" ? "Category" : "Scale"}
-                        </Badge>
-                        <Badge
-                          variant="secondary"
-                          className={`text-xs ${
-                            char.priority === 3
-                              ? "bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200"
-                              : char.priority === 2
-                              ? "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200"
-                              : ""
-                          }`}
-                        >
-                          {priorityLabels[char.priority || 1]} Priority
-                        </Badge>
-                      </CardDescription>
+                      <Badge variant="outline" className="text-xs">
+                        {char.type === "category" ? "Category" : "Scale"}
+                      </Badge>
                     </div>
-                    <div className="flex items-center gap-1">
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        onClick={() => openEditDialog(char)}
-                        data-testid={`button-edit-characteristic-${char.id}`}
-                      >
-                        <Edit2 className="h-4 w-4" />
-                      </Button>
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        onClick={() => deleteMutation.mutate(char.id)}
-                        data-testid={`button-delete-characteristic-${char.id}`}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    </div>
+                    {char.options && char.options.length > 0 && (
+                      <div className="flex flex-wrap gap-1 mt-2">
+                        {char.options.map((option) => (
+                          <Badge key={option} variant="secondary" className="text-xs">
+                            {option}
+                          </Badge>
+                        ))}
+                      </div>
+                    )}
                   </div>
-                </CardHeader>
-                {char.options && char.options.length > 0 && (
-                  <CardContent>
-                    <div className="flex flex-wrap gap-1">
-                      {char.options.map((option) => (
-                        <Badge key={option} variant="secondary" className="text-xs">
-                          {option}
-                        </Badge>
-                      ))}
-                    </div>
-                  </CardContent>
-                )}
-              </Card>
-            ))}
+                  <div className="flex items-center gap-1">
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      onClick={() => openEditDialog(char)}
+                      data-testid={`button-edit-characteristic-${char.id}`}
+                    >
+                      <Edit2 className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      onClick={() => deleteMutation.mutate(char.id)}
+                      data-testid={`button-delete-characteristic-${char.id}`}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+              </CardHeader>
+            </Card>
+          ))}
         </div>
       )}
 
@@ -392,40 +435,25 @@ export default function CharacteristicsPage() {
                 data-testid="input-characteristic-name"
               />
             </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="type">Type</Label>
-                <Select
-                  value={formData.type}
-                  onValueChange={(value) =>
-                    setFormData({ ...formData, type: value as "category" | "scale" })
-                  }
-                >
-                  <SelectTrigger data-testid="select-type">
-                    <SelectValue placeholder="Select type" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="category">Category</SelectItem>
-                    <SelectItem value="scale">Scale (1-5)</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="priority">Priority</Label>
-                <Select
-                  value={String(formData.priority)}
-                  onValueChange={(value) => setFormData({ ...formData, priority: Number(value) })}
-                >
-                  <SelectTrigger data-testid="select-priority">
-                    <SelectValue placeholder="Select priority" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="1">Low</SelectItem>
-                    <SelectItem value="2">Medium</SelectItem>
-                    <SelectItem value="3">High</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
+            <div className="space-y-2">
+              <Label htmlFor="type">Type</Label>
+              <Select
+                value={formData.type}
+                onValueChange={(value) =>
+                  setFormData({ ...formData, type: value as "category" | "scale" })
+                }
+              >
+                <SelectTrigger data-testid="select-type">
+                  <SelectValue placeholder="Select type" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="category">Category</SelectItem>
+                  <SelectItem value="scale">Scale (1-5)</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Priority is set by dragging items in the list after adding.
+              </p>
             </div>
 
             {formData.type === "category" && (
