@@ -11,6 +11,8 @@ import {
   type InsertClassConfig,
   type Placement,
   type InsertPlacement,
+  type Teacher,
+  type InsertTeacher,
   type Survey,
   type InsertSurvey,
   type Scenario,
@@ -77,6 +79,14 @@ export interface IStorage {
   getScenario(id: string): Promise<Scenario | undefined>;
   createScenario(scenario: InsertScenario): Promise<Scenario>;
   deleteScenario(id: string): Promise<boolean>;
+
+  // Teachers
+  getTeachers(): Promise<Teacher[]>;
+  getTeacher(id: string): Promise<Teacher | undefined>;
+  createTeacher(teacher: InsertTeacher): Promise<Teacher>;
+  updateTeacher(id: string, teacher: Partial<InsertTeacher>): Promise<Teacher | undefined>;
+  deleteTeacher(id: string): Promise<boolean>;
+  bulkImportTeachers(teachers: InsertTeacher[]): Promise<{ count: number }>;
 }
 
 export class MemStorage implements IStorage {
@@ -88,6 +98,7 @@ export class MemStorage implements IStorage {
   private placements: Map<string, Placement>;
   private surveys: Map<string, Survey>;
   private scenarios: Map<string, Scenario>;
+  private teachers: Map<string, Teacher>;
 
   constructor() {
     this.users = new Map();
@@ -98,6 +109,7 @@ export class MemStorage implements IStorage {
     this.placements = new Map();
     this.surveys = new Map();
     this.scenarios = new Map();
+    this.teachers = new Map();
   }
 
   // Users
@@ -395,6 +407,59 @@ export class MemStorage implements IStorage {
 
   async deleteScenario(id: string): Promise<boolean> {
     return this.scenarios.delete(id);
+  }
+
+  // Teachers
+  async getTeachers(): Promise<Teacher[]> {
+    return Array.from(this.teachers.values());
+  }
+
+  async getTeacher(id: string): Promise<Teacher | undefined> {
+    return this.teachers.get(id);
+  }
+
+  async createTeacher(insertTeacher: InsertTeacher): Promise<Teacher> {
+    const id = randomUUID();
+    const teacher: Teacher = {
+      id,
+      firstName: insertTeacher.firstName,
+      lastName: insertTeacher.lastName,
+      email: insertTeacher.email,
+      currentClass: insertTeacher.currentClass ?? null,
+      allocatedClass: insertTeacher.allocatedClass ?? null,
+      surveyStatus: insertTeacher.surveyStatus ?? "Not Sent",
+      surveyDate: insertTeacher.surveyDate ?? null,
+    };
+    this.teachers.set(id, teacher);
+    return teacher;
+  }
+
+  async updateTeacher(id: string, updates: Partial<InsertTeacher>): Promise<Teacher | undefined> {
+    const teacher = this.teachers.get(id);
+    if (!teacher) return undefined;
+    const updated: Teacher = {
+      id: teacher.id,
+      firstName: updates.firstName ?? teacher.firstName,
+      lastName: updates.lastName ?? teacher.lastName,
+      email: updates.email ?? teacher.email,
+      currentClass: updates.currentClass !== undefined ? updates.currentClass : teacher.currentClass,
+      allocatedClass: updates.allocatedClass !== undefined ? updates.allocatedClass : teacher.allocatedClass,
+      surveyStatus: updates.surveyStatus ?? teacher.surveyStatus,
+      surveyDate: updates.surveyDate !== undefined ? updates.surveyDate : teacher.surveyDate,
+    };
+    this.teachers.set(id, updated);
+    return updated;
+  }
+
+  async deleteTeacher(id: string): Promise<boolean> {
+    return this.teachers.delete(id);
+  }
+
+  async bulkImportTeachers(teachers: InsertTeacher[]): Promise<{ count: number }> {
+    for (const teacher of teachers) {
+      await this.createTeacher(teacher);
+    }
+    return { count: teachers.length };
   }
 }
 

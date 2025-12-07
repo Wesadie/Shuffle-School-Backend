@@ -70,6 +70,22 @@ export const insertPlacementSchema = createInsertSchema(placements).omit({ id: t
 export type InsertPlacement = z.infer<typeof insertPlacementSchema>;
 export type Placement = typeof placements.$inferSelect;
 
+// Teacher model
+export const teachers = pgTable("teachers", {
+  id: varchar("id", { length: 36 }).primaryKey(),
+  firstName: text("first_name").notNull(),
+  lastName: text("last_name").notNull(),
+  email: text("email").notNull(),
+  currentClass: text("current_class"),
+  allocatedClass: text("allocated_class"),
+  surveyStatus: text("survey_status").default("Not Sent"),
+  surveyDate: text("survey_date"),
+});
+
+export const insertTeacherSchema = createInsertSchema(teachers).omit({ id: true });
+export type InsertTeacher = z.infer<typeof insertTeacherSchema>;
+export type Teacher = typeof teachers.$inferSelect;
+
 // Frontend types for class generation result
 export interface GeneratedClass {
   classConfig: ClassConfig;
