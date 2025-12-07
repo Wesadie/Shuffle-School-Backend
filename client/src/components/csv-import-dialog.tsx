@@ -1,5 +1,5 @@
 import { useState, useCallback } from "react";
-import { Upload, FileText, AlertCircle, CheckCircle, X } from "lucide-react";
+import { Upload, FileText, AlertCircle, CheckCircle, X, Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -192,6 +192,22 @@ export function CSVImportDialog({ open, onOpenChange }: CSVImportDialogProps) {
     onOpenChange(false);
   };
 
+  const handleDownloadTemplate = () => {
+    const headers = ["firstName", "lastName", "grade", "currentClass", "gender", "notes"];
+    const exampleRow = ["John", "Smith", "5", "5A", "Male", "Example student"];
+    const csvContent = [headers.join(","), exampleRow.join(",")].join("\n");
+    
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "student-template.csv";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <Dialog open={open} onOpenChange={handleClose}>
       <DialogContent className="max-w-2xl">
@@ -218,18 +234,28 @@ export function CSVImportDialog({ open, onOpenChange }: CSVImportDialogProps) {
               <p className="text-sm text-muted-foreground mb-2">
                 Drag and drop your CSV file here, or
               </p>
-              <label>
-                <input
-                  type="file"
-                  accept=".csv"
-                  onChange={handleFileInput}
-                  className="hidden"
-                  data-testid="input-csv-file"
-                />
-                <Button variant="outline" asChild>
-                  <span className="cursor-pointer">Browse Files</span>
+              <div className="flex items-center justify-center gap-2 flex-wrap">
+                <label>
+                  <input
+                    type="file"
+                    accept=".csv"
+                    onChange={handleFileInput}
+                    className="hidden"
+                    data-testid="input-csv-file"
+                  />
+                  <Button variant="outline" asChild>
+                    <span className="cursor-pointer">Browse Files</span>
+                  </Button>
+                </label>
+                <Button
+                  variant="ghost"
+                  onClick={handleDownloadTemplate}
+                  data-testid="button-download-template"
+                >
+                  <Download className="h-4 w-4 mr-2" />
+                  Download Template
                 </Button>
-              </label>
+              </div>
             </div>
           ) : (
             <div className="space-y-4">
