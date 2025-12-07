@@ -17,16 +17,25 @@ import {
   type InsertSurvey,
   type Scenario,
   type InsertScenario,
+  students,
+  rules,
+  characteristics,
+  classConfigs,
+  placements,
+  teachers,
+  surveys,
+  scenarios,
+  users,
 } from "@shared/schema";
+import { db } from "./db";
+import { eq } from "drizzle-orm";
 import { randomUUID } from "crypto";
 
 export interface IStorage {
-  // Users
   getUser(id: string): Promise<User | undefined>;
   getUserByUsername(username: string): Promise<User | undefined>;
   createUser(user: InsertUser): Promise<User>;
 
-  // Students
   getStudents(): Promise<Student[]>;
   getStudent(id: string): Promise<Student | undefined>;
   createStudent(student: InsertStudent): Promise<Student>;
@@ -35,21 +44,18 @@ export interface IStorage {
   bulkImportStudents(students: InsertStudent[]): Promise<{ count: number }>;
   deleteAllStudents(): Promise<void>;
 
-  // Rules
   getRules(): Promise<Rule[]>;
   getRule(id: string): Promise<Rule | undefined>;
   createRule(rule: InsertRule): Promise<Rule>;
   updateRule(id: string, rule: Partial<InsertRule>): Promise<Rule | undefined>;
   deleteRule(id: string): Promise<boolean>;
 
-  // Characteristics
   getCharacteristics(): Promise<Characteristic[]>;
   getCharacteristic(id: string): Promise<Characteristic | undefined>;
   createCharacteristic(characteristic: InsertCharacteristic): Promise<Characteristic>;
   updateCharacteristic(id: string, characteristic: Partial<InsertCharacteristic>): Promise<Characteristic | undefined>;
   deleteCharacteristic(id: string): Promise<boolean>;
 
-  // Class Configs
   getClassConfigs(): Promise<ClassConfig[]>;
   getClassConfig(id: string): Promise<ClassConfig | undefined>;
   createClassConfig(config: InsertClassConfig): Promise<ClassConfig>;
@@ -57,7 +63,6 @@ export interface IStorage {
   deleteClassConfig(id: string): Promise<boolean>;
   deleteAllClassConfigs(): Promise<void>;
 
-  // Placements
   getPlacements(): Promise<Placement[]>;
   getPlacement(id: string): Promise<Placement | undefined>;
   createPlacement(placement: InsertPlacement): Promise<Placement>;
@@ -66,7 +71,6 @@ export interface IStorage {
   deleteAllPlacements(): Promise<void>;
   bulkCreatePlacements(placements: InsertPlacement[]): Promise<{ count: number }>;
 
-  // Surveys
   getSurveys(): Promise<Survey[]>;
   getSurvey(id: string): Promise<Survey | undefined>;
   getSurveysByStudent(studentId: string): Promise<Survey[]>;
@@ -74,13 +78,11 @@ export interface IStorage {
   updateSurvey(id: string, survey: Partial<InsertSurvey>): Promise<Survey | undefined>;
   deleteSurvey(id: string): Promise<boolean>;
 
-  // Scenarios
   getScenarios(): Promise<Scenario[]>;
   getScenario(id: string): Promise<Scenario | undefined>;
   createScenario(scenario: InsertScenario): Promise<Scenario>;
   deleteScenario(id: string): Promise<boolean>;
 
-  // Teachers
   getTeachers(): Promise<Teacher[]>;
   getTeacher(id: string): Promise<Teacher | undefined>;
   createTeacher(teacher: InsertTeacher): Promise<Teacher>;
@@ -89,59 +91,35 @@ export interface IStorage {
   bulkImportTeachers(teachers: InsertTeacher[]): Promise<{ count: number }>;
 }
 
-export class MemStorage implements IStorage {
-  private users: Map<string, User>;
-  private students: Map<string, Student>;
-  private rules: Map<string, Rule>;
-  private characteristics: Map<string, Characteristic>;
-  private classConfigs: Map<string, ClassConfig>;
-  private placements: Map<string, Placement>;
-  private surveys: Map<string, Survey>;
-  private scenarios: Map<string, Scenario>;
-  private teachers: Map<string, Teacher>;
-
-  constructor() {
-    this.users = new Map();
-    this.students = new Map();
-    this.rules = new Map();
-    this.characteristics = new Map();
-    this.classConfigs = new Map();
-    this.placements = new Map();
-    this.surveys = new Map();
-    this.scenarios = new Map();
-    this.teachers = new Map();
-  }
-
-  // Users
+export class DatabaseStorage implements IStorage {
   async getUser(id: string): Promise<User | undefined> {
-    return this.users.get(id);
+    const [user] = await db.select().from(users).where(eq(users.id, id));
+    return user || undefined;
   }
 
   async getUserByUsername(username: string): Promise<User | undefined> {
-    return Array.from(this.users.values()).find(
-      (user) => user.username === username
-    );
+    const [user] = await db.select().from(users).where(eq(users.username, username));
+    return user || undefined;
   }
 
   async createUser(insertUser: InsertUser): Promise<User> {
     const id = randomUUID();
-    const user: User = { ...insertUser, id };
-    this.users.set(id, user);
+    const [user] = await db.insert(users).values({ ...insertUser, id }).returning();
     return user;
   }
 
-  // Students
   async getStudents(): Promise<Student[]> {
-    return Array.from(this.students.values());
+    return await db.select().from(students);
   }
 
   async getStudent(id: string): Promise<Student | undefined> {
-    return this.students.get(id);
+    const [student] = await db.select().from(students).where(eq(students.id, id));
+    return student || undefined;
   }
 
   async createStudent(insertStudent: InsertStudent): Promise<Student> {
     const id = randomUUID();
-    const student: Student = {
+    const [student] = await db.insert(students).values({
       id,
       firstName: insertStudent.firstName,
       lastName: insertStudent.lastName,
@@ -152,26 +130,23 @@ export class MemStorage implements IStorage {
       notes: insertStudent.notes ?? null,
       parentRequests: insertStudent.parentRequests ?? null,
       parentNotes: insertStudent.parentNotes ?? null,
-    };
-    this.students.set(id, student);
+    }).returning();
     return student;
   }
 
   async updateStudent(id: string, updates: Partial<InsertStudent>): Promise<Student | undefined> {
-    const student = this.students.get(id);
-    if (!student) return undefined;
-    const updated: Student = { ...student, ...updates };
-    this.students.set(id, updated);
-    return updated;
+    const [updated] = await db.update(students).set(updates).where(eq(students.id, id)).returning();
+    return updated || undefined;
   }
 
   async deleteStudent(id: string): Promise<boolean> {
-    return this.students.delete(id);
+    const result = await db.delete(students).where(eq(students.id, id)).returning();
+    return result.length > 0;
   }
 
-  async bulkImportStudents(students: InsertStudent[]): Promise<{ count: number }> {
+  async bulkImportStudents(studentList: InsertStudent[]): Promise<{ count: number }> {
     let count = 0;
-    for (const student of students) {
+    for (const student of studentList) {
       await this.createStudent(student);
       count++;
     }
@@ -179,176 +154,164 @@ export class MemStorage implements IStorage {
   }
 
   async deleteAllStudents(): Promise<void> {
-    this.students.clear();
+    await db.delete(students);
   }
 
-  // Rules
   async getRules(): Promise<Rule[]> {
-    return Array.from(this.rules.values());
+    return await db.select().from(rules);
   }
 
   async getRule(id: string): Promise<Rule | undefined> {
-    return this.rules.get(id);
+    const [rule] = await db.select().from(rules).where(eq(rules.id, id));
+    return rule || undefined;
   }
 
   async createRule(insertRule: InsertRule): Promise<Rule> {
     const id = randomUUID();
-    const rule: Rule = {
+    const [rule] = await db.insert(rules).values({
       id,
       type: insertRule.type,
       studentId1: insertRule.studentId1,
       studentId2: insertRule.studentId2,
       reason: insertRule.reason ?? null,
-    };
-    this.rules.set(id, rule);
+    }).returning();
     return rule;
   }
 
   async updateRule(id: string, updates: Partial<InsertRule>): Promise<Rule | undefined> {
-    const rule = this.rules.get(id);
-    if (!rule) return undefined;
-    const updated: Rule = { ...rule, ...updates };
-    this.rules.set(id, updated);
-    return updated;
+    const [updated] = await db.update(rules).set(updates).where(eq(rules.id, id)).returning();
+    return updated || undefined;
   }
 
   async deleteRule(id: string): Promise<boolean> {
-    return this.rules.delete(id);
+    const result = await db.delete(rules).where(eq(rules.id, id)).returning();
+    return result.length > 0;
   }
 
-  // Characteristics
   async getCharacteristics(): Promise<Characteristic[]> {
-    return Array.from(this.characteristics.values());
+    return await db.select().from(characteristics);
   }
 
   async getCharacteristic(id: string): Promise<Characteristic | undefined> {
-    return this.characteristics.get(id);
+    const [char] = await db.select().from(characteristics).where(eq(characteristics.id, id));
+    return char || undefined;
   }
 
   async createCharacteristic(insertChar: InsertCharacteristic): Promise<Characteristic> {
     const id = randomUUID();
-    const characteristic: Characteristic = {
+    const [char] = await db.insert(characteristics).values({
       id,
       name: insertChar.name,
       type: insertChar.type,
       options: insertChar.options ?? [],
       priority: insertChar.priority ?? 1,
-    };
-    this.characteristics.set(id, characteristic);
-    return characteristic;
+    }).returning();
+    return char;
   }
 
   async updateCharacteristic(id: string, updates: Partial<InsertCharacteristic>): Promise<Characteristic | undefined> {
-    const characteristic = this.characteristics.get(id);
-    if (!characteristic) return undefined;
-    const updated: Characteristic = { ...characteristic, ...updates };
-    this.characteristics.set(id, updated);
-    return updated;
+    const [updated] = await db.update(characteristics).set(updates).where(eq(characteristics.id, id)).returning();
+    return updated || undefined;
   }
 
   async deleteCharacteristic(id: string): Promise<boolean> {
-    return this.characteristics.delete(id);
+    const result = await db.delete(characteristics).where(eq(characteristics.id, id)).returning();
+    return result.length > 0;
   }
 
-  // Class Configs
   async getClassConfigs(): Promise<ClassConfig[]> {
-    return Array.from(this.classConfigs.values());
+    return await db.select().from(classConfigs);
   }
 
   async getClassConfig(id: string): Promise<ClassConfig | undefined> {
-    return this.classConfigs.get(id);
+    const [config] = await db.select().from(classConfigs).where(eq(classConfigs.id, id));
+    return config || undefined;
   }
 
   async createClassConfig(insertConfig: InsertClassConfig): Promise<ClassConfig> {
     const id = randomUUID();
-    const config: ClassConfig = {
+    const [config] = await db.insert(classConfigs).values({
       id,
       name: insertConfig.name,
       grade: insertConfig.grade,
       capacity: insertConfig.capacity ?? 30,
-    };
-    this.classConfigs.set(id, config);
+    }).returning();
     return config;
   }
 
   async updateClassConfig(id: string, updates: Partial<InsertClassConfig>): Promise<ClassConfig | undefined> {
-    const config = this.classConfigs.get(id);
-    if (!config) return undefined;
-    const updated: ClassConfig = { ...config, ...updates };
-    this.classConfigs.set(id, updated);
-    return updated;
+    const [updated] = await db.update(classConfigs).set(updates).where(eq(classConfigs.id, id)).returning();
+    return updated || undefined;
   }
 
   async deleteClassConfig(id: string): Promise<boolean> {
-    return this.classConfigs.delete(id);
+    const result = await db.delete(classConfigs).where(eq(classConfigs.id, id)).returning();
+    return result.length > 0;
   }
 
   async deleteAllClassConfigs(): Promise<void> {
-    this.classConfigs.clear();
+    await db.delete(classConfigs);
   }
 
-  // Placements
   async getPlacements(): Promise<Placement[]> {
-    return Array.from(this.placements.values());
+    return await db.select().from(placements);
   }
 
   async getPlacement(id: string): Promise<Placement | undefined> {
-    return this.placements.get(id);
+    const [placement] = await db.select().from(placements).where(eq(placements.id, id));
+    return placement || undefined;
   }
 
   async createPlacement(insertPlacement: InsertPlacement): Promise<Placement> {
     const id = randomUUID();
-    const placement: Placement = {
+    const [placement] = await db.insert(placements).values({
       id,
       studentId: insertPlacement.studentId,
       classId: insertPlacement.classId,
       locked: insertPlacement.locked ?? false,
-    };
-    this.placements.set(id, placement);
+    }).returning();
     return placement;
   }
 
   async updatePlacement(id: string, updates: Partial<InsertPlacement>): Promise<Placement | undefined> {
-    const placement = this.placements.get(id);
-    if (!placement) return undefined;
-    const updated: Placement = { ...placement, ...updates };
-    this.placements.set(id, updated);
-    return updated;
+    const [updated] = await db.update(placements).set(updates).where(eq(placements.id, id)).returning();
+    return updated || undefined;
   }
 
   async deletePlacement(id: string): Promise<boolean> {
-    return this.placements.delete(id);
+    const result = await db.delete(placements).where(eq(placements.id, id)).returning();
+    return result.length > 0;
   }
 
   async deleteAllPlacements(): Promise<void> {
-    this.placements.clear();
+    await db.delete(placements);
   }
 
-  async bulkCreatePlacements(placements: InsertPlacement[]): Promise<{ count: number }> {
+  async bulkCreatePlacements(placementList: InsertPlacement[]): Promise<{ count: number }> {
     let count = 0;
-    for (const placement of placements) {
+    for (const placement of placementList) {
       await this.createPlacement(placement);
       count++;
     }
     return { count };
   }
 
-  // Surveys
   async getSurveys(): Promise<Survey[]> {
-    return Array.from(this.surveys.values());
+    return await db.select().from(surveys);
   }
 
   async getSurvey(id: string): Promise<Survey | undefined> {
-    return this.surveys.get(id);
+    const [survey] = await db.select().from(surveys).where(eq(surveys.id, id));
+    return survey || undefined;
   }
 
   async getSurveysByStudent(studentId: string): Promise<Survey[]> {
-    return Array.from(this.surveys.values()).filter(s => s.studentId === studentId);
+    return await db.select().from(surveys).where(eq(surveys.studentId, studentId));
   }
 
   async createSurvey(insertSurvey: InsertSurvey): Promise<Survey> {
     const id = randomUUID();
-    const survey: Survey = {
+    const [survey] = await db.insert(surveys).values({
       id,
       teacherName: insertSurvey.teacherName,
       studentId: insertSurvey.studentId,
@@ -357,70 +320,58 @@ export class MemStorage implements IStorage {
       separateFrom: insertSurvey.separateFrom ?? [],
       notes: insertSurvey.notes ?? null,
       submittedAt: insertSurvey.submittedAt,
-    };
-    this.surveys.set(id, survey);
+    }).returning();
     return survey;
   }
 
   async updateSurvey(id: string, updates: Partial<InsertSurvey>): Promise<Survey | undefined> {
-    const survey = this.surveys.get(id);
-    if (!survey) return undefined;
-    const updated: Survey = {
-      id: survey.id,
-      teacherName: updates.teacherName ?? survey.teacherName,
-      studentId: updates.studentId ?? survey.studentId,
-      characteristicRatings: updates.characteristicRatings ?? survey.characteristicRatings,
-      pairWith: updates.pairWith ?? survey.pairWith,
-      separateFrom: updates.separateFrom ?? survey.separateFrom,
-      notes: updates.notes !== undefined ? updates.notes : survey.notes,
-      submittedAt: updates.submittedAt ?? survey.submittedAt,
-    };
-    this.surveys.set(id, updated);
-    return updated;
+    const [updated] = await db.update(surveys).set(updates).where(eq(surveys.id, id)).returning();
+    return updated || undefined;
   }
 
   async deleteSurvey(id: string): Promise<boolean> {
-    return this.surveys.delete(id);
+    const result = await db.delete(surveys).where(eq(surveys.id, id)).returning();
+    return result.length > 0;
   }
 
-  // Scenarios
   async getScenarios(): Promise<Scenario[]> {
-    return Array.from(this.scenarios.values());
+    return await db.select().from(scenarios);
   }
 
   async getScenario(id: string): Promise<Scenario | undefined> {
-    return this.scenarios.get(id);
+    const [scenario] = await db.select().from(scenarios).where(eq(scenarios.id, id));
+    return scenario || undefined;
   }
 
   async createScenario(insertScenario: InsertScenario): Promise<Scenario> {
     const id = randomUUID();
-    const scenario: Scenario = {
+    const [scenario] = await db.insert(scenarios).values({
       id,
       name: insertScenario.name,
       createdAt: insertScenario.createdAt,
       placements: insertScenario.placements ?? [],
       balanceMetrics: insertScenario.balanceMetrics ?? { overallBalance: 0, classBalances: [] },
-    };
-    this.scenarios.set(id, scenario);
+    }).returning();
     return scenario;
   }
 
   async deleteScenario(id: string): Promise<boolean> {
-    return this.scenarios.delete(id);
+    const result = await db.delete(scenarios).where(eq(scenarios.id, id)).returning();
+    return result.length > 0;
   }
 
-  // Teachers
   async getTeachers(): Promise<Teacher[]> {
-    return Array.from(this.teachers.values());
+    return await db.select().from(teachers);
   }
 
   async getTeacher(id: string): Promise<Teacher | undefined> {
-    return this.teachers.get(id);
+    const [teacher] = await db.select().from(teachers).where(eq(teachers.id, id));
+    return teacher || undefined;
   }
 
   async createTeacher(insertTeacher: InsertTeacher): Promise<Teacher> {
     const id = randomUUID();
-    const teacher: Teacher = {
+    const [teacher] = await db.insert(teachers).values({
       id,
       firstName: insertTeacher.firstName,
       lastName: insertTeacher.lastName,
@@ -429,38 +380,28 @@ export class MemStorage implements IStorage {
       allocatedClass: insertTeacher.allocatedClass ?? null,
       surveyStatus: insertTeacher.surveyStatus ?? "Not Sent",
       surveyDate: insertTeacher.surveyDate ?? null,
-    };
-    this.teachers.set(id, teacher);
+    }).returning();
     return teacher;
   }
 
   async updateTeacher(id: string, updates: Partial<InsertTeacher>): Promise<Teacher | undefined> {
-    const teacher = this.teachers.get(id);
-    if (!teacher) return undefined;
-    const updated: Teacher = {
-      id: teacher.id,
-      firstName: updates.firstName ?? teacher.firstName,
-      lastName: updates.lastName ?? teacher.lastName,
-      email: updates.email ?? teacher.email,
-      currentClass: updates.currentClass !== undefined ? updates.currentClass : teacher.currentClass,
-      allocatedClass: updates.allocatedClass !== undefined ? updates.allocatedClass : teacher.allocatedClass,
-      surveyStatus: updates.surveyStatus ?? teacher.surveyStatus,
-      surveyDate: updates.surveyDate !== undefined ? updates.surveyDate : teacher.surveyDate,
-    };
-    this.teachers.set(id, updated);
-    return updated;
+    const [updated] = await db.update(teachers).set(updates).where(eq(teachers.id, id)).returning();
+    return updated || undefined;
   }
 
   async deleteTeacher(id: string): Promise<boolean> {
-    return this.teachers.delete(id);
+    const result = await db.delete(teachers).where(eq(teachers.id, id)).returning();
+    return result.length > 0;
   }
 
-  async bulkImportTeachers(teachers: InsertTeacher[]): Promise<{ count: number }> {
-    for (const teacher of teachers) {
+  async bulkImportTeachers(teacherList: InsertTeacher[]): Promise<{ count: number }> {
+    let count = 0;
+    for (const teacher of teacherList) {
       await this.createTeacher(teacher);
+      count++;
     }
-    return { count: teachers.length };
+    return { count };
   }
 }
 
-export const storage = new MemStorage();
+export const storage = new DatabaseStorage();
