@@ -506,6 +506,122 @@ export default function StudentsPage() {
               </Select>
             </div>
 
+            <div className="space-y-2">
+              <Label htmlFor="race">Race</Label>
+              <Select
+                value={(formData.characteristics as Record<string, string>)?.["Race"] || ""}
+                onValueChange={(value) =>
+                  setFormData({
+                    ...formData,
+                    characteristics: {
+                      ...formData.characteristics,
+                      ["Race"]: value,
+                    },
+                  })
+                }
+              >
+                <SelectTrigger data-testid="select-race">
+                  <SelectValue placeholder="Select race" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="White">White</SelectItem>
+                  <SelectItem value="Black">Black</SelectItem>
+                  <SelectItem value="Indian">Indian</SelectItem>
+                  <SelectItem value="Coloured">Coloured</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="aggregate">Aggregate %</Label>
+                <Input
+                  id="aggregate"
+                  type="number"
+                  min="0"
+                  max="100"
+                  value={(formData.characteristics as Record<string, string>)?.["Aggregate %"] || ""}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      characteristics: {
+                        ...formData.characteristics,
+                        ["Aggregate %"]: e.target.value,
+                      },
+                    })
+                  }
+                  placeholder="0-100"
+                  data-testid="input-aggregate"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="maths">Maths %</Label>
+                <Input
+                  id="maths"
+                  type="number"
+                  min="0"
+                  max="100"
+                  value={(formData.characteristics as Record<string, string>)?.["Maths %"] || ""}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      characteristics: {
+                        ...formData.characteristics,
+                        ["Maths %"]: e.target.value,
+                      },
+                    })
+                  }
+                  placeholder="0-100"
+                  data-testid="input-maths"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="english">English %</Label>
+                <Input
+                  id="english"
+                  type="number"
+                  min="0"
+                  max="100"
+                  value={(formData.characteristics as Record<string, string>)?.["English %"] || ""}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      characteristics: {
+                        ...formData.characteristics,
+                        ["English %"]: e.target.value,
+                      },
+                    })
+                  }
+                  placeholder="0-100"
+                  data-testid="input-english"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="afrikaans">Afrikaans/Isizulu %</Label>
+                <Input
+                  id="afrikaans"
+                  type="number"
+                  min="0"
+                  max="100"
+                  value={(formData.characteristics as Record<string, string>)?.["Afrikaans/Isizulu %"] || ""}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      characteristics: {
+                        ...formData.characteristics,
+                        ["Afrikaans/Isizulu %"]: e.target.value,
+                      },
+                    })
+                  }
+                  placeholder="0-100"
+                  data-testid="input-afrikaans"
+                />
+              </div>
+            </div>
+
             {characteristics.length > 0 && (
               <div className="space-y-4">
                 <Label>Characteristics</Label>
