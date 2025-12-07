@@ -69,6 +69,18 @@ export function CSVImportDialog({ open, onOpenChange }: CSVImportDialogProps) {
       firstName: ["first_name", "first name", "firstname", "first"],
       lastName: ["last_name", "last name", "lastname", "last"],
       grade: ["grade", "grade_level", "gradelevel", "year"],
+      currentClass: ["current_class", "current class", "class"],
+      gender: ["gender", "sex"],
+      Race: ["race"],
+      "Aggregate %": ["aggregate %", "aggregate", "aggregate%"],
+      "Maths %": ["maths %", "maths", "math %", "math", "maths%"],
+      "English %": ["english %", "english", "english%"],
+      "Afrikaans/Isizulu %": ["afrikaans/isizulu %", "afrikaans", "isizulu", "afrikaans%"],
+      Medication: ["medication", "meds"],
+      "Learner Support": ["learner support", "learner_support", "support"],
+      notes: ["notes", "note"],
+      parentRequests: ["parent requests", "parent_requests", "parentrequests"],
+      parentNotes: ["parent notes", "parent_notes", "parentnotes"],
     };
 
     const headerMap: Record<string, string> = {};
@@ -193,8 +205,8 @@ export function CSVImportDialog({ open, onOpenChange }: CSVImportDialogProps) {
   };
 
   const handleDownloadTemplate = () => {
-    const headers = ["firstName", "lastName", "grade", "currentClass", "gender", "notes", "Aggregate %", "Maths %", "English %", "Afrikaans/Isizulu %"];
-    const exampleRow = ["John", "Smith", "5", "5A", "Male", "Example student", "75", "80", "72", "68"];
+    const headers = ["firstName", "lastName", "grade", "currentClass", "gender", "Race", "Aggregate %", "Maths %", "English %", "Afrikaans/Isizulu %", "Medication", "Learner Support", "Notes", "Parent Requests", "Parent Notes"];
+    const exampleRow = ["John", "Smith", "4", "4A", "Male", "White", "75", "80", "72", "68", "", "", "", "", ""];
     const csvContent = [headers.join(","), exampleRow.join(",")].join("\n");
     
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
