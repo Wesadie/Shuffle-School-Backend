@@ -1,16 +1,16 @@
 import { useState } from "react";
-import { Switch, Route } from "wouter";
+import { Switch, Route, Link, useLocation } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ThemeProvider } from "@/components/theme-provider";
 import { ThemeToggle } from "@/components/theme-toggle";
-import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
-import { AppSidebar } from "@/components/app-sidebar";
 import { CSVImportDialog } from "@/components/csv-import-dialog";
 import { useToast } from "@/hooks/use-toast";
-import { apiRequest } from "@/lib/queryClient";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Settings, HelpCircle } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 import NotFound from "@/pages/not-found";
 import StudentsPage from "@/pages/students";
@@ -39,6 +39,77 @@ function Router() {
       <Route path="/scenarios" component={ScenariosPage} />
       <Route component={NotFound} />
     </Switch>
+  );
+}
+
+function TopNavigation() {
+  const [location] = useLocation();
+
+  const navItems = [
+    { label: "Students", href: "/" },
+    { label: "Teachers", href: "/teachers" },
+    { label: "Requests", href: "/rules" },
+    { label: "Classes", href: "/generate" },
+    { label: "Solver", href: "/review" },
+  ];
+
+  const rightNavItems = [
+    { label: "Settings", href: "/characteristics", icon: Settings },
+    { label: "Help", href: "/surveys", icon: HelpCircle },
+  ];
+
+  return (
+    <header className="flex items-center justify-between gap-4 px-4 py-3 border-b sticky top-0 z-50 bg-background">
+      <nav className="flex items-center gap-1">
+        <div className="w-1 h-5 bg-primary rounded-full mr-2" />
+        {navItems.map((item) => {
+          const isActive = location === item.href;
+          return (
+            <Link key={item.href} href={item.href}>
+              <span
+                className={cn(
+                  "px-3 py-1.5 text-sm font-medium rounded-md cursor-pointer transition-colors",
+                  isActive
+                    ? "text-primary"
+                    : "text-muted-foreground hover-elevate"
+                )}
+                data-testid={`nav-${item.label.toLowerCase()}`}
+              >
+                {item.label}
+              </span>
+            </Link>
+          );
+        })}
+      </nav>
+
+      <div className="flex items-center gap-2">
+        {rightNavItems.map((item) => {
+          const isActive = location === item.href;
+          return (
+            <Link key={item.href} href={item.href}>
+              <span
+                className={cn(
+                  "px-3 py-1.5 text-sm font-medium rounded-md cursor-pointer transition-colors flex items-center gap-1.5",
+                  isActive
+                    ? "text-primary"
+                    : "text-muted-foreground hover-elevate"
+                )}
+                data-testid={`nav-${item.label.toLowerCase()}`}
+              >
+                {item.label}
+              </span>
+            </Link>
+          );
+        })}
+        <ThemeToggle />
+        <div className="w-px h-6 bg-border mx-1" />
+        <Avatar className="h-8 w-8 cursor-pointer" data-testid="avatar-user">
+          <AvatarFallback className="bg-primary text-primary-foreground text-xs">
+            WA
+          </AvatarFallback>
+        </Avatar>
+      </div>
+    </header>
   );
 }
 
@@ -100,31 +171,14 @@ function AppContent() {
     });
   };
 
-  const style = {
-    "--sidebar-width": "16rem",
-    "--sidebar-width-icon": "3rem",
-  };
-
   return (
-    <SidebarProvider style={style as React.CSSProperties}>
-      <div className="flex h-screen w-full">
-        <AppSidebar
-          studentCount={students.length}
-          onImport={() => setImportOpen(true)}
-          onExport={handleExport}
-        />
-        <div className="flex flex-col flex-1 min-w-0">
-          <header className="flex items-center justify-between gap-2 p-2 border-b sticky top-0 z-50 bg-background">
-            <SidebarTrigger data-testid="button-sidebar-toggle" />
-            <ThemeToggle />
-          </header>
-          <main className="flex-1 overflow-auto">
-            <Router />
-          </main>
-        </div>
-      </div>
+    <div className="flex flex-col h-screen w-full">
+      <TopNavigation />
+      <main className="flex-1 overflow-auto">
+        <Router />
+      </main>
       <CSVImportDialog open={importOpen} onOpenChange={setImportOpen} />
-    </SidebarProvider>
+    </div>
   );
 }
 
