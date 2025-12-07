@@ -5,6 +5,7 @@ import { z } from "zod";
 // Student model
 export const students = pgTable("students", {
   id: varchar("id", { length: 36 }).primaryKey(),
+  studentId: text("student_id"),
   firstName: text("first_name").notNull(),
   lastName: text("last_name").notNull(),
   grade: text("grade").notNull(),
@@ -14,6 +15,8 @@ export const students = pgTable("students", {
   notes: text("notes"),
   parentRequests: text("parent_requests"),
   parentNotes: text("parent_notes"),
+  isNew: boolean("is_new").default(false),
+  isLeaving: boolean("is_leaving").default(false),
 });
 
 export const insertStudentSchema = createInsertSchema(students).omit({ id: true });

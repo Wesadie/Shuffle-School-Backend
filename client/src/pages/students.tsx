@@ -155,15 +155,45 @@ export default function StudentsPage() {
     }
   };
 
-  const grades = Array.from(new Set(students.map((s) => s.grade))).sort();
+  const staticGrades = ["1", "2", "3", "4", "5", "6", "7"];
+
+  const findDuplicates = (studentList: Student[]) => {
+    const nameCount = new Map<string, number>();
+    studentList.forEach((s) => {
+      const key = `${s.firstName.toLowerCase()}-${s.lastName.toLowerCase()}`;
+      nameCount.set(key, (nameCount.get(key) || 0) + 1);
+    });
+    return studentList.filter((s) => {
+      const key = `${s.firstName.toLowerCase()}-${s.lastName.toLowerCase()}`;
+      return (nameCount.get(key) || 0) > 1;
+    });
+  };
 
   const filteredStudents = students
     .filter((student) => {
       const matchesSearch =
         student.firstName.toLowerCase().includes(searchQuery.toLowerCase()) ||
         student.lastName.toLowerCase().includes(searchQuery.toLowerCase());
-      const matchesGrade = selectedGrade === "all" || student.grade === selectedGrade;
-      return matchesSearch && matchesGrade;
+      
+      let matchesFilter = true;
+      if (selectedGrade === "all") {
+        matchesFilter = true;
+      } else if (selectedGrade === "new") {
+        matchesFilter = student.isNew === true;
+      } else if (selectedGrade === "unallocated") {
+        matchesFilter = !student.currentClass;
+      } else if (selectedGrade === "no-id") {
+        matchesFilter = !student.studentId;
+      } else if (selectedGrade === "leaving") {
+        matchesFilter = student.isLeaving === true;
+      } else if (selectedGrade === "duplicates") {
+        const duplicates = findDuplicates(students);
+        matchesFilter = duplicates.some((d) => d.id === student.id);
+      } else {
+        matchesFilter = student.grade === selectedGrade;
+      }
+      
+      return matchesSearch && matchesFilter;
     })
     .sort((a, b) => {
       const aValue = a[sortField] || "";
@@ -261,16 +291,21 @@ export default function StudentsPage() {
           />
         </div>
         <Select value={selectedGrade} onValueChange={setSelectedGrade}>
-          <SelectTrigger className="w-40" data-testid="select-grade-filter">
-            <SelectValue placeholder="Filter by grade" />
+          <SelectTrigger className="w-56" data-testid="select-grade-filter">
+            <SelectValue placeholder="Filter" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">All Grades</SelectItem>
-            {grades.map((grade) => (
+            {staticGrades.map((grade) => (
               <SelectItem key={grade} value={grade}>
                 Grade {grade}
               </SelectItem>
             ))}
+            <SelectItem value="all">All Grades</SelectItem>
+            <SelectItem value="new">New Students</SelectItem>
+            <SelectItem value="unallocated">Unallocated Students</SelectItem>
+            <SelectItem value="no-id">Students with No IDs</SelectItem>
+            <SelectItem value="leaving">Students Leaving</SelectItem>
+            <SelectItem value="duplicates">Potentially Duplicate Students</SelectItem>
           </SelectContent>
         </Select>
         {selectedStudents.size > 0 && (
