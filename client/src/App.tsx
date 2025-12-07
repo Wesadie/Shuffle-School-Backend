@@ -19,6 +19,7 @@ import CharacteristicsPage from "@/pages/characteristics";
 import GeneratePage from "@/pages/generate";
 import ReviewPage from "@/pages/review";
 import SurveysPage from "@/pages/surveys";
+import SociogramPage from "@/pages/sociogram";
 
 import type { Student, Placement, ClassConfig } from "@shared/schema";
 
@@ -31,6 +32,7 @@ function Router() {
       <Route path="/surveys" component={SurveysPage} />
       <Route path="/generate" component={GeneratePage} />
       <Route path="/review" component={ReviewPage} />
+      <Route path="/sociogram" component={SociogramPage} />
       <Route component={NotFound} />
     </Switch>
   );

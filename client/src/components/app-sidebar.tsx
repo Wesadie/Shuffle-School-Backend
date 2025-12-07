@@ -1,5 +1,5 @@
 import { useLocation, Link } from "wouter";
-import { Users, Link2, Sliders, Sparkles, ClipboardList, Download, Upload, ClipboardCheck } from "lucide-react";
+import { Users, Link2, Sliders, Sparkles, ClipboardList, Download, Upload, ClipboardCheck, Network } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -53,6 +53,12 @@ const navItems = [
     title: "Review & Adjust",
     url: "/review",
     icon: ClipboardList,
+  },
+  {
+    title: "Sociogram",
+    url: "/sociogram",
+    icon: Network,
+    description: "Visual student network",
   },
 ];
 
