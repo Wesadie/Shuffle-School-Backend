@@ -1,5 +1,5 @@
 import { useLocation, Link } from "wouter";
-import { Users, Link2, Sliders, Sparkles, ClipboardList, Download, Upload, ClipboardCheck, Network, Layers } from "lucide-react";
+import { Users, Link2, Sliders, Sparkles, ClipboardList, Download, Upload, ClipboardCheck, Network, Layers, GraduationCap } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -27,6 +27,11 @@ const navItems = [
     url: "/",
     icon: Users,
     showCount: true,
+  },
+  {
+    title: "Teachers",
+    url: "/teachers",
+    icon: GraduationCap,
   },
   {
     title: "Rules",

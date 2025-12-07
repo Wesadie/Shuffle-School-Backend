@@ -21,6 +21,7 @@ import ReviewPage from "@/pages/review";
 import SurveysPage from "@/pages/surveys";
 import SociogramPage from "@/pages/sociogram";
 import ScenariosPage from "@/pages/scenarios";
+import TeachersPage from "@/pages/teachers";
 
 import type { Student, Placement, ClassConfig } from "@shared/schema";
 
@@ -28,6 +29,7 @@ function Router() {
   return (
     <Switch>
       <Route path="/" component={StudentsPage} />
+      <Route path="/teachers" component={TeachersPage} />
       <Route path="/rules" component={RulesPage} />
       <Route path="/characteristics" component={CharacteristicsPage} />
       <Route path="/surveys" component={SurveysPage} />

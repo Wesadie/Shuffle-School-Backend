@@ -9,6 +9,7 @@ import {
   insertPlacementSchema,
   insertSurveySchema,
   insertScenarioSchema,
+  insertTeacherSchema,
   type Student,
   type Rule,
   type ClassConfig,
@@ -779,6 +780,76 @@ export async function registerRoutes(
       res.json({ success: true, placementsRestored: placementsToRestore.length });
     } catch (error) {
       res.status(500).json({ error: "Failed to restore scenario" });
+    }
+  });
+
+  // Teachers CRUD
+  app.get("/api/teachers", async (req, res) => {
+    const teachers = await storage.getTeachers();
+    res.json(teachers);
+  });
+
+  app.get("/api/teachers/:id", async (req, res) => {
+    const teacher = await storage.getTeacher(req.params.id);
+    if (!teacher) {
+      return res.status(404).json({ error: "Teacher not found" });
+    }
+    res.json(teacher);
+  });
+
+  app.post("/api/teachers", async (req, res) => {
+    try {
+      const data = insertTeacherSchema.parse(req.body);
+      const teacher = await storage.createTeacher(data);
+      res.status(201).json(teacher);
+    } catch (error) {
+      res.status(400).json({ error: "Invalid teacher data" });
+    }
+  });
+
+  app.patch("/api/teachers/:id", async (req, res) => {
+    const teacher = await storage.updateTeacher(req.params.id, req.body);
+    if (!teacher) {
+      return res.status(404).json({ error: "Teacher not found" });
+    }
+    res.json(teacher);
+  });
+
+  app.delete("/api/teachers/:id", async (req, res) => {
+    const deleted = await storage.deleteTeacher(req.params.id);
+    if (!deleted) {
+      return res.status(404).json({ error: "Teacher not found" });
+    }
+    res.status(204).send();
+  });
+
+  app.post("/api/teachers/bulk-import", async (req, res) => {
+    try {
+      const { teachers } = req.body;
+      if (!Array.isArray(teachers)) {
+        return res.status(400).json({ error: "teachers must be an array" });
+      }
+      const result = await storage.bulkImportTeachers(teachers);
+      res.status(201).json(result);
+    } catch (error) {
+      res.status(400).json({ error: "Failed to import teachers" });
+    }
+  });
+
+  app.post("/api/teachers/bulk-delete", async (req, res) => {
+    try {
+      const { ids } = req.body;
+      if (!Array.isArray(ids)) {
+        return res.status(400).json({ error: "ids must be an array" });
+      }
+      let deletedCount = 0;
+      for (const id of ids) {
+        const deleted = await storage.deleteTeacher(id);
+        if (deleted) deletedCount++;
+      }
+      res.json({ count: deletedCount });
+    } catch (error) {
+      res.status(400).json({ error: "Failed to delete teachers" });
     }
   });
 
