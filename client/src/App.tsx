@@ -18,6 +18,7 @@ import RulesPage from "@/pages/rules";
 import CharacteristicsPage from "@/pages/characteristics";
 import GeneratePage from "@/pages/generate";
 import ReviewPage from "@/pages/review";
+import SurveysPage from "@/pages/surveys";
 
 import type { Student, Placement, ClassConfig } from "@shared/schema";
 
@@ -27,6 +28,7 @@ function Router() {
       <Route path="/" component={StudentsPage} />
       <Route path="/rules" component={RulesPage} />
       <Route path="/characteristics" component={CharacteristicsPage} />
+      <Route path="/surveys" component={SurveysPage} />
       <Route path="/generate" component={GeneratePage} />
       <Route path="/review" component={ReviewPage} />
       <Route component={NotFound} />

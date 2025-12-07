@@ -121,6 +121,22 @@ export interface BoostResponse {
   suggestions: BoostSuggestion[];
 }
 
+// Teacher surveys for student characteristic ratings and pairing recommendations
+export const surveys = pgTable("surveys", {
+  id: varchar("id", { length: 36 }).primaryKey(),
+  teacherName: text("teacher_name").notNull(),
+  studentId: varchar("student_id", { length: 36 }).notNull(),
+  characteristicRatings: jsonb("characteristic_ratings").$type<Record<string, string>>().default({}),
+  pairWith: jsonb("pair_with").$type<string[]>().default([]),
+  separateFrom: jsonb("separate_from").$type<string[]>().default([]),
+  notes: text("notes"),
+  submittedAt: text("submitted_at").notNull(),
+});
+
+export const insertSurveySchema = createInsertSchema(surveys).omit({ id: true });
+export type InsertSurvey = z.infer<typeof insertSurveySchema>;
+export type Survey = typeof surveys.$inferSelect;
+
 // Keep legacy user for compatibility
 export const users = pgTable("users", {
   id: varchar("id", { length: 36 }).primaryKey(),

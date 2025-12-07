@@ -1,5 +1,5 @@
 import { useLocation, Link } from "wouter";
-import { Users, Link2, Sliders, Sparkles, ClipboardList, Download, Upload } from "lucide-react";
+import { Users, Link2, Sliders, Sparkles, ClipboardList, Download, Upload, ClipboardCheck } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -38,6 +38,11 @@ const navItems = [
     title: "Characteristics",
     url: "/characteristics",
     icon: Sliders,
+  },
+  {
+    title: "Teacher Surveys",
+    url: "/surveys",
+    icon: ClipboardCheck,
   },
   {
     title: "Generate Classes",

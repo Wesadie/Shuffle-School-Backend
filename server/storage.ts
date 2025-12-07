@@ -11,6 +11,8 @@ import {
   type InsertClassConfig,
   type Placement,
   type InsertPlacement,
+  type Survey,
+  type InsertSurvey,
 } from "@shared/schema";
 import { randomUUID } from "crypto";
 
@@ -59,6 +61,14 @@ export interface IStorage {
   deletePlacement(id: string): Promise<boolean>;
   deleteAllPlacements(): Promise<void>;
   bulkCreatePlacements(placements: InsertPlacement[]): Promise<{ count: number }>;
+
+  // Surveys
+  getSurveys(): Promise<Survey[]>;
+  getSurvey(id: string): Promise<Survey | undefined>;
+  getSurveysByStudent(studentId: string): Promise<Survey[]>;
+  createSurvey(survey: InsertSurvey): Promise<Survey>;
+  updateSurvey(id: string, survey: Partial<InsertSurvey>): Promise<Survey | undefined>;
+  deleteSurvey(id: string): Promise<boolean>;
 }
 
 export class MemStorage implements IStorage {
@@ -68,6 +78,7 @@ export class MemStorage implements IStorage {
   private characteristics: Map<string, Characteristic>;
   private classConfigs: Map<string, ClassConfig>;
   private placements: Map<string, Placement>;
+  private surveys: Map<string, Survey>;
 
   constructor() {
     this.users = new Map();
@@ -76,6 +87,7 @@ export class MemStorage implements IStorage {
     this.characteristics = new Map();
     this.classConfigs = new Map();
     this.placements = new Map();
+    this.surveys = new Map();
   }
 
   // Users
@@ -297,6 +309,56 @@ export class MemStorage implements IStorage {
       count++;
     }
     return { count };
+  }
+
+  // Surveys
+  async getSurveys(): Promise<Survey[]> {
+    return Array.from(this.surveys.values());
+  }
+
+  async getSurvey(id: string): Promise<Survey | undefined> {
+    return this.surveys.get(id);
+  }
+
+  async getSurveysByStudent(studentId: string): Promise<Survey[]> {
+    return Array.from(this.surveys.values()).filter(s => s.studentId === studentId);
+  }
+
+  async createSurvey(insertSurvey: InsertSurvey): Promise<Survey> {
+    const id = randomUUID();
+    const survey: Survey = {
+      id,
+      teacherName: insertSurvey.teacherName,
+      studentId: insertSurvey.studentId,
+      characteristicRatings: insertSurvey.characteristicRatings ?? {},
+      pairWith: insertSurvey.pairWith ?? [],
+      separateFrom: insertSurvey.separateFrom ?? [],
+      notes: insertSurvey.notes ?? null,
+      submittedAt: insertSurvey.submittedAt,
+    };
+    this.surveys.set(id, survey);
+    return survey;
+  }
+
+  async updateSurvey(id: string, updates: Partial<InsertSurvey>): Promise<Survey | undefined> {
+    const survey = this.surveys.get(id);
+    if (!survey) return undefined;
+    const updated: Survey = {
+      id: survey.id,
+      teacherName: updates.teacherName ?? survey.teacherName,
+      studentId: updates.studentId ?? survey.studentId,
+      characteristicRatings: updates.characteristicRatings ?? survey.characteristicRatings,
+      pairWith: updates.pairWith ?? survey.pairWith,
+      separateFrom: updates.separateFrom ?? survey.separateFrom,
+      notes: updates.notes !== undefined ? updates.notes : survey.notes,
+      submittedAt: updates.submittedAt ?? survey.submittedAt,
+    };
+    this.surveys.set(id, updated);
+    return updated;
+  }
+
+  async deleteSurvey(id: string): Promise<boolean> {
+    return this.surveys.delete(id);
   }
 }
 

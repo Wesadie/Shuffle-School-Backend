@@ -7,6 +7,7 @@ import {
   insertCharacteristicSchema,
   insertClassConfigSchema,
   insertPlacementSchema,
+  insertSurveySchema,
   type Student,
   type Rule,
   type ClassConfig,
@@ -549,6 +550,51 @@ export async function registerRoutes(
     } catch (error) {
       res.status(500).json({ error: "Failed to apply boost suggestion" });
     }
+  });
+
+  // Surveys CRUD
+  app.get("/api/surveys", async (req, res) => {
+    const surveys = await storage.getSurveys();
+    res.json(surveys);
+  });
+
+  app.get("/api/surveys/:id", async (req, res) => {
+    const survey = await storage.getSurvey(req.params.id);
+    if (!survey) {
+      return res.status(404).json({ error: "Survey not found" });
+    }
+    res.json(survey);
+  });
+
+  app.get("/api/surveys/student/:studentId", async (req, res) => {
+    const surveys = await storage.getSurveysByStudent(req.params.studentId);
+    res.json(surveys);
+  });
+
+  app.post("/api/surveys", async (req, res) => {
+    try {
+      const data = insertSurveySchema.parse(req.body);
+      const survey = await storage.createSurvey(data);
+      res.status(201).json(survey);
+    } catch (error) {
+      res.status(400).json({ error: "Invalid survey data" });
+    }
+  });
+
+  app.patch("/api/surveys/:id", async (req, res) => {
+    const survey = await storage.updateSurvey(req.params.id, req.body);
+    if (!survey) {
+      return res.status(404).json({ error: "Survey not found" });
+    }
+    res.json(survey);
+  });
+
+  app.delete("/api/surveys/:id", async (req, res) => {
+    const deleted = await storage.deleteSurvey(req.params.id);
+    if (!deleted) {
+      return res.status(404).json({ error: "Survey not found" });
+    }
+    res.status(204).send();
   });
 
   return httpServer;
