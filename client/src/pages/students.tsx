@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Plus, Trash2, Edit2, Search, Users, ChevronUp, ChevronDown, MessageSquare } from "lucide-react";
+import { Plus, Trash2, Edit2, Search, Users, ChevronUp, ChevronDown, MessageSquare, Upload, Download } from "lucide-react";
+import { CSVImportDialog } from "@/components/csv-import-dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -45,6 +46,7 @@ export default function StudentsPage() {
   const [selectedGrade, setSelectedGrade] = useState<string>("all");
   const [selectedStudents, setSelectedStudents] = useState<Set<string>>(new Set());
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
+  const [isImportDialogOpen, setIsImportDialogOpen] = useState(false);
   const [editingStudent, setEditingStudent] = useState<Student | null>(null);
   const [sortField, setSortField] = useState<SortField>("lastName");
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
@@ -273,10 +275,16 @@ export default function StudentsPage() {
             Manage your student list and their characteristics
           </p>
         </div>
-        <Button onClick={() => setIsAddDialogOpen(true)} data-testid="button-add-student">
-          <Plus className="h-4 w-4 mr-2" />
-          Add Student
-        </Button>
+        <div className="flex items-center gap-2 flex-wrap">
+          <Button variant="outline" onClick={() => setIsImportDialogOpen(true)} data-testid="button-upload-csv">
+            <Upload className="h-4 w-4 mr-2" />
+            Upload CSV
+          </Button>
+          <Button onClick={() => setIsAddDialogOpen(true)} data-testid="button-add-student">
+            <Plus className="h-4 w-4 mr-2" />
+            Add Student
+          </Button>
+        </div>
       </div>
 
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
@@ -824,6 +832,8 @@ export default function StudentsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <CSVImportDialog open={isImportDialogOpen} onOpenChange={setIsImportDialogOpen} />
     </div>
   );
 }
