@@ -69,7 +69,48 @@ export async function registerRoutes(
       if (!Array.isArray(students)) {
         return res.status(400).json({ error: "students must be an array" });
       }
-      const result = await storage.bulkImportStudents(students);
+      
+      const standardFields = ["firstName", "lastName", "grade", "currentClass", "gender", "notes", "parentRequests", "parentNotes"];
+      const existingCharacteristics = await storage.getCharacteristics();
+      const existingCharNames = new Set(existingCharacteristics.map(c => c.name));
+      
+      // First pass: collect all unique characteristic names that need to be created
+      const newCharacteristicsToCreate: { name: string; type: string }[] = [];
+      for (const student of students) {
+        for (const [key, value] of Object.entries(student)) {
+          if (!standardFields.includes(key) && value !== undefined && value !== null && value !== "" && !existingCharNames.has(key)) {
+            const type = key.includes("%") ? "percentage" : "category";
+            newCharacteristicsToCreate.push({ name: key, type });
+            existingCharNames.add(key);
+          }
+        }
+      }
+      
+      // Create all new characteristics before importing students
+      for (const char of newCharacteristicsToCreate) {
+        await storage.createCharacteristic({ name: char.name, type: char.type, options: [], priority: 1 });
+      }
+      
+      // Process students and extract characteristics from extra columns
+      const processedStudents = students.map(student => {
+        const characteristics: Record<string, string> = {};
+        for (const [key, value] of Object.entries(student)) {
+          if (!standardFields.includes(key) && value !== undefined && value !== null && value !== "") {
+            characteristics[key] = String(value);
+          }
+        }
+        return {
+          firstName: student.firstName,
+          lastName: student.lastName,
+          grade: student.grade,
+          currentClass: student.currentClass,
+          gender: student.gender,
+          notes: student.notes,
+          characteristics
+        };
+      });
+      
+      const result = await storage.bulkImportStudents(processedStudents);
       res.status(201).json(result);
     } catch (error) {
       res.status(400).json({ error: "Failed to import students" });

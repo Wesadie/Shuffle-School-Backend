@@ -193,8 +193,8 @@ export function CSVImportDialog({ open, onOpenChange }: CSVImportDialogProps) {
   };
 
   const handleDownloadTemplate = () => {
-    const headers = ["firstName", "lastName", "grade", "currentClass", "gender", "notes"];
-    const exampleRow = ["John", "Smith", "5", "5A", "Male", "Example student"];
+    const headers = ["firstName", "lastName", "grade", "currentClass", "gender", "notes", "Aggregate %", "Maths %", "English %", "Afrikaans/Isizulu %"];
+    const exampleRow = ["John", "Smith", "5", "5A", "Male", "Example student", "75", "80", "72", "68"];
     const csvContent = [headers.join(","), exampleRow.join(",")].join("\n");
     
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
