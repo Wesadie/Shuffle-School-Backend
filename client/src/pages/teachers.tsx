@@ -552,34 +552,6 @@ export default function TeachersPage() {
                 />
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="surveyStatus">Survey Status</Label>
-                <Select
-                  value={formData.surveyStatus || "Not Sent"}
-                  onValueChange={(value) => setFormData({ ...formData, surveyStatus: value })}
-                >
-                  <SelectTrigger data-testid="select-teacher-survey-status">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="Not Sent">Not Sent</SelectItem>
-                    <SelectItem value="Sent">Sent</SelectItem>
-                    <SelectItem value="Completed">Completed</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="surveyDate">Survey Date</Label>
-                <Input
-                  id="surveyDate"
-                  type="date"
-                  value={formData.surveyDate || ""}
-                  onChange={(e) => setFormData({ ...formData, surveyDate: e.target.value })}
-                  data-testid="input-teacher-survey-date"
-                />
-              </div>
-            </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setIsAddDialogOpen(false)}>
