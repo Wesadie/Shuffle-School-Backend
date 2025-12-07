@@ -37,7 +37,7 @@ export type Rule = typeof rules.$inferSelect;
 export const characteristics = pgTable("characteristics", {
   id: varchar("id", { length: 36 }).primaryKey(),
   name: text("name").notNull(),
-  type: text("type").notNull(), // "category" or "scale"
+  type: text("type").notNull(), // "category", "scale", or "percentage"
   options: jsonb("options").$type<string[]>().default([]),
   priority: integer("priority").default(1),
 });
