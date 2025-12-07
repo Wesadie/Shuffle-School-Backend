@@ -43,6 +43,7 @@ export default function TeachersPage() {
   const [selectedTeachers, setSelectedTeachers] = useState<Set<string>>(new Set());
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [isImportDialogOpen, setIsImportDialogOpen] = useState(false);
+  const [showImportView, setShowImportView] = useState(false);
   const [editingTeacher, setEditingTeacher] = useState<Teacher | null>(null);
   const [sortField, setSortField] = useState<SortField>("lastName");
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
@@ -245,6 +246,20 @@ export default function TeachersPage() {
     });
   };
 
+  const handleDownloadTemplate = () => {
+    const headers = ["firstName", "lastName", "email", "currentClass", "allocatedClass"];
+    const csvContent = headers.join(",") + "\n";
+    const blob = new Blob([csvContent], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "teachers_template.csv";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
   const filteredTeachers = teachers
     .filter((teacher) => {
       const matchesSearch =
@@ -304,6 +319,68 @@ export default function TeachersPage() {
     setIsAddDialogOpen(true);
   };
 
+  if (showImportView) {
+    return (
+      <div className="p-6 space-y-6">
+        <div className="flex flex-col items-center justify-center py-12">
+          <div className="mb-8">
+            <svg width="180" height="140" viewBox="0 0 180 140" fill="none" xmlns="http://www.w3.org/2000/svg" className="mx-auto">
+              <rect x="40" y="20" width="100" height="80" rx="4" fill="hsl(var(--muted))" stroke="hsl(var(--border))" strokeWidth="2"/>
+              <rect x="50" y="10" width="80" height="15" rx="2" fill="hsl(var(--primary))" opacity="0.3"/>
+              <rect x="50" y="35" width="80" height="55" fill="hsl(var(--background))" stroke="hsl(var(--border))" strokeWidth="1"/>
+              {[0, 1, 2, 3].map((row) => (
+                <g key={row}>
+                  {[0, 1, 2, 3].map((col) => (
+                    <rect key={col} x={52 + col * 19} y={37 + row * 13} width="17" height="11" fill={row === 0 ? "hsl(var(--primary))" : "hsl(var(--muted))"} opacity={row === 0 ? 0.5 : 0.3}/>
+                  ))}
+                </g>
+              ))}
+              <circle cx="105" cy="105" r="25" fill="hsl(var(--primary))" opacity="0.2"/>
+              <path d="M105 95 L105 115 M95 105 L105 95 L115 105" stroke="hsl(var(--primary))" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/>
+              <rect x="15" y="35" width="20" height="12" rx="2" fill="hsl(var(--chart-4))" opacity="0.7"/>
+              <rect x="20" y="55" width="20" height="12" rx="2" fill="hsl(var(--chart-1))" opacity="0.7"/>
+              <rect x="145" y="30" width="20" height="12" rx="2" fill="hsl(var(--destructive))" opacity="0.6"/>
+              <rect x="150" y="50" width="20" height="12" rx="2" fill="hsl(var(--destructive))" opacity="0.6"/>
+              <rect x="145" y="70" width="20" height="12" rx="2" fill="hsl(var(--destructive))" opacity="0.6"/>
+            </svg>
+          </div>
+          
+          <h2 className="text-xl font-semibold mb-6">1. Download and complete the teachers template</h2>
+          <Button onClick={handleDownloadTemplate} className="mb-10" data-testid="button-download-template">
+            Download Template
+          </Button>
+          
+          <h2 className="text-xl font-semibold mb-6">2. Then upload the completed file</h2>
+          <Button 
+            variant="outline" 
+            onClick={() => document.getElementById("teacher-csv-upload-import")?.click()} 
+            data-testid="button-upload-completed"
+          >
+            Upload Completed File
+          </Button>
+          <input
+            id="teacher-csv-upload-import"
+            type="file"
+            accept=".csv"
+            className="hidden"
+            onChange={(e) => {
+              handleFileUpload(e);
+              setShowImportView(false);
+            }}
+          />
+          
+          <button
+            onClick={() => setShowImportView(false)}
+            className="text-primary mt-8 text-sm hover:underline"
+            data-testid="link-back-to-teachers"
+          >
+            &lt; Back to Teachers page
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="p-6 space-y-6">
       <Card>
@@ -321,19 +398,12 @@ export default function TeachersPage() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => document.getElementById("teacher-csv-upload")?.click()}
+              onClick={() => setShowImportView(true)}
               data-testid="button-import-teachers"
             >
               <Upload className="h-4 w-4 mr-1" />
-              Import
+              Import Teachers
             </Button>
-            <input
-              id="teacher-csv-upload"
-              type="file"
-              accept=".csv"
-              className="hidden"
-              onChange={handleFileUpload}
-            />
             <Button
               variant="outline"
               size="sm"
