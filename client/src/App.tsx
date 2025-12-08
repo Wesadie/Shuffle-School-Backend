@@ -8,9 +8,12 @@ import { ThemeProvider } from "@/components/theme-provider";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { CSVImportDialog } from "@/components/csv-import-dialog";
 import { useToast } from "@/hooks/use-toast";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { Settings, HelpCircle } from "lucide-react";
+import { useAuth } from "@/hooks/useAuth";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Button } from "@/components/ui/button";
+import { Settings, HelpCircle, LogOut } from "lucide-react";
 import { cn } from "@/lib/utils";
+import logoImage from "@assets/ChatGPT_Image_Dec_8,_2025,_01_03_50_PM_1765191843507.png";
 
 import NotFound from "@/pages/not-found";
 import StudentsPage from "@/pages/students";
@@ -22,10 +25,13 @@ import SurveysPage from "@/pages/surveys";
 import SociogramPage from "@/pages/sociogram";
 import ScenariosPage from "@/pages/scenarios";
 import TeachersPage from "@/pages/teachers";
+import LandingPage from "@/pages/landing";
+import SettingsPage from "@/pages/settings";
+import HelpPage from "@/pages/help";
 
 import type { Student, Placement, ClassConfig } from "@shared/schema";
 
-function Router() {
+function AuthenticatedRouter() {
   return (
     <Switch>
       <Route path="/" component={StudentsPage} />
@@ -37,13 +43,27 @@ function Router() {
       <Route path="/review" component={ReviewPage} />
       <Route path="/sociogram" component={SociogramPage} />
       <Route path="/scenarios" component={ScenariosPage} />
+      <Route path="/settings" component={SettingsPage} />
+      <Route path="/help" component={HelpPage} />
       <Route component={NotFound} />
+    </Switch>
+  );
+}
+
+function PublicRouter() {
+  return (
+    <Switch>
+      <Route path="/" component={LandingPage} />
+      <Route path="/settings" component={SettingsPage} />
+      <Route path="/help" component={HelpPage} />
+      <Route component={LandingPage} />
     </Switch>
   );
 }
 
 function TopNavigation() {
   const [location] = useLocation();
+  const { user } = useAuth();
 
   const navItems = [
     { label: "Students", href: "/" },
@@ -54,14 +74,33 @@ function TopNavigation() {
   ];
 
   const rightNavItems = [
-    { label: "Settings", href: "/characteristics", icon: Settings },
-    { label: "Help", href: "/surveys", icon: HelpCircle },
+    { label: "Settings", href: "/settings", icon: Settings },
+    { label: "Help", href: "/help", icon: HelpCircle },
   ];
+
+  const handleLogout = () => {
+    window.location.href = "/api/logout";
+  };
+
+  const getInitials = () => {
+    if (user?.firstName && user?.lastName) {
+      return `${user.firstName[0]}${user.lastName[0]}`.toUpperCase();
+    }
+    if (user?.email) {
+      return user.email[0].toUpperCase();
+    }
+    return "U";
+  };
 
   return (
     <header className="flex items-center justify-between gap-4 px-4 py-3 border-b sticky top-0 z-50 bg-background">
       <nav className="flex items-center gap-1">
-        <div className="w-1 h-5 bg-primary rounded-full mr-2" />
+        <Link href="/">
+          <div className="flex items-center gap-2 mr-4 cursor-pointer">
+            <img src={logoImage} alt="ShuffleSchool Logo" className="h-7 w-7 rounded-md object-contain" />
+            <span className="font-semibold hidden sm:inline">ShuffleSchool</span>
+          </div>
+        </Link>
         {navItems.map((item) => {
           const isActive = location === item.href;
           return (
@@ -104,10 +143,16 @@ function TopNavigation() {
         <ThemeToggle />
         <div className="w-px h-6 bg-border mx-1" />
         <Avatar className="h-8 w-8 cursor-pointer" data-testid="avatar-user">
+          {user?.profileImageUrl && (
+            <AvatarImage src={user.profileImageUrl} alt={user.firstName || "User"} className="object-cover" />
+          )}
           <AvatarFallback className="bg-primary text-primary-foreground text-xs">
-            WA
+            {getInitials()}
           </AvatarFallback>
         </Avatar>
+        <Button size="icon" variant="ghost" onClick={handleLogout} data-testid="button-logout">
+          <LogOut className="h-4 w-4" />
+        </Button>
       </div>
     </header>
   );
@@ -115,18 +160,22 @@ function TopNavigation() {
 
 function AppContent() {
   const { toast } = useToast();
+  const { isAuthenticated, isLoading } = useAuth();
   const [importOpen, setImportOpen] = useState(false);
 
   const { data: students = [] } = useQuery<Student[]>({
     queryKey: ["/api/students"],
+    enabled: isAuthenticated,
   });
 
   const { data: placements = [] } = useQuery<Placement[]>({
     queryKey: ["/api/placements"],
+    enabled: isAuthenticated,
   });
 
   const { data: classConfigs = [] } = useQuery<ClassConfig[]>({
     queryKey: ["/api/class-configs"],
+    enabled: isAuthenticated,
   });
 
   const handleExport = async () => {
@@ -171,11 +220,23 @@ function AppContent() {
     });
   };
 
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center h-screen">
+        <div className="text-muted-foreground">Loading...</div>
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return <PublicRouter />;
+  }
+
   return (
     <div className="flex flex-col h-screen w-full">
       <TopNavigation />
       <main className="flex-1 overflow-auto">
-        <Router />
+        <AuthenticatedRouter />
       </main>
       <CSVImportDialog open={importOpen} onOpenChange={setImportOpen} />
     </div>
