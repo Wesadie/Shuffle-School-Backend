@@ -869,6 +869,27 @@ export async function registerRoutes(
     }
   });
 
+  // App Settings routes
+  app.get("/api/app-settings", isAuthenticated, async (req, res) => {
+    try {
+      const settings = await storage.getAppSettings();
+      res.json(settings);
+    } catch (error) {
+      console.error("Error fetching app settings:", error);
+      res.status(500).json({ error: "Failed to fetch app settings" });
+    }
+  });
+
+  app.put("/api/app-settings", isAuthenticated, async (req, res) => {
+    try {
+      const settings = await storage.updateAppSettings(req.body);
+      res.json(settings);
+    } catch (error) {
+      console.error("Error updating app settings:", error);
+      res.status(400).json({ error: "Failed to update settings" });
+    }
+  });
+
   return httpServer;
 }
 
