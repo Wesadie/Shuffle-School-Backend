@@ -84,7 +84,7 @@ export function AppSidebar({ studentCount, onImport, onExport }: AppSidebarProps
             <Sparkles className="h-4 w-4 text-primary-foreground" />
           </div>
           <div className="flex flex-col">
-            <span className="text-lg font-semibold">ClassSolver</span>
+            <span className="text-lg font-semibold">ShuffleSchool</span>
             <span className="text-xs text-muted-foreground">Class Placement Tool</span>
           </div>
         </div>

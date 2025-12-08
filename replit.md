@@ -1,8 +1,8 @@
-# ClassSolver - K-12 Class Placement Tool
+# ShuffleSchool - K-12 Class Placement Tool
 
 ## Overview
 
-ClassSolver is a web-based K-12 class placement tool designed to help schools create balanced, optimized class lists. The application allows educators to import student data, define pairing and separation rules, configure student characteristics for balancing, and generate optimized class placements using an intelligent algorithm. The tool provides an intuitive review interface for manual adjustments before finalizing placements.
+ShuffleSchool is a web-based K-12 class placement tool designed to help schools create balanced, optimized class lists. The application allows educators to import student data, define pairing and separation rules, configure student characteristics for balancing, and generate optimized class placements using an intelligent algorithm. The tool provides an intuitive review interface for manual adjustments before finalizing placements.
 
 **Core Features:**
 - Student data management with CSV import/export
