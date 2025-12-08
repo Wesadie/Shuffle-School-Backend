@@ -19,7 +19,14 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useLocation } from "wouter";
-import type { ClassConfig, InsertClassConfig, Student, Rule, Characteristic } from "@shared/schema";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import type { ClassConfig, InsertClassConfig, Student, Rule, Characteristic, Teacher } from "@shared/schema";
 
 export default function GeneratePage() {
   const { toast } = useToast();
@@ -48,6 +55,19 @@ export default function GeneratePage() {
   const { data: characteristics = [] } = useQuery<Characteristic[]>({
     queryKey: ["/api/characteristics"],
   });
+
+  const { data: teachers = [] } = useQuery<Teacher[]>({
+    queryKey: ["/api/teachers"],
+  });
+
+  const teacherClasses = teachers
+    .filter((t) => t.currentClass && t.currentClass.trim() !== "")
+    .map((t) => ({
+      teacherId: t.id,
+      teacherName: `${t.firstName} ${t.lastName}`,
+      currentClass: t.currentClass!,
+    }))
+    .sort((a, b) => a.currentClass.localeCompare(b.currentClass));
 
   const createConfigMutation = useMutation({
     mutationFn: (data: InsertClassConfig) => apiRequest("POST", "/api/class-configs", data),
@@ -305,6 +325,37 @@ export default function GeneratePage() {
           <div className="grid gap-4 py-4">
             <div className="space-y-2">
               <Label htmlFor="name">Class Name *</Label>
+              {teacherClasses.length > 0 && (
+                <div className="space-y-2">
+                  <Select
+                    value={formData.name || ""}
+                    onValueChange={(value) => {
+                      if (value === "__custom__") {
+                        setFormData({ ...formData, name: "" });
+                      } else {
+                        setFormData({ ...formData, name: value });
+                      }
+                    }}
+                  >
+                    <SelectTrigger data-testid="select-teacher-class">
+                      <SelectValue placeholder="Select a teacher's class..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {teacherClasses.map((tc) => (
+                        <SelectItem key={tc.teacherId} value={tc.currentClass} data-testid={`option-class-${tc.teacherId}`}>
+                          {tc.currentClass} ({tc.teacherName})
+                        </SelectItem>
+                      ))}
+                      <SelectItem value="__custom__" data-testid="option-custom-class">
+                        Enter custom name...
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    Select a teacher's current class or enter a custom name below
+                  </p>
+                </div>
+              )}
               <Input
                 id="name"
                 value={formData.name}
@@ -345,7 +396,7 @@ export default function GeneratePage() {
                 type="number"
                 min={1}
                 max={50}
-                value={formData.capacity}
+                value={formData.capacity ?? 30}
                 onChange={(e) => setFormData({ ...formData, capacity: Number(e.target.value) })}
                 placeholder="30"
                 data-testid="input-class-capacity"
