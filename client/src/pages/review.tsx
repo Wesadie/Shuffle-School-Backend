@@ -22,7 +22,7 @@ import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Link } from "wouter";
 import type { 
   ClassConfig, Student, Placement, Rule, Characteristic, 
-  ConflictWarning, BoostResponse, BoostSuggestion
+  ConflictWarning, BoostResponse, BoostSuggestion, Teacher
 } from "@shared/schema";
 
 interface ClassWithStudents {
@@ -56,6 +56,20 @@ export default function ReviewPage() {
   const { data: characteristics = [] } = useQuery<Characteristic[]>({
     queryKey: ["/api/characteristics"],
   });
+
+  const { data: teachers = [] } = useQuery<Teacher[]>({
+    queryKey: ["/api/teachers"],
+  });
+
+  const classToTeacher = useMemo(() => {
+    const mapping: Record<string, string> = {};
+    teachers.forEach((teacher) => {
+      if (teacher.currentClass) {
+        mapping[teacher.currentClass] = `${teacher.firstName} ${teacher.lastName}`;
+      }
+    });
+    return mapping;
+  }, [teachers]);
 
   const moveMutation = useMutation({
     mutationFn: ({ studentId, targetClassId }: { studentId: string; targetClassId: string }) =>
@@ -473,10 +487,12 @@ export default function ReviewPage() {
         </Card>
       )}
 
-      <div className="grid gap-6 lg:grid-cols-3">
-        <div className="lg:col-span-2 space-y-4">
-          <div className="grid gap-4 md:grid-cols-2">
-            {classesWithStudents.map(({ config, students: classStudents }) => (
+      <div className="space-y-6">
+        <div className="grid gap-4 grid-cols-1 md:grid-cols-2 lg:grid-cols-4">
+          {classesWithStudents.map(({ config, students: classStudents }) => {
+            const teacherName = classToTeacher[config.name];
+            const displayName = teacherName ? `${config.name} - ${teacherName}` : config.name;
+            return (
               <Card
                 key={config.id}
                 className={`transition-colors ${
@@ -489,7 +505,7 @@ export default function ReviewPage() {
               >
                 <CardHeader className="pb-2">
                   <div className="flex items-center justify-between gap-2">
-                    <CardTitle className="text-base">{config.name}</CardTitle>
+                    <CardTitle className="text-sm" data-testid={`text-class-name-${config.id}`}>{displayName}</CardTitle>
                     <Badge variant={classStudents.length > (config.capacity || 30) ? "destructive" : "secondary"}>
                       {classStudents.length}/{config.capacity || 30}
                     </Badge>
@@ -497,66 +513,58 @@ export default function ReviewPage() {
                   <CardDescription>Grade {config.grade}</CardDescription>
                 </CardHeader>
                 <CardContent>
-                  <ScrollArea className="h-48">
-                    <div className="space-y-1">
-                      {classStudents.length === 0 ? (
-                        <p className="text-sm text-muted-foreground text-center py-4">
-                          Drop students here
-                        </p>
-                      ) : (
-                        classStudents.map((student) => {
-                          const hasConflict = conflicts.some((c) => c.studentIds.includes(student.id));
-                          return (
-                            <div
-                              key={student.id}
-                              draggable
-                              onDragStart={() => handleDragStart(student)}
-                              className={`flex items-center gap-2 p-2 rounded-md cursor-grab active:cursor-grabbing transition-colors ${
-                                hasConflict 
-                                  ? "bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800" 
-                                  : "bg-muted/50"
-                              } ${draggedStudent?.id === student.id ? "opacity-50" : ""}`}
-                              data-testid={`student-card-${student.id}`}
-                            >
-                              <GripVertical className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-                              <div className="flex-1 min-w-0">
-                                <p className="text-sm font-medium truncate">
-                                  {student.lastName}, {student.firstName}
-                                </p>
-                                <div className="flex items-center gap-1 flex-wrap">
-                                  {student.gender && (
-                                    <Badge variant="outline" className="text-xs">
-                                      {student.gender}
-                                    </Badge>
-                                  )}
-                                  {Object.entries(student.characteristics || {})
-                                    .slice(0, 2)
-                                    .map(([key, value]) => (
-                                      <Badge key={key} variant="secondary" className="text-xs">
-                                        {value}
-                                      </Badge>
-                                    ))}
-                                </div>
+                  <div className="space-y-1">
+                    {classStudents.length === 0 ? (
+                      <p className="text-sm text-muted-foreground text-center py-4">
+                        Drop students here
+                      </p>
+                    ) : (
+                      classStudents.map((student) => {
+                        const hasConflict = conflicts.some((c) => c.studentIds.includes(student.id));
+                        return (
+                          <div
+                            key={student.id}
+                            draggable
+                            onDragStart={() => handleDragStart(student)}
+                            className={`flex items-center gap-2 p-2 rounded-md cursor-grab active:cursor-grabbing transition-colors ${
+                              hasConflict 
+                                ? "bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800" 
+                                : "bg-muted/50"
+                            } ${draggedStudent?.id === student.id ? "opacity-50" : ""}`}
+                            data-testid={`student-card-${student.id}`}
+                          >
+                            <GripVertical className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm font-medium truncate">
+                                {student.lastName}, {student.firstName}
+                              </p>
+                              <div className="flex items-center gap-1 flex-wrap">
+                                {student.gender && (
+                                  <Badge variant="outline" className="text-xs">
+                                    {student.gender}
+                                  </Badge>
+                                )}
                               </div>
-                              {hasConflict && (
-                                <Tooltip>
-                                  <TooltipTrigger>
-                                    <AlertTriangle className="h-4 w-4 text-red-500 flex-shrink-0" />
-                                  </TooltipTrigger>
-                                  <TooltipContent>
-                                    <p>This student is involved in a conflict</p>
-                                  </TooltipContent>
-                                </Tooltip>
-                              )}
                             </div>
-                          );
-                        })
-                      )}
-                    </div>
-                  </ScrollArea>
+                            {hasConflict && (
+                              <Tooltip>
+                                <TooltipTrigger>
+                                  <AlertTriangle className="h-4 w-4 text-red-500 flex-shrink-0" />
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p>This student is involved in a conflict</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            )}
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
                 </CardContent>
               </Card>
-            ))}
+            );
+          })}
           </div>
 
           {unplacedStudents.length > 0 && (
@@ -586,9 +594,8 @@ export default function ReviewPage() {
               </CardContent>
             </Card>
           )}
-        </div>
 
-        <div className="space-y-4">
+        <div className="grid gap-4 md:grid-cols-2">
           <Card>
             <CardHeader>
               <CardTitle className="text-base flex items-center gap-2">
