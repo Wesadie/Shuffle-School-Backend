@@ -197,3 +197,15 @@ export const users = pgTable("users", {
 
 export type UpsertUser = typeof users.$inferInsert;
 export type User = typeof users.$inferSelect;
+
+// App settings for survey configuration
+export const appSettings = pgTable("app_settings", {
+  id: varchar("id", { length: 36 }).primaryKey(),
+  maxFriendNominations: integer("max_friend_nominations").default(1),
+  allowTeacherStudentRequests: boolean("allow_teacher_student_requests").default(true),
+  allowTeacherTeacherRequests: boolean("allow_teacher_teacher_requests").default(true),
+});
+
+export const insertAppSettingsSchema = createInsertSchema(appSettings).omit({ id: true });
+export type InsertAppSettings = z.infer<typeof insertAppSettingsSchema>;
+export type AppSettings = typeof appSettings.$inferSelect;

@@ -17,6 +17,8 @@ import {
   type InsertSurvey,
   type Scenario,
   type InsertScenario,
+  type AppSettings,
+  type InsertAppSettings,
   students,
   rules,
   characteristics,
@@ -26,6 +28,7 @@ import {
   surveys,
   scenarios,
   users,
+  appSettings,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq } from "drizzle-orm";
@@ -88,6 +91,9 @@ export interface IStorage {
   updateTeacher(id: string, teacher: Partial<InsertTeacher>): Promise<Teacher | undefined>;
   deleteTeacher(id: string): Promise<boolean>;
   bulkImportTeachers(teachers: InsertTeacher[]): Promise<{ count: number }>;
+
+  getAppSettings(): Promise<AppSettings>;
+  updateAppSettings(settings: Partial<InsertAppSettings>): Promise<AppSettings>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -404,6 +410,27 @@ export class DatabaseStorage implements IStorage {
       count++;
     }
     return { count };
+  }
+
+  async getAppSettings(): Promise<AppSettings> {
+    const [settings] = await db.select().from(appSettings);
+    if (!settings) {
+      const id = randomUUID();
+      const [newSettings] = await db.insert(appSettings).values({
+        id,
+        maxFriendNominations: 1,
+        allowTeacherStudentRequests: true,
+        allowTeacherTeacherRequests: true,
+      }).returning();
+      return newSettings;
+    }
+    return settings;
+  }
+
+  async updateAppSettings(updates: Partial<InsertAppSettings>): Promise<AppSettings> {
+    const current = await this.getAppSettings();
+    const [updated] = await db.update(appSettings).set(updates).where(eq(appSettings.id, current.id)).returning();
+    return updated;
   }
 }
 
