@@ -1,5 +1,6 @@
 import { useLocation, Link } from "wouter";
 import { Users, Link2, Sliders, Sparkles, ClipboardList, Download, Upload, ClipboardCheck, Network, Layers, GraduationCap } from "lucide-react";
+import logoImage from "@assets/ChatGPT_Image_Dec_8,_2025,_01_03_50_PM_1765191843507.png";
 import {
   Sidebar,
   SidebarContent,
@@ -80,9 +81,7 @@ export function AppSidebar({ studentCount, onImport, onExport }: AppSidebarProps
     <Sidebar>
       <SidebarHeader className="p-4">
         <div className="flex items-center gap-2">
-          <div className="flex h-8 w-8 items-center justify-center rounded-md bg-primary">
-            <Sparkles className="h-4 w-4 text-primary-foreground" />
-          </div>
+          <img src={logoImage} alt="ShuffleSchool Logo" className="h-8 w-8 rounded-md object-contain" />
           <div className="flex flex-col">
             <span className="text-lg font-semibold">ShuffleSchool</span>
             <span className="text-xs text-muted-foreground">Class Placement Tool</span>
