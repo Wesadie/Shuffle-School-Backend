@@ -9,12 +9,12 @@ import connectPg from "connect-pg-simple";
 import { storage } from "./storage";
 import memorystore from "memorystore";
 
+const hasReplitAuthConfig = !!process.env.REPL_ID;
+const ISSUER_URL = process.env.ISSUER_URL ?? "https://replit.com/oidc";
+
 const getOidcConfig = memoize(
   async () => {
-    return await client.discovery(
-      new URL(process.env.ISSUER_URL ?? "https://replit.com/oidc"),
-      process.env.REPL_ID!
-    );
+    return await client.discovery(new URL(ISSUER_URL), process.env.REPL_ID!);
   },
   { maxAge: 3600 * 1000 }
 );
@@ -72,8 +72,36 @@ async function upsertUser(claims: any) {
   });
 }
 
+// Dev-safe fallback: no-auth mode
+const devIsAuthenticated: RequestHandler = (_req, _res, next) => next();
+
 export async function setupAuth(app: Express) {
   app.set("trust proxy", 1);
+
+  // If REPL_ID is missing, enable no-auth mode so the app can boot in Replit
+  if (!hasReplitAuthConfig) {
+    // Still install a session to keep behavior consistent
+    app.use(getSession());
+
+    // Minimal auth endpoints for the UI
+    app.get("/api/auth/user", (_req, res) => {
+      res.json({
+        id: "dev-user",
+        email: "dev@example.com",
+        firstName: "Dev",
+        lastName: "User",
+        profileImageUrl: "",
+      });
+    });
+
+    // Provide dummy login/logout to avoid 404s
+    app.get("/api/login", (_req, res) => res.redirect("/"));
+    app.get("/api/logout", (_req, res) => res.redirect("/"));
+
+    return; // Skip real OIDC setup
+  }
+
+  // Real Replit OIDC auth setup
   app.use(getSession());
   app.use(passport.initialize());
   app.use(passport.session());
@@ -141,6 +169,11 @@ export async function setupAuth(app: Express) {
 }
 
 export const isAuthenticated: RequestHandler = async (req, res, next) => {
+  // In no-auth mode, allow everything
+  if (!hasReplitAuthConfig) {
+    return devIsAuthenticated(req, res, next);
+  }
+
   const user = req.user as any;
 
   if (!req.isAuthenticated() || !user.expires_at) {
@@ -163,7 +196,7 @@ export const isAuthenticated: RequestHandler = async (req, res, next) => {
     const tokenResponse = await client.refreshTokenGrant(config, refreshToken);
     updateUserSession(user, tokenResponse);
     return next();
-  } catch (error) {
+  } catch (_error) {
     res.status(401).json({ message: "Unauthorized" });
     return;
   }
