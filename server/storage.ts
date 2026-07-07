@@ -118,7 +118,10 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getStudents(): Promise<Student[]> {
-    return await db.select().from(students);
+    console.log("[api/students] database query started");
+    const rows = await db.select().from(students);
+    console.log(`[api/students] database query completed with row count: ${rows.length}`);
+    return rows;
   }
 
   async getStudent(id: string): Promise<Student | undefined> {

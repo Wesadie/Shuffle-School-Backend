@@ -41,9 +41,18 @@ export async function registerRoutes(
   });
 
   // Students CRUD (protected)
-  app.get("/api/students", isAuthenticated, async (req, res) => {
-    const students = await storage.getStudents();
-    res.json(students);
+  app.get("/api/students", isAuthenticated, async (_req, res) => {
+    console.log("[api/students] request entered GET /api/students");
+    try {
+      const students = await storage.getStudents();
+      console.log(`[api/students] request completed with row count: ${students.length}`);
+      res.json(students);
+    } catch (error) {
+      console.error("[api/students] caught error", {
+        message: error instanceof Error ? error.message : String(error),
+      });
+      res.status(500).json({ message: "Failed to fetch students" });
+    }
   });
 
   app.get("/api/students/:id", isAuthenticated, async (req, res) => {

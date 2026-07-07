@@ -73,7 +73,10 @@ async function upsertUser(claims: any) {
 }
 
 // Dev-safe fallback: no-auth mode
-const devIsAuthenticated: RequestHandler = (_req, _res, next) => next();
+const devIsAuthenticated: RequestHandler = (_req, _res, next) => {
+  console.log("[auth] authentication middleware completed: dev no-auth mode");
+  next();
+};
 
 export async function setupAuth(app: Express) {
   app.set("trust proxy", 1);
@@ -169,6 +172,8 @@ export async function setupAuth(app: Express) {
 }
 
 export const isAuthenticated: RequestHandler = async (req, res, next) => {
+  console.log("[auth] authentication middleware entered");
+
   // In no-auth mode, allow everything
   if (!hasReplitAuthConfig) {
     return devIsAuthenticated(req, res, next);
@@ -177,16 +182,19 @@ export const isAuthenticated: RequestHandler = async (req, res, next) => {
   const user = req.user as any;
 
   if (!req.isAuthenticated() || !user.expires_at) {
+    console.log("[auth] authentication middleware completed: unauthorized");
     return res.status(401).json({ message: "Unauthorized" });
   }
 
   const now = Math.floor(Date.now() / 1000);
   if (now <= user.expires_at) {
+    console.log("[auth] authentication middleware completed: authenticated");
     return next();
   }
 
   const refreshToken = user.refresh_token;
   if (!refreshToken) {
+    console.log("[auth] authentication middleware completed: missing refresh token");
     res.status(401).json({ message: "Unauthorized" });
     return;
   }
@@ -195,8 +203,12 @@ export const isAuthenticated: RequestHandler = async (req, res, next) => {
     const config = await getOidcConfig();
     const tokenResponse = await client.refreshTokenGrant(config, refreshToken);
     updateUserSession(user, tokenResponse);
+    console.log("[auth] authentication middleware completed: refreshed token");
     return next();
-  } catch (_error) {
+  } catch (error) {
+    console.error("[auth] authentication middleware caught error", {
+      message: error instanceof Error ? error.message : String(error),
+    });
     res.status(401).json({ message: "Unauthorized" });
     return;
   }
