@@ -1,5 +1,10 @@
 import { type Express } from "express";
-import { createServer as createViteServer, createLogger } from "vite";
+import {
+  createServer as createViteServer,
+  createLogger,
+  type ConfigEnv,
+  type UserConfig,
+} from "vite";
 import { type Server } from "http";
 import viteConfig from "../vite.config";
 import fs from "fs";
@@ -7,15 +12,36 @@ import path from "path";
 
 const viteLogger = createLogger();
 
+type ViteConfigExport =
+  | UserConfig
+  | Promise<UserConfig>
+  | ((env: ConfigEnv) => UserConfig | Promise<UserConfig>);
+
+async function resolveImportedViteConfig() {
+  const configExport = viteConfig as ViteConfigExport;
+  const configEnv: ConfigEnv = {
+    command: "serve",
+    mode: process.env.NODE_ENV || "development",
+    isSsrBuild: false,
+    isPreview: false,
+  };
+
+  return typeof configExport === "function"
+    ? await configExport(configEnv)
+    : await configExport;
+}
+
 export async function setupVite(server: Server, app: Express) {
+  const resolvedViteConfig = await resolveImportedViteConfig();
   const serverOptions = {
+    ...resolvedViteConfig.server,
     middlewareMode: true,
     hmr: { server, path: "/vite-hmr" },
     allowedHosts: true as const,
   };
 
   const vite = await createViteServer({
-    ...viteConfig,
+    ...resolvedViteConfig,
     configFile: false,
     customLogger: {
       ...viteLogger,
