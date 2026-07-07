@@ -2,6 +2,7 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import path from "path";
 import runtimeErrorOverlay from "@replit/vite-plugin-runtime-error-modal";
+import dyadComponentTagger from '@dyad-sh/react-vite-component-tagger';
 
 export default defineConfig(async () => {
   const isReplit = process.env.NODE_ENV !== "production" && process.env.REPL_ID !== undefined;
@@ -15,7 +16,7 @@ export default defineConfig(async () => {
   }
 
   return {
-    plugins: [
+    plugins: [dyadComponentTagger(), 
       react(),
       runtimeErrorOverlay(),
       ...extraPlugins,
