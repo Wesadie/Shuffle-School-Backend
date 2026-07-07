@@ -159,6 +159,47 @@ export default function StudentsPage() {
   };
 
   const staticGrades = ["1", "2", "3", "4", "5", "6", "7"];
+  const metadataCharacteristicNames = new Set(["studentId", "newGrade"]);
+  const hardcodedFormCharacteristicNames = new Set([
+    "Race",
+    "Aggregate %",
+    "Maths %",
+    "English %",
+    "Afrikaans/Isizulu %",
+    "Medication",
+    "Learner Support",
+  ]);
+  const tableCharacteristicColumns = characteristics.filter(
+    (char) => !metadataCharacteristicNames.has(char.name),
+  );
+  const formCharacteristicColumns = characteristics.filter(
+    (char) =>
+      !metadataCharacteristicNames.has(char.name) &&
+      !hardcodedFormCharacteristicNames.has(char.name),
+  );
+
+  const getCharacteristics = (student: Student): Record<string, string> =>
+    (student.characteristics || {}) as Record<string, string>;
+
+  const formatGrade = (grade?: string | null) => {
+    if (!grade) return "—";
+    return grade.toLowerCase().startsWith("grade ") ? grade : `Grade ${grade}`;
+  };
+
+  const normalizeGrade = (grade?: string | null) =>
+    (grade || "").replace(/^grade\s+/i, "").trim();
+
+  const getStudentDisplayId = (student: Student) =>
+    student.studentId || getCharacteristics(student).studentId || "—";
+
+  const getNewGrade = (student: Student) =>
+    getCharacteristics(student).newGrade || "—";
+
+  const getCharacteristicValue = (student: Student, name: string) =>
+    getCharacteristics(student)[name] || "—";
+
+  const getRequestsTotal = (student: Student) =>
+    [student.parentRequests, student.parentNotes].filter((value) => value && value.trim()).length;
 
   const findDuplicates = (studentList: Student[]) => {
     const nameCount = new Map<string, number>();
@@ -174,9 +215,11 @@ export default function StudentsPage() {
 
   const filteredStudents = students
     .filter((student) => {
+      const studentDisplayId = getStudentDisplayId(student);
       const matchesSearch =
         student.firstName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        student.lastName.toLowerCase().includes(searchQuery.toLowerCase());
+        student.lastName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        studentDisplayId.toLowerCase().includes(searchQuery.toLowerCase());
       
       let matchesFilter = true;
       if (selectedGrade === "all") {
@@ -186,14 +229,14 @@ export default function StudentsPage() {
       } else if (selectedGrade === "unallocated") {
         matchesFilter = !student.currentClass;
       } else if (selectedGrade === "no-id") {
-        matchesFilter = !student.studentId;
+        matchesFilter = getStudentDisplayId(student) === "—";
       } else if (selectedGrade === "leaving") {
         matchesFilter = student.isLeaving === true;
       } else if (selectedGrade === "duplicates") {
         const duplicates = findDuplicates(students);
         matchesFilter = duplicates.some((d) => d.id === student.id);
       } else {
-        matchesFilter = student.grade === selectedGrade;
+        matchesFilter = normalizeGrade(student.grade) === selectedGrade;
       }
       
       return matchesSearch && matchesFilter;
@@ -446,25 +489,39 @@ export default function StudentsPage() {
                       />
                     </TableHead>
                     <TableHead
-                      className="cursor-pointer select-none"
+                      className="cursor-pointer select-none whitespace-nowrap"
+                      onClick={() => handleSort("firstName")}
+                    >
+                      First Name <SortIcon field="firstName" />
+                    </TableHead>
+                    <TableHead
+                      className="cursor-pointer select-none whitespace-nowrap"
                       onClick={() => handleSort("lastName")}
                     >
-                      Name <SortIcon field="lastName" />
+                      Last Name <SortIcon field="lastName" />
                     </TableHead>
+                    <TableHead className="whitespace-nowrap">ID</TableHead>
+                    <TableHead>Gender</TableHead>
                     <TableHead
-                      className="cursor-pointer select-none"
+                      className="cursor-pointer select-none whitespace-nowrap"
                       onClick={() => handleSort("grade")}
                     >
-                      Grade <SortIcon field="grade" />
+                      Current Grade <SortIcon field="grade" />
                     </TableHead>
                     <TableHead
-                      className="cursor-pointer select-none"
+                      className="cursor-pointer select-none whitespace-nowrap"
                       onClick={() => handleSort("currentClass")}
                     >
                       Current Class <SortIcon field="currentClass" />
                     </TableHead>
-                    <TableHead>Gender</TableHead>
-                    <TableHead>Characteristics</TableHead>
+                    <TableHead className="whitespace-nowrap">New Grade</TableHead>
+                    <TableHead>Notes</TableHead>
+                    <TableHead className="whitespace-nowrap">Requests Total</TableHead>
+                    {tableCharacteristicColumns.map((char) => (
+                      <TableHead key={char.id} className="whitespace-nowrap">
+                        {char.name}
+                      </TableHead>
+                    ))}
                     <TableHead className="w-24">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -478,9 +535,10 @@ export default function StudentsPage() {
                           data-testid={`checkbox-student-${student.id}`}
                         />
                       </TableCell>
-                      <TableCell className="font-medium">
+                      <TableCell className="font-medium whitespace-nowrap">{student.firstName}</TableCell>
+                      <TableCell className="font-medium whitespace-nowrap">
                         <div className="flex items-center gap-2">
-                          <span>{student.lastName}, {student.firstName}</span>
+                          <span>{student.lastName}</span>
                           {student.parentRequests && (
                             <Tooltip>
                               <TooltipTrigger asChild>
@@ -493,27 +551,22 @@ export default function StudentsPage() {
                           )}
                         </div>
                       </TableCell>
-                      <TableCell>
-                        <Badge variant="outline">Grade {student.grade}</Badge>
-                      </TableCell>
-                      <TableCell>{student.currentClass || "—"}</TableCell>
+                      <TableCell className="whitespace-nowrap">{getStudentDisplayId(student)}</TableCell>
                       <TableCell>{student.gender || "—"}</TableCell>
-                      <TableCell>
-                        <div className="flex flex-wrap gap-1">
-                          {Object.entries(student.characteristics || {})
-                            .slice(0, 3)
-                            .map(([key, value]) => (
-                              <Badge key={key} variant="secondary" className="text-xs">
-                                {value}
-                              </Badge>
-                            ))}
-                          {Object.keys(student.characteristics || {}).length > 3 && (
-                            <Badge variant="secondary" className="text-xs">
-                              +{Object.keys(student.characteristics || {}).length - 3}
-                            </Badge>
-                          )}
-                        </div>
+                      <TableCell className="whitespace-nowrap">
+                        <Badge variant="outline">{formatGrade(student.grade)}</Badge>
                       </TableCell>
+                      <TableCell className="whitespace-nowrap">{student.currentClass || "—"}</TableCell>
+                      <TableCell className="whitespace-nowrap">{getNewGrade(student)}</TableCell>
+                      <TableCell className="min-w-48 max-w-72 truncate" title={student.notes || ""}>
+                        {student.notes || "—"}
+                      </TableCell>
+                      <TableCell>{getRequestsTotal(student)}</TableCell>
+                      {tableCharacteristicColumns.map((char) => (
+                        <TableCell key={char.id} className="whitespace-nowrap">
+                          {getCharacteristicValue(student, char.name)}
+                        </TableCell>
+                      ))}
                       <TableCell>
                         <div className="flex items-center gap-1">
                           <Button
@@ -604,7 +657,7 @@ export default function StudentsPage() {
                 <Label htmlFor="currentClass">Current Class</Label>
                 <Input
                   id="currentClass"
-                  value={formData.currentClass}
+                  value={formData.currentClass ?? ""}
                   onChange={(e) => setFormData({ ...formData, currentClass: e.target.value })}
                   placeholder="e.g., 3A"
                   data-testid="input-current-class"
@@ -614,7 +667,7 @@ export default function StudentsPage() {
             <div className="space-y-2">
               <Label htmlFor="gender">Gender</Label>
               <Select
-                value={formData.gender}
+                value={formData.gender ?? ""}
                 onValueChange={(value) => setFormData({ ...formData, gender: value })}
               >
                 <SelectTrigger data-testid="select-gender">
@@ -793,24 +846,24 @@ export default function StudentsPage() {
               </div>
             </div>
 
-            {characteristics.length > 0 && (
+            {formCharacteristicColumns.length > 0 && (
               <div className="space-y-4">
                 <Label>Characteristics</Label>
                 <div className="grid grid-cols-2 gap-4">
-                  {characteristics.map((char) => (
+                  {formCharacteristicColumns.map((char) => (
                     <div key={char.id} className="space-y-2">
                       <Label htmlFor={char.id} className="text-sm text-muted-foreground">
                         {char.name}
                       </Label>
                       {char.type === "category" && char.options && char.options.length > 0 ? (
                         <Select
-                          value={(formData.characteristics as Record<string, string>)?.[char.id] || ""}
+                          value={(formData.characteristics as Record<string, string>)?.[char.name] || ""}
                           onValueChange={(value) =>
                             setFormData({
                               ...formData,
                               characteristics: {
                                 ...formData.characteristics,
-                                [char.id]: value,
+                                [char.name]: value,
                               },
                             })
                           }
@@ -829,13 +882,13 @@ export default function StudentsPage() {
                       ) : (
                         <Input
                           id={char.id}
-                          value={(formData.characteristics as Record<string, string>)?.[char.id] || ""}
+                          value={(formData.characteristics as Record<string, string>)?.[char.name] || ""}
                           onChange={(e) =>
                             setFormData({
                               ...formData,
                               characteristics: {
                                 ...formData.characteristics,
-                                [char.id]: e.target.value,
+                                [char.name]: e.target.value,
                               },
                             })
                           }
@@ -853,7 +906,7 @@ export default function StudentsPage() {
               <Label htmlFor="notes">Notes</Label>
               <Textarea
                 id="notes"
-                value={formData.notes}
+                value={formData.notes ?? ""}
                 onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
                 placeholder="Add any additional notes about this student..."
                 rows={3}
@@ -865,7 +918,7 @@ export default function StudentsPage() {
               <Label htmlFor="parentRequests">Parent Requests</Label>
               <Textarea
                 id="parentRequests"
-                value={formData.parentRequests}
+                value={formData.parentRequests ?? ""}
                 onChange={(e) => setFormData({ ...formData, parentRequests: e.target.value })}
                 placeholder="Document any parent placement requests (e.g., 'Please place with Sarah', 'Avoid being in same class as John')..."
                 rows={3}
@@ -877,7 +930,7 @@ export default function StudentsPage() {
               <Label htmlFor="parentNotes">Parent Notes</Label>
               <Textarea
                 id="parentNotes"
-                value={formData.parentNotes}
+                value={formData.parentNotes ?? ""}
                 onChange={(e) => setFormData({ ...formData, parentNotes: e.target.value })}
                 placeholder="Additional notes from parent communications..."
                 rows={2}
