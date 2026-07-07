@@ -86,6 +86,8 @@ app.use((req, res, next) => {
   const envPort = process.env.PORT ? Number.parseInt(process.env.PORT, 10) : undefined;
   const port = Number.isFinite(cliPort) ? cliPort : Number.isFinite(envPort) ? envPort : 5000;
 
+  process.env.PORT = String(port);
+
   httpServer.listen(
     {
       port,
@@ -93,6 +95,7 @@ app.use((req, res, next) => {
     },
     () => {
       log(`serving on port ${port}`);
+      console.log(`Local: http://localhost:${port}/`);
     },
   );
 })();
