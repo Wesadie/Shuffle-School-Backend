@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { ChevronDown, ChevronRight, GripVertical, Palette, Plus, Save, Trash2, X } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, GripVertical, Palette, Plus, Save, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -19,7 +19,6 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import {
-  RESPONSE_COLORS,
   defaultResponseColor,
   getStableResponseId,
   normalizeResponses,
@@ -44,6 +43,41 @@ const friendlyTypeLabels: Record<CharacteristicType, string> = {
   percentage: "Percentage",
 };
 
+const colourFamilies = [
+  {
+    name: "Cyan / Light Blue",
+    shades: ["#0e7490", "#0891b2", "#06b6d4", "#22d3ee", "#67e8f9", "#a5f3fc", "#cffafe", "#e0f2fe", "#bae6fd", "#7dd3fc"],
+  },
+  {
+    name: "Blue",
+    shades: ["#1e3a8a", "#1d4ed8", "#2563eb", "#3b82f6", "#60a5fa", "#93c5fd", "#bfdbfe", "#dbeafe", "#eff6ff", "#172554"],
+  },
+  {
+    name: "Lime / Green",
+    shades: ["#365314", "#4d7c0f", "#65a30d", "#84cc16", "#a3e635", "#bef264", "#d9f99d", "#ecfccb", "#f0fdf4", "#15803d"],
+  },
+  {
+    name: "Purple / Magenta",
+    shades: ["#701a75", "#86198f", "#a21caf", "#c026d3", "#d946ef", "#e879f9", "#f0abfc", "#f5d0fe", "#fae8ff", "#db2777"],
+  },
+  {
+    name: "Orange",
+    shades: ["#7c2d12", "#9a3412", "#c2410c", "#ea580c", "#f97316", "#fb923c", "#fdba74", "#fed7aa", "#ffedd5", "#fff7ed"],
+  },
+  {
+    name: "Indigo / Dark Purple",
+    shades: ["#312e81", "#3730a3", "#4338ca", "#4f46e5", "#6366f1", "#818cf8", "#a5b4fc", "#c7d2fe", "#e0e7ff", "#581c87"],
+  },
+  {
+    name: "Red",
+    shades: ["#7f1d1d", "#991b1b", "#b91c1c", "#dc2626", "#ef4444", "#f87171", "#fca5a5", "#fecaca", "#fee2e2", "#fff1f2"],
+  },
+  {
+    name: "Yellow / Gold",
+    shades: ["#713f12", "#854d0e", "#a16207", "#ca8a04", "#eab308", "#facc15", "#fde047", "#fef08a", "#fef9c3", "#fefce8"],
+  },
+] as const;
+
 const makeClientId = () =>
   typeof crypto !== "undefined" && "randomUUID" in crypto
     ? crypto.randomUUID()
@@ -63,6 +97,7 @@ export default function CharacteristicsPage() {
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [draggedCharId, setDraggedCharId] = useState<string | null>(null);
   const [draggedResponse, setDraggedResponse] = useState<{ charId: string; responseId: string } | null>(null);
+  const [openColourPickerId, setOpenColourPickerId] = useState<string | null>(null);
 
   const { data: characteristics = [], isLoading } = useQuery<Characteristic[]>({
     queryKey: ["/api/characteristics"],
@@ -384,7 +419,10 @@ export default function CharacteristicsPage() {
                                   className="grid gap-3 rounded-lg border p-3 md:grid-cols-[auto_auto_minmax(140px,1fr)_minmax(180px,1.3fr)_auto] md:items-center"
                                 >
                                   <GripVertical className="h-4 w-4 cursor-grab text-muted-foreground" />
-                                  <Popover>
+                                  <Popover
+                                    open={openColourPickerId === response.id}
+                                    onOpenChange={(open) => setOpenColourPickerId(open ? response.id : null)}
+                                  >
                                     <PopoverTrigger asChild>
                                       <button
                                         type="button"
@@ -394,22 +432,43 @@ export default function CharacteristicsPage() {
                                         title="Choose response colour"
                                       />
                                     </PopoverTrigger>
-                                    <PopoverContent className="w-64">
+                                    <PopoverContent className="w-auto p-3" align="start">
                                       <div className="space-y-3">
                                         <div className="flex items-center gap-2 text-sm font-medium">
                                           <Palette className="h-4 w-4" />
                                           Choose colour
                                         </div>
-                                        <div className="grid grid-cols-5 gap-2">
-                                          {RESPONSE_COLORS.map((color) => (
-                                            <button
-                                              key={color}
-                                              type="button"
-                                              className="h-8 w-8 rounded-full border shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
-                                              style={{ backgroundColor: color }}
-                                              onClick={() => updateResponse(char.id, response.id, { color })}
-                                              aria-label={`Select ${color}`}
-                                            />
+                                        <div className="grid grid-cols-8 gap-1.5" role="grid" aria-label="Response colour palette">
+                                          {colourFamilies.map((family) => (
+                                            <div key={family.name} className="grid gap-1.5" role="row" aria-label={family.name}>
+                                              {family.shades.map((color, shadeIndex) => {
+                                                const isSelected = response.color.toLowerCase() === color.toLowerCase();
+                                                return (
+                                                  <button
+                                                    key={color}
+                                                    type="button"
+                                                    className={`relative h-5 w-7 rounded-sm border shadow-sm transition-transform hover:scale-110 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 ${
+                                                      isSelected ? "border-foreground ring-2 ring-foreground ring-offset-2" : "border-border"
+                                                    }`}
+                                                    style={{ backgroundColor: color }}
+                                                    onClick={() => {
+                                                      updateResponse(char.id, response.id, { color });
+                                                      setOpenColourPickerId(null);
+                                                    }}
+                                                    aria-label={`${family.name} shade ${shadeIndex + 1} ${color}${isSelected ? ", selected" : ""}`}
+                                                    title={`${family.name} shade ${shadeIndex + 1} (${color})`}
+                                                  >
+                                                    {isSelected && (
+                                                      <Check
+                                                        className="absolute left-1/2 top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2"
+                                                        style={{ color: responseTextColor(color) }}
+                                                        aria-hidden="true"
+                                                      />
+                                                    )}
+                                                  </button>
+                                                );
+                                              })}
+                                            </div>
                                           ))}
                                         </div>
                                       </div>
