@@ -389,7 +389,7 @@ export default function StudentsPage() {
   }
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-6 space-y-6 max-w-full overflow-x-hidden">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-3xl font-semibold" data-testid="text-page-title">Student Roster</h1>
@@ -467,7 +467,7 @@ export default function StudentsPage() {
           </CardContent>
         </Card>
       ) : (
-        <Card>
+        <Card className="min-w-0 max-w-full">
           <CardHeader className="pb-0">
             <CardTitle className="text-lg flex items-center gap-2">
               <span>{filteredStudents.length} Students</span>
@@ -476,9 +476,9 @@ export default function StudentsPage() {
               ) : null}
             </CardTitle>
           </CardHeader>
-          <CardContent className="p-0">
-            <div className="overflow-x-auto">
-              <Table>
+          <CardContent className="p-0 min-w-0">
+            <div className="max-w-full overflow-x-auto">
+              <Table className="min-w-max">
                 <TableHeader>
                   <TableRow>
                     <TableHead className="w-12">
