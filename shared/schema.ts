@@ -48,12 +48,21 @@ export const insertRuleSchema = createInsertSchema(rules).omit({ id: true });
 export type InsertRule = z.infer<typeof insertRuleSchema>;
 export type Rule = typeof rules.$inferSelect;
 
+export interface CharacteristicResponse {
+  id: string;
+  name: string;
+  color: string;
+  description?: string;
+  sortOrder: number;
+}
+
 // Characteristic definition model
 export const characteristics = pgTable("characteristics", {
   id: varchar("id", { length: 36 }).primaryKey(),
   name: text("name").notNull(),
   type: text("type").notNull(), // "category", "scale", or "percentage"
   options: jsonb("options").$type<string[]>().default([]),
+  responseConfig: jsonb("response_config").$type<CharacteristicResponse[]>().default([]),
   priority: integer("priority").default(1),
 });
 

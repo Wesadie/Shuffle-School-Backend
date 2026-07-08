@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Plus, Trash2, Edit2, Search, Users, ChevronUp, ChevronDown, MessageSquare, Upload, Download } from "lucide-react";
 import { CSVImportDialog } from "@/components/csv-import-dialog";
@@ -35,7 +35,8 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
-import type { Student, InsertStudent, Characteristic, ClassConfig } from "@shared/schema";
+import { normalizeResponses } from "@shared/characteristics";
+import type { Student, InsertStudent, Characteristic, ClassConfig, CharacteristicResponse } from "@shared/schema";
 
 type SortField = "firstName" | "lastName" | "grade" | "currentClass";
 type SortDirection = "asc" | "desc";
@@ -168,23 +169,19 @@ export default function StudentsPage() {
 
   const staticGrades = ["1", "2", "3", "4", "5", "6", "7"];
   const metadataCharacteristicNames = new Set(["studentId", "newGrade"]);
-  const hardcodedFormCharacteristicNames = new Set([
-    "Race",
-    "Aggregate %",
-    "Maths %",
-    "English %",
-    "Afrikaans/Isizulu %",
-    "Medication",
-    "Learner Support",
-  ]);
   const tableCharacteristicColumns = characteristics.filter(
     (char) => !metadataCharacteristicNames.has(char.name),
   );
-  const formCharacteristicColumns = characteristics.filter(
-    (char) =>
-      !metadataCharacteristicNames.has(char.name) &&
-      !hardcodedFormCharacteristicNames.has(char.name),
-  );
+  const formCharacteristicColumns = tableCharacteristicColumns;
+
+  const responseLookup = useMemo(() => {
+    const lookup = new Map<string, Map<string, CharacteristicResponse>>();
+    characteristics.forEach((char) => {
+      if (char.type !== "category") return;
+      lookup.set(char.name, new Map(normalizeResponses(char).map((response) => [response.name, response])));
+    });
+    return lookup;
+  }, [characteristics]);
 
   const getCharacteristics = (student: Student): Record<string, string> =>
     (student.characteristics || {}) as Record<string, string>;
@@ -304,6 +301,7 @@ export default function StudentsPage() {
     buildData: (value: string) => Partial<InsertStudent>,
     required = false,
     className = "whitespace-nowrap",
+    inputType: "text" | "number" = "text",
   ) => {
     const keyForCell = cellKey(student, key);
     const isEditing = editingCell?.studentId === student.id && editingCell.key === key;
@@ -313,6 +311,9 @@ export default function StudentsPage() {
       return (
         <Input
           autoFocus
+          type={inputType}
+          min={inputType === "number" ? 0 : undefined}
+          max={inputType === "number" && key.includes("percentage") ? 100 : undefined}
           value={inlineDraft}
           disabled={isSaving}
           onChange={(event) => setInlineDraft(event.target.value)}
@@ -351,17 +352,20 @@ export default function StudentsPage() {
     value: string,
     options: string[],
     buildData: (value: string) => Partial<InsertStudent>,
+    responses?: Map<string, CharacteristicResponse>,
   ) => {
     const keyForCell = cellKey(student, key);
     const isSaving = savingCellKey === keyForCell;
-    const allOptions = uniqueOptions([value === "—" ? "" : value, ...options]);
+    const displayValue = value === "—" ? "" : value;
+    const allOptions = uniqueOptions([displayValue, ...options]);
+    const selectedResponse = responses?.get(displayValue);
 
     return (
       <Select
-        value={value === "—" ? "" : value}
+        value={displayValue || undefined}
         disabled={isSaving || allOptions.length === 0}
         onValueChange={(nextValue) => {
-          if (nextValue !== value) {
+          if (nextValue !== displayValue) {
             void saveInlineUpdate(student, key, buildData(nextValue));
           }
         }}
@@ -370,14 +374,37 @@ export default function StudentsPage() {
           className="h-8 min-w-28 justify-between border-0 bg-transparent px-0 text-left shadow-none hover:bg-muted/60 focus:ring-1"
           title="Select value"
         >
-          <SelectValue placeholder={isSaving ? "Saving…" : "—"} />
+          {displayValue ? (
+            <span className="flex min-w-0 items-center gap-1.5 truncate">
+              {selectedResponse && (
+                <span
+                  className="h-2.5 w-2.5 shrink-0 rounded-full"
+                  style={{ backgroundColor: selectedResponse.color }}
+                />
+              )}
+              <span className="truncate">{isSaving ? "Saving…" : displayValue}</span>
+            </span>
+          ) : (
+            <SelectValue placeholder={isSaving ? "Saving…" : "—"} />
+          )}
         </SelectTrigger>
         <SelectContent>
-          {allOptions.map((option) => (
-            <SelectItem key={option} value={option}>
-              {option}
-            </SelectItem>
-          ))}
+          {allOptions.map((option) => {
+            const response = responses?.get(option);
+            return (
+              <SelectItem key={option} value={option}>
+                <span className="flex items-center gap-2">
+                  {response && (
+                    <span
+                      className="h-2.5 w-2.5 rounded-full"
+                      style={{ backgroundColor: response.color }}
+                    />
+                  )}
+                  {option}
+                </span>
+              </SelectItem>
+            );
+          })}
         </SelectContent>
       </Select>
     );
@@ -822,24 +849,33 @@ export default function StudentsPage() {
                         )}
                       </TableCell>
                       <TableCell>{getRequestsTotal(student)}</TableCell>
-                      {tableCharacteristicColumns.map((char) => (
-                        <TableCell key={char.id} className="whitespace-nowrap">
-                          {char.type === "category" && char.options && char.options.length > 0
-                            ? renderSelectCell(
-                                student,
-                                `characteristic:${char.name}`,
-                                getCharacteristicValue(student, char.name),
-                                char.options,
-                                (value) => updateCharacteristicData(student, char.name, value),
-                              )
-                            : renderTextCell(
-                                student,
-                                `characteristic:${char.name}`,
-                                getCharacteristicValue(student, char.name),
-                                (value) => updateCharacteristicData(student, char.name, value),
-                              )}
-                        </TableCell>
-                      ))}
+                      {tableCharacteristicColumns.map((char) => {
+                        const responses = responseLookup.get(char.name);
+                        const options = responses ? Array.from(responses.keys()) : char.options || [];
+                        const isNumeric = char.type === "scale" || char.type === "percentage";
+                        return (
+                          <TableCell key={char.id} className="whitespace-nowrap">
+                            {char.type === "category" && options.length > 0
+                              ? renderSelectCell(
+                                  student,
+                                  `characteristic:${char.name}`,
+                                  getCharacteristicValue(student, char.name),
+                                  options,
+                                  (value) => updateCharacteristicData(student, char.name, value),
+                                  responses,
+                                )
+                              : renderTextCell(
+                                  student,
+                                  `characteristic:${char.name}:${char.type}`,
+                                  getCharacteristicValue(student, char.name),
+                                  (value) => updateCharacteristicData(student, char.name, value),
+                                  false,
+                                  "whitespace-nowrap",
+                                  isNumeric ? "number" : "text",
+                                )}
+                          </TableCell>
+                        );
+                      })}
                       <TableCell>
                         <div className="flex items-center gap-1">
                           <Button
@@ -953,223 +989,85 @@ export default function StudentsPage() {
               </Select>
             </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="race">Race</Label>
-              <Select
-                value={(formData.characteristics as Record<string, string>)?.["Race"] || ""}
-                onValueChange={(value) =>
-                  setFormData({
-                    ...formData,
-                    characteristics: {
-                      ...formData.characteristics,
-                      ["Race"]: value,
-                    },
-                  })
-                }
-              >
-                <SelectTrigger data-testid="select-race">
-                  <SelectValue placeholder="Select race" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="White">White</SelectItem>
-                  <SelectItem value="Black">Black</SelectItem>
-                  <SelectItem value="Indian">Indian</SelectItem>
-                  <SelectItem value="Coloured">Coloured</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="aggregate">Aggregate %</Label>
-                <Input
-                  id="aggregate"
-                  type="number"
-                  min="0"
-                  max="100"
-                  value={(formData.characteristics as Record<string, string>)?.["Aggregate %"] || ""}
-                  onChange={(e) =>
-                    setFormData({
-                      ...formData,
-                      characteristics: {
-                        ...formData.characteristics,
-                        ["Aggregate %"]: e.target.value,
-                      },
-                    })
-                  }
-                  placeholder="0-100"
-                  data-testid="input-aggregate"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="maths">Maths %</Label>
-                <Input
-                  id="maths"
-                  type="number"
-                  min="0"
-                  max="100"
-                  value={(formData.characteristics as Record<string, string>)?.["Maths %"] || ""}
-                  onChange={(e) =>
-                    setFormData({
-                      ...formData,
-                      characteristics: {
-                        ...formData.characteristics,
-                        ["Maths %"]: e.target.value,
-                      },
-                    })
-                  }
-                  placeholder="0-100"
-                  data-testid="input-maths"
-                />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="english">English %</Label>
-                <Input
-                  id="english"
-                  type="number"
-                  min="0"
-                  max="100"
-                  value={(formData.characteristics as Record<string, string>)?.["English %"] || ""}
-                  onChange={(e) =>
-                    setFormData({
-                      ...formData,
-                      characteristics: {
-                        ...formData.characteristics,
-                        ["English %"]: e.target.value,
-                      },
-                    })
-                  }
-                  placeholder="0-100"
-                  data-testid="input-english"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="afrikaans">Afrikaans/Isizulu %</Label>
-                <Input
-                  id="afrikaans"
-                  type="number"
-                  min="0"
-                  max="100"
-                  value={(formData.characteristics as Record<string, string>)?.["Afrikaans/Isizulu %"] || ""}
-                  onChange={(e) =>
-                    setFormData({
-                      ...formData,
-                      characteristics: {
-                        ...formData.characteristics,
-                        ["Afrikaans/Isizulu %"]: e.target.value,
-                      },
-                    })
-                  }
-                  placeholder="0-100"
-                  data-testid="input-afrikaans"
-                />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="medication">Medication</Label>
-                <Select
-                  value={(formData.characteristics as Record<string, string>)?.["Medication"] || ""}
-                  onValueChange={(value) =>
-                    setFormData({
-                      ...formData,
-                      characteristics: {
-                        ...formData.characteristics,
-                        ["Medication"]: value,
-                      },
-                    })
-                  }
-                >
-                  <SelectTrigger data-testid="select-medication">
-                    <SelectValue placeholder="Select" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="Yes">Yes</SelectItem>
-                    <SelectItem value="No">No</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="learnerSupport">Learner Support</Label>
-                <Select
-                  value={(formData.characteristics as Record<string, string>)?.["Learner Support"] || ""}
-                  onValueChange={(value) =>
-                    setFormData({
-                      ...formData,
-                      characteristics: {
-                        ...formData.characteristics,
-                        ["Learner Support"]: value,
-                      },
-                    })
-                  }
-                >
-                  <SelectTrigger data-testid="select-learner-support">
-                    <SelectValue placeholder="Select" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="Yes">Yes</SelectItem>
-                    <SelectItem value="No">No</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-
             {formCharacteristicColumns.length > 0 && (
               <div className="space-y-4">
                 <Label>Characteristics</Label>
                 <div className="grid grid-cols-2 gap-4">
-                  {formCharacteristicColumns.map((char) => (
-                    <div key={char.id} className="space-y-2">
-                      <Label htmlFor={char.id} className="text-sm text-muted-foreground">
-                        {char.name}
-                      </Label>
-                      {char.type === "category" && char.options && char.options.length > 0 ? (
-                        <Select
-                          value={(formData.characteristics as Record<string, string>)?.[char.name] || ""}
-                          onValueChange={(value) =>
-                            setFormData({
-                              ...formData,
-                              characteristics: {
-                                ...formData.characteristics,
-                                [char.name]: value,
-                              },
-                            })
-                          }
-                        >
-                          <SelectTrigger data-testid={`select-char-${char.id}`}>
-                            <SelectValue placeholder={`Select ${char.name.toLowerCase()}`} />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {char.options.map((opt) => (
-                              <SelectItem key={opt} value={opt}>
-                                {opt}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      ) : (
-                        <Input
-                          id={char.id}
-                          value={(formData.characteristics as Record<string, string>)?.[char.name] || ""}
-                          onChange={(e) =>
-                            setFormData({
-                              ...formData,
-                              characteristics: {
-                                ...formData.characteristics,
-                                [char.name]: e.target.value,
-                              },
-                            })
-                          }
-                          placeholder={`Enter ${char.name.toLowerCase()}`}
-                          data-testid={`input-char-${char.id}`}
-                        />
-                      )}
-                    </div>
-                  ))}
+                  {formCharacteristicColumns.map((char) => {
+                    const responses = responseLookup.get(char.name);
+                    const options = responses ? Array.from(responses.keys()) : char.options || [];
+                    const isNumeric = char.type === "scale" || char.type === "percentage";
+                    const selectedValue = (formData.characteristics as Record<string, string>)?.[char.name] || "";
+                    const selectedResponse = responses?.get(selectedValue);
+                    return (
+                      <div key={char.id} className="space-y-2">
+                        <Label htmlFor={char.id} className="text-sm text-muted-foreground">
+                          {char.name}
+                        </Label>
+                        {char.type === "category" && options.length > 0 ? (
+                          <Select
+                            value={selectedValue || undefined}
+                            onValueChange={(value) =>
+                              setFormData({
+                                ...formData,
+                                characteristics: {
+                                  ...formData.characteristics,
+                                  [char.name]: value,
+                                },
+                              })
+                            }
+                          >
+                            <SelectTrigger data-testid={`select-char-${char.id}`}>
+                              {selectedValue ? (
+                                <span className="flex items-center gap-2 truncate">
+                                  {selectedResponse && (
+                                    <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: selectedResponse.color }} />
+                                  )}
+                                  <span className="truncate">{selectedValue}</span>
+                                </span>
+                              ) : (
+                                <SelectValue placeholder={`Select ${char.name.toLowerCase()}`} />
+                              )}
+                            </SelectTrigger>
+                            <SelectContent>
+                              {options.map((opt) => {
+                                const response = responses?.get(opt);
+                                return (
+                                  <SelectItem key={opt} value={opt}>
+                                    <span className="flex items-center gap-2">
+                                      {response && (
+                                        <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: response.color }} />
+                                      )}
+                                      {opt}
+                                    </span>
+                                  </SelectItem>
+                                );
+                              })}
+                            </SelectContent>
+                          </Select>
+                        ) : (
+                          <Input
+                            id={char.id}
+                            type={isNumeric ? "number" : "text"}
+                            min={isNumeric ? 0 : undefined}
+                            max={char.type === "percentage" ? 100 : undefined}
+                            value={(formData.characteristics as Record<string, string>)?.[char.name] || ""}
+                            onChange={(e) =>
+                              setFormData({
+                                ...formData,
+                                characteristics: {
+                                  ...formData.characteristics,
+                                  [char.name]: e.target.value,
+                                },
+                              })
+                            }
+                            placeholder={isNumeric ? "Enter number" : `Enter ${char.name.toLowerCase()}`}
+                            data-testid={`input-char-${char.id}`}
+                          />
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}

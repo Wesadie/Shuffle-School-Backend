@@ -7,6 +7,7 @@ import {
   type InsertRule,
   type Characteristic,
   type InsertCharacteristic,
+  type CharacteristicResponse,
   type ClassConfig,
   type InsertClassConfig,
   type Placement,
@@ -30,9 +31,18 @@ import {
   users,
   appSettings,
 } from "@shared/schema";
-import { db } from "./db";
+import { db, pool } from "./db";
 import { eq } from "drizzle-orm";
 import { randomUUID } from "crypto";
+
+export interface CharacteristicSettingsInput {
+  id?: string;
+  name: string;
+  type: "category" | "scale" | "percentage";
+  priority: number;
+  options: string[];
+  responseConfig: CharacteristicResponse[];
+}
 
 export interface IStorage {
   getUser(id: string): Promise<User | undefined>;
@@ -57,6 +67,7 @@ export interface IStorage {
   createCharacteristic(characteristic: InsertCharacteristic): Promise<Characteristic>;
   updateCharacteristic(id: string, characteristic: Partial<InsertCharacteristic>): Promise<Characteristic | undefined>;
   deleteCharacteristic(id: string): Promise<boolean>;
+  saveCharacteristicSettings(characteristics: CharacteristicSettingsInput[]): Promise<Characteristic[]>;
 
   getClassConfigs(): Promise<ClassConfig[]>;
   getClassConfig(id: string): Promise<ClassConfig | undefined>;
@@ -216,6 +227,7 @@ export class DatabaseStorage implements IStorage {
       name: insertChar.name,
       type: insertChar.type,
       options: insertChar.options ?? [],
+      responseConfig: insertChar.responseConfig ?? [],
       priority: insertChar.priority ?? 1,
     }).returning();
     return char;
@@ -229,6 +241,71 @@ export class DatabaseStorage implements IStorage {
   async deleteCharacteristic(id: string): Promise<boolean> {
     const result = await db.delete(characteristics).where(eq(characteristics.id, id)).returning();
     return result.length > 0;
+  }
+
+  async saveCharacteristicSettings(nextCharacteristics: CharacteristicSettingsInput[]): Promise<Characteristic[]> {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      const existingResult = await client.query<{ id: string; name: string }>("SELECT id, name FROM characteristics");
+      const existingById = new Map(existingResult.rows.map((row) => [row.id, row]));
+      const nextIds = new Set(nextCharacteristics.map((char) => char.id).filter((id): id is string => Boolean(id)));
+
+      for (const char of nextCharacteristics) {
+        const existing = char.id ? existingById.get(char.id) : undefined;
+        const id = char.id || randomUUID();
+        const responseConfig = char.type === "category" ? char.responseConfig : [];
+        const options = char.type === "category" ? responseConfig.map((response) => response.name) : [];
+
+        if (existing && existing.name !== char.name) {
+          const conflicts = await client.query(
+            "SELECT id FROM students WHERE characteristics ? $1 AND characteristics ? $2 LIMIT 1",
+            [existing.name, char.name],
+          );
+          if (conflicts.rowCount && conflicts.rowCount > 0) {
+            throw new Error(`Cannot rename \"${existing.name}\" to \"${char.name}\" because at least one student already has both characteristic keys.`);
+          }
+
+          await client.query(
+            `UPDATE students
+             SET characteristics = (characteristics - $1) || jsonb_build_object($2, characteristics -> $1)
+             WHERE characteristics ? $1 AND NOT (characteristics ? $2)`,
+            [existing.name, char.name],
+          );
+        }
+
+        if (existing) {
+          await client.query(
+            `UPDATE characteristics
+             SET name = $2, type = $3, options = $4::jsonb, response_config = $5::jsonb, priority = $6
+             WHERE id = $1`,
+            [id, char.name, char.type, JSON.stringify(options), JSON.stringify(responseConfig), char.priority],
+          );
+        } else {
+          await client.query(
+            `INSERT INTO characteristics (id, name, type, options, response_config, priority)
+             VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6)`,
+            [id, char.name, char.type, JSON.stringify(options), JSON.stringify(responseConfig), char.priority],
+          );
+        }
+      }
+
+      const idsToDelete = existingResult.rows
+        .map((row) => row.id)
+        .filter((id) => !nextIds.has(id));
+      for (const id of idsToDelete) {
+        await client.query("DELETE FROM characteristics WHERE id = $1", [id]);
+      }
+
+      await client.query("COMMIT");
+      return await this.getCharacteristics();
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async getClassConfigs(): Promise<ClassConfig[]> {

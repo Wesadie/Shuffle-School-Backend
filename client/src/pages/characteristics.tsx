@@ -1,17 +1,14 @@
-import { useState } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
-import { Plus, Trash2, Edit2, Sliders, Tag, Sparkles, GripVertical } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { ChevronDown, ChevronRight, GripVertical, Palette, Plus, Save, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-  DialogDescription,
-} from "@/components/ui/dialog";
+import { Textarea } from "@/components/ui/textarea";
+import { Card, CardContent } from "@/components/ui/card";
+import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   Select,
   SelectContent,
@@ -19,505 +16,445 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Label } from "@/components/ui/label";
-import { Badge } from "@/components/ui/badge";
-import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
-import { queryClient, apiRequest } from "@/lib/queryClient";
-import type { Characteristic, InsertCharacteristic } from "@shared/schema";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import {
+  RESPONSE_COLORS,
+  defaultResponseColor,
+  getStableResponseId,
+  normalizeResponses,
+  responseTextColor,
+} from "@shared/characteristics";
+import type { Characteristic, CharacteristicResponse, Student } from "@shared/schema";
 
-interface CharacteristicTemplate {
+type CharacteristicType = "category" | "scale" | "percentage";
+
+type DraftCharacteristic = {
+  id: string;
   name: string;
-  type: "category" | "scale";
-  options: string[];
+  type: CharacteristicType;
   priority: number;
-  category: string;
-}
+  responseConfig: CharacteristicResponse[];
+  isNew?: boolean;
+};
 
-const characteristicTemplates: CharacteristicTemplate[] = [
-  { name: "Academic Level", type: "category", options: ["High", "Medium", "Low"], priority: 3, category: "Academic" },
-  { name: "Reading Level", type: "category", options: ["Above Grade", "At Grade", "Below Grade"], priority: 2, category: "Academic" },
-  { name: "Math Level", type: "category", options: ["Above Grade", "At Grade", "Below Grade"], priority: 2, category: "Academic" },
-  { name: "Gifted/Talented", type: "category", options: ["Yes", "No"], priority: 2, category: "Academic" },
-  { name: "Special Education", type: "category", options: ["IEP", "504 Plan", "None"], priority: 3, category: "Special Services" },
-  { name: "English Language Learner", type: "category", options: ["Native", "Advanced", "Intermediate", "Beginner"], priority: 2, category: "Special Services" },
-  { name: "Learning Support Tier", type: "category", options: ["Tier 1", "Tier 2", "Tier 3"], priority: 2, category: "Special Services" },
-  { name: "Behavior", type: "category", options: ["Excellent", "Good", "Needs Support"], priority: 3, category: "Behavioral" },
-  { name: "Social-Emotional", type: "category", options: ["Strong", "Developing", "Needs Support"], priority: 2, category: "Behavioral" },
-  { name: "Self-Regulation", type: "category", options: ["Independent", "Developing", "Needs Assistance"], priority: 2, category: "Behavioral" },
-  { name: "Leadership", type: "category", options: ["Strong Leader", "Emerging", "Follower"], priority: 1, category: "Behavioral" },
-  { name: "Learning Style", type: "category", options: ["Visual", "Auditory", "Kinesthetic"], priority: 1, category: "Learning Profile" },
-  { name: "Work Habits", type: "category", options: ["Consistent", "Variable", "Needs Structure"], priority: 2, category: "Learning Profile" },
-  { name: "Attention/Focus", type: "category", options: ["Strong", "Moderate", "Needs Support"], priority: 2, category: "Learning Profile" },
-];
+const friendlyTypeLabels: Record<CharacteristicType, string> = {
+  category: "Category / Response",
+  scale: "Scale / Numeric",
+  percentage: "Percentage",
+};
+
+const makeClientId = () =>
+  typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : `local-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+const toDraft = (char: Characteristic): DraftCharacteristic => ({
+  id: char.id,
+  name: char.name,
+  type: char.type as CharacteristicType,
+  priority: char.priority || 1,
+  responseConfig: char.type === "category" ? normalizeResponses(char) : [],
+});
 
 export default function CharacteristicsPage() {
   const { toast } = useToast();
-  const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
-  const [editingChar, setEditingChar] = useState<Characteristic | null>(null);
-  const [optionInput, setOptionInput] = useState("");
-  const [showTemplates, setShowTemplates] = useState(false);
-  const [draggedId, setDraggedId] = useState<string | null>(null);
-
-  const [formData, setFormData] = useState<Partial<InsertCharacteristic>>({
-    name: "",
-    type: "category",
-    options: [],
-  });
+  const [draft, setDraft] = useState<DraftCharacteristic[]>([]);
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+  const [draggedCharId, setDraggedCharId] = useState<string | null>(null);
+  const [draggedResponse, setDraggedResponse] = useState<{ charId: string; responseId: string } | null>(null);
 
   const { data: characteristics = [], isLoading } = useQuery<Characteristic[]>({
     queryKey: ["/api/characteristics"],
   });
 
-  const createMutation = useMutation({
-    mutationFn: (data: InsertCharacteristic) => apiRequest("POST", "/api/characteristics", data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/characteristics"] });
-      setIsAddDialogOpen(false);
-      resetForm();
-      toast({ title: "Characteristic added successfully" });
+  const { data: students = [] } = useQuery<Student[]>({
+    queryKey: ["/api/students"],
+  });
+
+  useEffect(() => {
+    const nextDraft = [...characteristics]
+      .sort((a, b) => (b.priority || 0) - (a.priority || 0))
+      .map(toDraft);
+    setDraft(nextDraft);
+    setExpandedIds(new Set(nextDraft.slice(0, 6).map((char) => char.id)));
+  }, [characteristics]);
+
+  const studentCharacteristics = useMemo(
+    () => students.map((student) => (student.characteristics || {}) as Record<string, string>),
+    [students],
+  );
+
+  const saveMutation = useMutation({
+    mutationFn: async (nextDraft: DraftCharacteristic[]) => {
+      const payload = {
+        characteristics: nextDraft.map((char, index) => ({
+          id: char.id,
+          name: char.name.trim(),
+          type: char.type,
+          priority: nextDraft.length - index,
+          responseConfig: char.type === "category"
+            ? char.responseConfig.map((response, responseIndex) => ({
+                ...response,
+                name: response.name.trim(),
+                description: response.description || "",
+                sortOrder: responseIndex + 1,
+              }))
+            : [],
+        })),
+      };
+      const response = await apiRequest("PUT", "/api/characteristics/settings", payload);
+      return response.json() as Promise<Characteristic[]>;
     },
-    onError: () => {
-      toast({ title: "Failed to add characteristic", variant: "destructive" });
+    onSuccess: (saved) => {
+      queryClient.setQueryData(["/api/characteristics"], saved);
+      queryClient.invalidateQueries({ queryKey: ["/api/characteristics"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/students"] });
+      toast({ title: "Characteristic settings saved" });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Failed to save settings",
+        description: error?.message || "Please check the configuration and try again.",
+        variant: "destructive",
+      });
     },
   });
 
-  const updateMutation = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: Partial<InsertCharacteristic> }) =>
-      apiRequest("PATCH", `/api/characteristics/${id}`, data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/characteristics"] });
-      setEditingChar(null);
-      resetForm();
-      toast({ title: "Characteristic updated successfully" });
-    },
-    onError: () => {
-      toast({ title: "Failed to update characteristic", variant: "destructive" });
-    },
-  });
+  const updateCharacteristic = (id: string, updates: Partial<DraftCharacteristic>) => {
+    setDraft((current) => current.map((char) => (char.id === id ? { ...char, ...updates } : char)));
+  };
 
-  const deleteMutation = useMutation({
-    mutationFn: (id: string) => apiRequest("DELETE", `/api/characteristics/${id}`),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/characteristics"] });
-      toast({ title: "Characteristic deleted successfully" });
-    },
-    onError: () => {
-      toast({ title: "Failed to delete characteristic", variant: "destructive" });
-    },
-  });
+  const updateResponse = (charId: string, responseId: string, updates: Partial<CharacteristicResponse>) => {
+    setDraft((current) =>
+      current.map((char) =>
+        char.id === charId
+          ? {
+              ...char,
+              responseConfig: char.responseConfig.map((response) =>
+                response.id === responseId ? { ...response, ...updates } : response,
+              ),
+            }
+          : char,
+      ),
+    );
+  };
 
-  const resetForm = () => {
-    setFormData({
-      name: "",
+  const addCharacteristic = () => {
+    if (draft.length >= 50) {
+      toast({ title: "Maximum reached", description: "ShuffleSchool supports up to 50 active characteristics.", variant: "destructive" });
+      return;
+    }
+    const id = makeClientId();
+    const newCharacteristic: DraftCharacteristic = {
+      id,
+      name: "New Characteristic",
       type: "category",
-      options: [],
-    });
-    setOptionInput("");
+      priority: draft.length + 1,
+      responseConfig: [],
+      isNew: true,
+    };
+    setDraft((current) => [...current, newCharacteristic]);
+    setExpandedIds((current) => new Set([...current, id]));
   };
 
-  const reorderMutation = useMutation({
-    mutationFn: (orderedIds: string[]) => apiRequest("POST", "/api/characteristics/reorder", { orderedIds }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/characteristics"] });
-    },
-    onError: () => {
-      toast({ title: "Failed to reorder characteristics", variant: "destructive" });
-    },
-  });
+  const isCharacteristicUsed = (name: string) =>
+    studentCharacteristics.some((chars) => Object.prototype.hasOwnProperty.call(chars, name));
 
-  const handleSubmit = () => {
-    if (!formData.name) {
-      toast({ title: "Please enter a name", variant: "destructive" });
-      return;
+  const isResponseUsed = (charName: string, responseName: string) =>
+    studentCharacteristics.some((chars) => chars[charName] === responseName);
+
+  const removeCharacteristic = (char: DraftCharacteristic) => {
+    if (isCharacteristicUsed(char.name)) {
+      const confirmed = window.confirm(
+        `"${char.name}" is used by existing students. Removing the configured characteristic will preserve existing student JSON values, but the field will no longer appear as an active characteristic. Continue?`,
+      );
+      if (!confirmed) return;
     }
+    setDraft((current) => current.filter((item) => item.id !== char.id));
+  };
 
-    if (editingChar) {
-      updateMutation.mutate({ id: editingChar.id, data: formData as InsertCharacteristic });
-    } else {
-      createMutation.mutate(formData as InsertCharacteristic);
+  const addResponse = (char: DraftCharacteristic) => {
+    const responseName = "New Response";
+    const response: CharacteristicResponse = {
+      id: getStableResponseId(char.id, `${responseName}-${char.responseConfig.length + 1}`),
+      name: responseName,
+      color: defaultResponseColor(char.responseConfig.length),
+      description: "",
+      sortOrder: char.responseConfig.length + 1,
+    };
+    updateCharacteristic(char.id, { responseConfig: [...char.responseConfig, response] });
+  };
+
+  const removeResponse = (char: DraftCharacteristic, response: CharacteristicResponse) => {
+    if (isResponseUsed(char.name, response.name)) {
+      const confirmed = window.confirm(
+        `"${response.name}" is used by existing students for "${char.name}". Removing the configured response will preserve those student values as legacy/unconfigured values. Continue?`,
+      );
+      if (!confirmed) return;
     }
-  };
-
-  const addOption = () => {
-    if (optionInput.trim() && !formData.options?.includes(optionInput.trim())) {
-      setFormData({
-        ...formData,
-        options: [...(formData.options || []), optionInput.trim()],
-      });
-      setOptionInput("");
-    }
-  };
-
-  const removeOption = (option: string) => {
-    setFormData({
-      ...formData,
-      options: (formData.options as string[] | undefined)?.filter((o) => o !== option),
-    });
-  };
-
-  const openEditDialog = (char: Characteristic) => {
-    setEditingChar(char);
-    setFormData({
-      name: char.name,
-      type: char.type,
-      options: char.options || [],
+    updateCharacteristic(char.id, {
+      responseConfig: char.responseConfig.filter((item) => item.id !== response.id),
     });
   };
 
-  const sortedCharacteristics = [...characteristics].sort((a, b) => (b.priority || 0) - (a.priority || 0));
-
-  const handleDragStart = (e: React.DragEvent, id: string) => {
-    setDraggedId(id);
-    e.dataTransfer.effectAllowed = "move";
-  };
-
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = "move";
-  };
-
-  const handleDrop = (e: React.DragEvent, targetId: string) => {
-    e.preventDefault();
-    if (!draggedId || draggedId === targetId) {
-      setDraggedId(null);
-      return;
-    }
-
-    const draggedIndex = sortedCharacteristics.findIndex(c => c.id === draggedId);
-    const targetIndex = sortedCharacteristics.findIndex(c => c.id === targetId);
-
-    if (draggedIndex === -1 || targetIndex === -1) {
-      setDraggedId(null);
-      return;
-    }
-
-    const newOrder = [...sortedCharacteristics];
-    const [removed] = newOrder.splice(draggedIndex, 1);
-    newOrder.splice(targetIndex, 0, removed);
-
-    const orderedIds = newOrder.map(c => c.id);
-    reorderMutation.mutate(orderedIds);
-    setDraggedId(null);
-  };
-
-  const handleDragEnd = () => {
-    setDraggedId(null);
-  };
-
-  const addFromTemplate = (template: CharacteristicTemplate) => {
-    const existingNames = characteristics.map(c => c.name.toLowerCase());
-    if (existingNames.includes(template.name.toLowerCase())) {
-      toast({ 
-        title: "Already exists", 
-        description: `"${template.name}" is already defined`,
-        variant: "destructive" 
-      });
-      return;
-    }
-    createMutation.mutate({
-      name: template.name,
-      type: template.type,
-      options: template.options,
+  const moveCharacteristic = (sourceId: string, targetId: string) => {
+    if (sourceId === targetId) return;
+    setDraft((current) => {
+      const next = [...current];
+      const sourceIndex = next.findIndex((char) => char.id === sourceId);
+      const targetIndex = next.findIndex((char) => char.id === targetId);
+      if (sourceIndex === -1 || targetIndex === -1) return current;
+      const [removed] = next.splice(sourceIndex, 1);
+      next.splice(targetIndex, 0, removed);
+      return next;
     });
   };
 
-  const getAvailableTemplates = () => {
-    const existingNames = characteristics.map(c => c.name.toLowerCase());
-    return characteristicTemplates.filter(t => !existingNames.includes(t.name.toLowerCase()));
+  const moveResponse = (charId: string, sourceId: string, targetId: string) => {
+    if (sourceId === targetId) return;
+    setDraft((current) =>
+      current.map((char) => {
+        if (char.id !== charId) return char;
+        const next = [...char.responseConfig];
+        const sourceIndex = next.findIndex((response) => response.id === sourceId);
+        const targetIndex = next.findIndex((response) => response.id === targetId);
+        if (sourceIndex === -1 || targetIndex === -1) return char;
+        const [removed] = next.splice(sourceIndex, 1);
+        next.splice(targetIndex, 0, removed);
+        return { ...char, responseConfig: next.map((response, index) => ({ ...response, sortOrder: index + 1 })) };
+      }),
+    );
   };
 
-  const templatesByCategory = getAvailableTemplates().reduce((acc, template) => {
-    if (!acc[template.category]) {
-      acc[template.category] = [];
-    }
-    acc[template.category].push(template);
-    return acc;
-  }, {} as Record<string, CharacteristicTemplate[]>);
+  const cancelChanges = () => {
+    setDraft([...characteristics].sort((a, b) => (b.priority || 0) - (a.priority || 0)).map(toDraft));
+    toast({ title: "Unsaved changes discarded" });
+  };
 
   if (isLoading) {
     return (
       <div className="p-6 space-y-6">
-        <Skeleton className="h-10 w-64" />
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {[...Array(3)].map((_, i) => (
-            <Skeleton key={i} className="h-40 w-full" />
-          ))}
-        </div>
+        <Skeleton className="h-10 w-80" />
+        {[...Array(4)].map((_, index) => (
+          <Skeleton key={index} className="h-40 w-full" />
+        ))}
       </div>
     );
   }
 
   return (
-    <div className="p-6 space-y-6">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+    <div className="p-6 space-y-6 max-w-7xl mx-auto">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div>
-          <h1 className="text-3xl font-semibold" data-testid="text-page-title">Balance Characteristics</h1>
-          <p className="text-muted-foreground mt-1">
-            Define characteristics to balance across classes (e.g., academic level, behavior)
+          <h1 className="text-3xl font-semibold" data-testid="text-page-title">Characteristics & Responses</h1>
+          <p className="text-muted-foreground mt-1 max-w-3xl">
+            Configure the balancing characteristics and category responses used by the solver and student forms.
           </p>
         </div>
-        <div className="flex gap-2 flex-wrap">
-          <Button 
-            variant="outline" 
-            onClick={() => setShowTemplates(!showTemplates)}
-            data-testid="button-toggle-templates"
-          >
-            <Sparkles className="h-4 w-4 mr-2" />
-            {showTemplates ? "Hide Templates" : "Quick Add"}
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" onClick={cancelChanges} disabled={saveMutation.isPending} data-testid="button-cancel-characteristics">
+            <X className="h-4 w-4 mr-2" />
+            Cancel
           </Button>
-          <Button onClick={() => setIsAddDialogOpen(true)} data-testid="button-add-characteristic">
-            <Plus className="h-4 w-4 mr-2" />
-            Add Custom
+          <Button onClick={() => saveMutation.mutate(draft)} disabled={saveMutation.isPending} data-testid="button-save-characteristics">
+            <Save className="h-4 w-4 mr-2" />
+            {saveMutation.isPending ? "Saving..." : "Save Settings"}
           </Button>
         </div>
       </div>
 
-      {showTemplates && Object.keys(templatesByCategory).length > 0 && (
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-lg flex items-center gap-2">
-              <Sparkles className="h-5 w-5" />
-              Quick Add Templates
-            </CardTitle>
-            <CardDescription>
-              Click to instantly add common characteristics. Already added ones are hidden.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {Object.entries(templatesByCategory).map(([category, templates]) => (
-              <div key={category} className="space-y-2">
-                <h4 className="text-sm font-medium text-muted-foreground">{category}</h4>
-                <div className="flex flex-wrap gap-2">
-                  {templates.map((template) => (
-                    <Button
-                      key={template.name}
-                      variant="outline"
-                      size="sm"
-                      onClick={() => addFromTemplate(template)}
-                      disabled={createMutation.isPending}
-                      data-testid={`button-template-${template.name.toLowerCase().replace(/\s+/g, '-')}`}
-                    >
-                      <Plus className="h-3 w-3 mr-1" />
-                      {template.name}
-                    </Button>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </CardContent>
-        </Card>
-      )}
+      <Button onClick={addCharacteristic} data-testid="button-add-characteristic">
+        <Plus className="h-4 w-4 mr-2" />
+        Add Characteristic
+      </Button>
 
-      {showTemplates && Object.keys(templatesByCategory).length === 0 && (
-        <Card>
-          <CardContent className="py-6">
-            <p className="text-center text-muted-foreground">
-              All template characteristics have been added. You can create custom ones using the "Add Custom" button.
-            </p>
-          </CardContent>
-        </Card>
-      )}
-
-      {characteristics.length === 0 ? (
-        <Card>
-          <CardContent className="flex flex-col items-center justify-center py-16">
-            <div className="rounded-full bg-muted p-4 mb-4">
-              <Sliders className="h-8 w-8 text-muted-foreground" />
-            </div>
-            <h3 className="text-lg font-medium mb-2">No characteristics defined</h3>
-            <p className="text-muted-foreground text-center max-w-sm mb-4">
-              Add characteristics like academic level, behavior, or special needs to balance across
-              classes.
-            </p>
-            <Button onClick={() => setIsAddDialogOpen(true)} data-testid="button-add-first-characteristic">
-              <Plus className="h-4 w-4 mr-2" />
-              Add First Characteristic
-            </Button>
-          </CardContent>
-        </Card>
-      ) : (
-        <div className="space-y-2">
-          <p className="text-sm text-muted-foreground mb-3">
-            Drag to reorder priority. Items at the top have higher priority for balancing.
-          </p>
-          {sortedCharacteristics.map((char, index) => (
+      <div className="space-y-4">
+        {draft.map((char, index) => {
+          const isExpanded = expandedIds.has(char.id);
+          return (
             <Card
               key={char.id}
               draggable
-              onDragStart={(e) => handleDragStart(e, char.id)}
-              onDragOver={handleDragOver}
-              onDrop={(e) => handleDrop(e, char.id)}
-              onDragEnd={handleDragEnd}
-              className={`cursor-grab active:cursor-grabbing transition-opacity ${
-                draggedId === char.id ? "opacity-50" : ""
-              }`}
+              onDragStart={() => setDraggedCharId(char.id)}
+              onDragOver={(event) => event.preventDefault()}
+              onDrop={() => {
+                if (draggedCharId) moveCharacteristic(draggedCharId, char.id);
+                setDraggedCharId(null);
+              }}
+              className={draggedCharId === char.id ? "opacity-60" : ""}
               data-testid={`card-characteristic-${char.id}`}
             >
-              <CardHeader className="py-3">
-                <div className="flex items-center gap-3">
-                  <div className="flex items-center gap-2 text-muted-foreground">
-                    <GripVertical className="h-5 w-5" />
-                    <span className="font-medium text-sm w-6">{index + 1}</span>
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <CardTitle className="text-base flex items-center gap-2">
-                        <Tag className="h-4 w-4 text-muted-foreground" />
-                        {char.name}
-                      </CardTitle>
-                      <Badge variant="outline" className="text-xs">
-                        {char.type === "category" ? "Category" : "Scale"}
-                      </Badge>
+              <CardContent className="p-4">
+                <div className="grid gap-5 lg:grid-cols-[minmax(280px,0.9fr)_minmax(360px,1.4fr)]">
+                  <div className="space-y-4">
+                    <div className="flex items-center gap-2 text-muted-foreground">
+                      <GripVertical className="h-5 w-5 cursor-grab" />
+                      <Badge variant="outline">Priority {index + 1}</Badge>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="ml-auto"
+                        onClick={() =>
+                          setExpandedIds((current) => {
+                            const next = new Set(current);
+                            if (next.has(char.id)) next.delete(char.id);
+                            else next.add(char.id);
+                            return next;
+                          })
+                        }
+                      >
+                        {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                      </Button>
                     </div>
-                    {char.options && char.options.length > 0 && (
-                      <div className="flex flex-wrap gap-1 mt-2">
-                        {char.options.map((option) => (
-                          <Badge key={option} variant="secondary" className="text-xs">
-                            {option}
-                          </Badge>
-                        ))}
+                    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-1">
+                      <div className="space-y-2">
+                        <Label>Characteristic name</Label>
+                        <Input
+                          value={char.name}
+                          onChange={(event) => updateCharacteristic(char.id, { name: event.target.value })}
+                          data-testid={`input-characteristic-name-${char.id}`}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Type</Label>
+                        <Select
+                          value={char.type}
+                          onValueChange={(value: CharacteristicType) =>
+                            updateCharacteristic(char.id, {
+                              type: value,
+                              responseConfig: value === "category" ? char.responseConfig : [],
+                            })
+                          }
+                        >
+                          <SelectTrigger data-testid={`select-characteristic-type-${char.id}`}>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {Object.entries(friendlyTypeLabels).map(([value, label]) => (
+                              <SelectItem key={value} value={value}>{label}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className="text-destructive hover:text-destructive"
+                      onClick={() => removeCharacteristic(char)}
+                      data-testid={`button-delete-characteristic-${char.id}`}
+                    >
+                      <Trash2 className="h-4 w-4 mr-2" />
+                      Delete characteristic
+                    </Button>
+                  </div>
+
+                  <div className="space-y-3">
+                    {char.type === "category" ? (
+                      <>
+                        <div className="flex items-center justify-between gap-3">
+                          <div>
+                            <h3 className="font-medium">Responses</h3>
+                            <p className="text-sm text-muted-foreground">Configure selectable response values, descriptions, and colours.</p>
+                          </div>
+                          <Button type="button" variant="outline" size="sm" onClick={() => addResponse(char)}>
+                            <Plus className="h-4 w-4 mr-2" />
+                            Add Response
+                          </Button>
+                        </div>
+                        {isExpanded && (
+                          <div className="space-y-3">
+                            {char.responseConfig.length === 0 ? (
+                              <div className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
+                                No responses yet. Add responses for this category characteristic.
+                              </div>
+                            ) : (
+                              char.responseConfig.map((response) => (
+                                <div
+                                  key={response.id}
+                                  draggable
+                                  onDragStart={() => setDraggedResponse({ charId: char.id, responseId: response.id })}
+                                  onDragOver={(event) => event.preventDefault()}
+                                  onDrop={() => {
+                                    if (draggedResponse?.charId === char.id) moveResponse(char.id, draggedResponse.responseId, response.id);
+                                    setDraggedResponse(null);
+                                  }}
+                                  className="grid gap-3 rounded-lg border p-3 md:grid-cols-[auto_auto_minmax(140px,1fr)_minmax(180px,1.3fr)_auto] md:items-center"
+                                >
+                                  <GripVertical className="h-4 w-4 cursor-grab text-muted-foreground" />
+                                  <Popover>
+                                    <PopoverTrigger asChild>
+                                      <button
+                                        type="button"
+                                        className="h-7 w-7 rounded-full border shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                                        style={{ backgroundColor: response.color }}
+                                        aria-label={`Choose colour for ${response.name}`}
+                                        title="Choose response colour"
+                                      />
+                                    </PopoverTrigger>
+                                    <PopoverContent className="w-64">
+                                      <div className="space-y-3">
+                                        <div className="flex items-center gap-2 text-sm font-medium">
+                                          <Palette className="h-4 w-4" />
+                                          Choose colour
+                                        </div>
+                                        <div className="grid grid-cols-5 gap-2">
+                                          {RESPONSE_COLORS.map((color) => (
+                                            <button
+                                              key={color}
+                                              type="button"
+                                              className="h-8 w-8 rounded-full border shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                                              style={{ backgroundColor: color }}
+                                              onClick={() => updateResponse(char.id, response.id, { color })}
+                                              aria-label={`Select ${color}`}
+                                            />
+                                          ))}
+                                        </div>
+                                      </div>
+                                    </PopoverContent>
+                                  </Popover>
+                                  <Input
+                                    value={response.name}
+                                    onChange={(event) => updateResponse(char.id, response.id, { name: event.target.value })}
+                                    placeholder="Response name"
+                                  />
+                                  <Textarea
+                                    value={response.description || ""}
+                                    onChange={(event) => updateResponse(char.id, response.id, { description: event.target.value })}
+                                    placeholder="Optional description/help text"
+                                    rows={1}
+                                  />
+                                  <div className="flex items-center gap-2">
+                                    <Badge style={{ backgroundColor: response.color, color: responseTextColor(response.color) }}>
+                                      Preview
+                                    </Badge>
+                                    <Button type="button" variant="ghost" size="icon" onClick={() => removeResponse(char, response)}>
+                                      <Trash2 className="h-4 w-4" />
+                                    </Button>
+                                  </div>
+                                </div>
+                              ))
+                            )}
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <div className="rounded-lg border bg-muted/30 p-4">
+                        <h3 className="font-medium">{friendlyTypeLabels[char.type]}</h3>
+                        <p className="text-sm text-muted-foreground mt-1">
+                          This characteristic uses numeric values in student records. Category responses are not required.
+                        </p>
                       </div>
                     )}
                   </div>
-                  <div className="flex items-center gap-1">
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      onClick={() => openEditDialog(char)}
-                      data-testid={`button-edit-characteristic-${char.id}`}
-                    >
-                      <Edit2 className="h-4 w-4" />
-                    </Button>
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      onClick={() => deleteMutation.mutate(char.id)}
-                      data-testid={`button-delete-characteristic-${char.id}`}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  </div>
                 </div>
-              </CardHeader>
+              </CardContent>
             </Card>
-          ))}
-        </div>
-      )}
-
-      <Dialog
-        open={isAddDialogOpen || !!editingChar}
-        onOpenChange={(open) => {
-          if (!open) {
-            setIsAddDialogOpen(false);
-            setEditingChar(null);
-            resetForm();
-          }
-        }}
-      >
-        <DialogContent className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle>
-              {editingChar ? "Edit Characteristic" : "Add New Characteristic"}
-            </DialogTitle>
-            <DialogDescription>
-              Define a characteristic to track and balance across classes.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="grid gap-4 py-4">
-            <div className="space-y-2">
-              <Label htmlFor="name">Name *</Label>
-              <Input
-                id="name"
-                value={formData.name}
-                onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                placeholder="e.g., Academic Level, Behavior, Special Needs"
-                data-testid="input-characteristic-name"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="type">Type</Label>
-              <Select
-                value={formData.type}
-                onValueChange={(value) =>
-                  setFormData({ ...formData, type: value as "category" | "scale" })
-                }
-              >
-                <SelectTrigger data-testid="select-type">
-                  <SelectValue placeholder="Select type" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="category">Category</SelectItem>
-                  <SelectItem value="scale">Scale (1-5)</SelectItem>
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-muted-foreground">
-                Priority is set by dragging items in the list after adding.
-              </p>
-            </div>
-
-            {formData.type === "category" && (
-              <div className="space-y-2">
-                <Label>Options</Label>
-                <div className="flex gap-2">
-                  <Input
-                    value={optionInput}
-                    onChange={(e) => setOptionInput(e.target.value)}
-                    placeholder="Add an option"
-                    onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), addOption())}
-                    data-testid="input-option"
-                  />
-                  <Button type="button" variant="outline" onClick={addOption} data-testid="button-add-option">
-                    Add
-                  </Button>
-                </div>
-                {formData.options && formData.options.length > 0 && (
-                  <div className="flex flex-wrap gap-2 mt-2">
-                    {(formData.options as string[]).map((option) => (
-                      <Badge
-                        key={option}
-                        variant="secondary"
-                        className="gap-1 cursor-pointer"
-                        onClick={() => removeOption(option)}
-                      >
-                        {option}
-                        <span className="text-muted-foreground hover:text-foreground">x</span>
-                      </Badge>
-                    ))}
-                  </div>
-                )}
-                <p className="text-xs text-muted-foreground">
-                  Click on an option to remove it
-                </p>
-              </div>
-            )}
-          </div>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => {
-                setIsAddDialogOpen(false);
-                setEditingChar(null);
-                resetForm();
-              }}
-              data-testid="button-cancel"
-            >
-              Cancel
-            </Button>
-            <Button
-              onClick={handleSubmit}
-              disabled={createMutation.isPending || updateMutation.isPending}
-              data-testid="button-save-characteristic"
-            >
-              {createMutation.isPending || updateMutation.isPending
-                ? "Saving..."
-                : editingChar
-                ? "Update"
-                : "Add Characteristic"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+          );
+        })}
+      </div>
     </div>
   );
 }

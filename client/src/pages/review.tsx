@@ -31,6 +31,17 @@ interface ClassWithStudents {
   placements: Placement[];
 }
 
+const isNumericCharacteristic = (char: Characteristic) => char.type === "scale" || char.type === "percentage";
+
+const getStudentCharacteristicValue = (student: Student, char: Characteristic) =>
+  ((student.characteristics || {}) as Record<string, string>)[char.name];
+
+const parseCharacteristicNumber = (value: string | undefined) => {
+  if (!value) return null;
+  const parsed = Number.parseFloat(value.replace("%", "").trim());
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
 export default function ReviewPage() {
   const { toast } = useToast();
   const [draggedStudent, setDraggedStudent] = useState<Student | null>(null);
@@ -179,18 +190,49 @@ export default function ReviewPage() {
   const balanceMetrics = useMemo(() => {
     if (characteristics.length === 0 || classesWithStudents.length === 0) return [];
 
-    return characteristics.map((char) => {
+    const activeCharacteristics = [...characteristics]
+      .sort((a, b) => (b.priority || 0) - (a.priority || 0))
+      .slice(0, 50);
+
+    return activeCharacteristics.map((char) => {
       const distribution = classesWithStudents.map(({ config, students: classStudents }) => {
         const values: Record<string, number> = {};
         classStudents.forEach((student) => {
-          const charValue = (student.characteristics as Record<string, string>)?.[char.id] || "Unset";
+          const rawValue = getStudentCharacteristicValue(student, char);
+          const charValue = rawValue || "Unset";
           values[charValue] = (values[charValue] || 0) + 1;
         });
         return { className: config.name, values };
       });
 
+      if (isNumericCharacteristic(char)) {
+        const allValues = students
+          .map((student) => parseCharacteristicNumber(getStudentCharacteristicValue(student, char)))
+          .filter((value): value is number => value !== null);
+        if (allValues.length === 0) {
+          return { characteristicId: char.id, name: char.name, distribution, score: 100 };
+        }
+        const targetAverage = allValues.reduce((sum, value) => sum + value, 0) / allValues.length;
+        const range = Math.max(1, Math.max(...allValues) - Math.min(...allValues));
+        const classScores = classesWithStudents.map(({ students: classStudents }) => {
+          const values = classStudents
+            .map((student) => parseCharacteristicNumber(getStudentCharacteristicValue(student, char)))
+            .filter((value): value is number => value !== null);
+          if (values.length === 0) return 100;
+          const classAverage = values.reduce((sum, value) => sum + value, 0) / values.length;
+          const deviation = Math.abs(classAverage - targetAverage) / range;
+          return Math.max(0, 100 - Math.min(1, deviation) * 100);
+        });
+        return {
+          characteristicId: char.id,
+          name: char.name,
+          distribution,
+          score: Math.round(classScores.reduce((sum, score) => sum + score, 0) / classScores.length),
+        };
+      }
+
       const allValues = new Set<string>();
-      distribution.forEach((d) => Object.keys(d.values).forEach((v) => allValues.add(v)));
+      distribution.forEach((d) => Object.keys(d.values).filter((value) => value !== "Unset").forEach((v) => allValues.add(v)));
 
       let totalVariance = 0;
       allValues.forEach((value) => {
@@ -220,19 +262,13 @@ export default function ReviewPage() {
   const classStatistics = useMemo(() => {
     const percentageFieldNames = ["Aggregate %", "Maths %", "English %", "Afrikaans/Isizulu %"];
     
-    const charNameToId: Record<string, string> = {};
-    characteristics.forEach(char => {
-      charNameToId[char.name] = char.id;
-    });
-
     return classesWithStudents.map(({ config, students: classStudents }) => {
       const averages: Record<string, number | null> = {};
       percentageFieldNames.forEach(fieldName => {
-        const charId = charNameToId[fieldName];
         const values = classStudents
           .map(s => {
             const chars = s.characteristics as Record<string, string>;
-            const val = charId ? chars?.[charId] : chars?.[fieldName];
+            const val = chars?.[fieldName];
             return val ? parseFloat(val) : null;
           })
           .filter((v): v is number => v !== null && !isNaN(v));
@@ -261,7 +297,7 @@ export default function ReviewPage() {
         totalStudents: classStudents.length,
       };
     });
-  }, [classesWithStudents, characteristics]);
+  }, [classesWithStudents]);
 
   const handleDragStart = (student: Student) => {
     setDraggedStudent(student);

@@ -15,10 +15,12 @@ import {
   type Rule,
   type ClassConfig,
   type Characteristic,
+  type CharacteristicResponse,
   type ConflictWarning,
   type ClassGenerationResult,
   type GeneratedClass,
 } from "@shared/schema";
+import { CHARACTERISTIC_TYPES, defaultResponseColor, getStableResponseId, normalizeResponses } from "@shared/characteristics";
 import { z } from "zod";
 
 export async function registerRoutes(
@@ -98,23 +100,69 @@ export async function registerRoutes(
       
       const standardFields = ["firstName", "lastName", "grade", "currentClass", "gender", "notes", "parentRequests", "parentNotes"];
       const existingCharacteristics = await storage.getCharacteristics();
-      const existingCharNames = new Set(existingCharacteristics.map(c => c.name));
+      const characteristicByName = new Map(existingCharacteristics.map((char) => [char.name, char]));
+      const importedValuesByCharacteristic = new Map<string, Set<string>>();
       
-      // First pass: collect all unique characteristic names that need to be created
-      const newCharacteristicsToCreate: { name: string; type: string }[] = [];
       for (const student of students) {
         for (const [key, value] of Object.entries(student)) {
-          if (!standardFields.includes(key) && value !== undefined && value !== null && value !== "" && !existingCharNames.has(key)) {
-            const type = key.includes("%") ? "percentage" : "category";
-            newCharacteristicsToCreate.push({ name: key, type });
-            existingCharNames.add(key);
+          if (!standardFields.includes(key) && value !== undefined && value !== null && value !== "") {
+            if (!importedValuesByCharacteristic.has(key)) {
+              importedValuesByCharacteristic.set(key, new Set());
+            }
+            importedValuesByCharacteristic.get(key)!.add(String(value));
           }
         }
       }
+
+      const allCharacteristicNames = new Set([
+        ...Array.from(characteristicByName.keys()),
+        ...Array.from(importedValuesByCharacteristic.keys()),
+      ]);
+      if (allCharacteristicNames.size > 50) {
+        return res.status(400).json({ error: "A maximum of 50 active characteristics is supported" });
+      }
       
-      // Create all new characteristics before importing students
-      for (const char of newCharacteristicsToCreate) {
-        await storage.createCharacteristic({ name: char.name, type: char.type, options: [], priority: 1 });
+      for (const [name, values] of importedValuesByCharacteristic) {
+        const existing = characteristicByName.get(name);
+        const type = existing?.type || (name.includes("%") ? "percentage" : "category");
+        if (!existing) {
+          const responseConfig = type === "category"
+            ? Array.from(values).map((value, index) => ({
+                id: getStableResponseId(name, value),
+                name: value,
+                color: defaultResponseColor(index),
+                description: "",
+                sortOrder: index + 1,
+              }))
+            : [];
+          const created = await storage.createCharacteristic({
+            name,
+            type,
+            options: responseConfig.map((response) => response.name),
+            responseConfig,
+            priority: 1,
+          });
+          characteristicByName.set(name, created);
+        } else if (type === "category") {
+          const responses = normalizeResponses(existing);
+          const existingResponseNames = new Set(responses.map((response) => response.name));
+          for (const value of values) {
+            if (!existingResponseNames.has(value)) {
+              responses.push({
+                id: getStableResponseId(existing.id, value),
+                name: value,
+                color: defaultResponseColor(responses.length),
+                description: "",
+                sortOrder: responses.length + 1,
+              });
+              existingResponseNames.add(value);
+            }
+          }
+          await storage.updateCharacteristic(existing.id, {
+            options: responses.map((response) => response.name),
+            responseConfig: responses,
+          });
+        }
       }
       
       // Process students and extract characteristics from extra columns
@@ -206,9 +254,81 @@ export async function registerRoutes(
   });
 
   // Characteristics CRUD (protected)
-  app.get("/api/characteristics", isAuthenticated, async (req, res) => {
-    const characteristics = await storage.getCharacteristics();
-    res.json(characteristics);
+  app.get("/api/characteristics", isAuthenticated, async (_req, res) => {
+    const characteristicRows = await storage.getCharacteristics();
+    res.json(characteristicRows.map((char) => ({
+      ...char,
+      responseConfig: char.type === "category" ? normalizeResponses(char) : [],
+      options: char.type === "category" ? normalizeResponses(char).map((response) => response.name) : char.options || [],
+    })));
+  });
+
+  app.put("/api/characteristics/settings", isAuthenticated, async (req, res) => {
+    const responseSchema = z.object({
+      id: z.string().min(1),
+      name: z.string().trim().min(1),
+      color: z.string().regex(/^#[0-9a-fA-F]{6}$/),
+      description: z.string().optional().default(""),
+      sortOrder: z.number().int().positive(),
+    });
+
+    const characteristicSchema = z.object({
+      id: z.string().optional(),
+      name: z.string().trim().min(1),
+      type: z.enum(CHARACTERISTIC_TYPES),
+      priority: z.number().int().positive(),
+      responseConfig: z.array(responseSchema).default([]),
+    });
+
+    const bodySchema = z.object({
+      characteristics: z.array(characteristicSchema).max(50),
+    });
+
+    try {
+      const { characteristics } = bodySchema.parse(req.body);
+      const normalizedNames = characteristics.map((char) => char.name.trim().toLowerCase());
+      if (new Set(normalizedNames).size !== normalizedNames.length) {
+        return res.status(400).json({ error: "Characteristic names must be unique" });
+      }
+
+      const canonicalCharacteristics = characteristics.map((char, index) => {
+        const responses = char.type === "category"
+          ? char.responseConfig
+              .map((response, responseIndex) => ({
+                id: response.id || getStableResponseId(char.id || char.name, response.name),
+                name: response.name.trim(),
+                color: response.color,
+                description: response.description || "",
+                sortOrder: responseIndex + 1,
+              }))
+              .filter((response) => response.name)
+          : [];
+        const responseNames = responses.map((response) => response.name.toLowerCase());
+        if (new Set(responseNames).size !== responseNames.length) {
+          throw new Error(`Response names must be unique for ${char.name}`);
+        }
+
+        return {
+          id: char.id,
+          name: char.name.trim(),
+          type: char.type,
+          priority: characteristics.length - index,
+          options: responses.map((response) => response.name),
+          responseConfig: responses,
+        };
+      });
+
+      const saved = await storage.saveCharacteristicSettings(canonicalCharacteristics);
+      res.json(saved.map((char) => ({
+        ...char,
+        responseConfig: char.type === "category" ? normalizeResponses(char) : [],
+        options: char.type === "category" ? normalizeResponses(char).map((response) => response.name) : char.options || [],
+      })));
+    } catch (error) {
+      res.status(400).json({
+        error: error instanceof Error ? error.message : "Invalid characteristic settings",
+      });
+    }
   });
 
   app.get("/api/characteristics/:id", isAuthenticated, async (req, res) => {
@@ -216,13 +336,26 @@ export async function registerRoutes(
     if (!characteristic) {
       return res.status(404).json({ error: "Characteristic not found" });
     }
-    res.json(characteristic);
+    res.json({
+      ...characteristic,
+      responseConfig: characteristic.type === "category" ? normalizeResponses(characteristic) : [],
+      options: characteristic.type === "category" ? normalizeResponses(characteristic).map((response) => response.name) : characteristic.options || [],
+    });
   });
 
   app.post("/api/characteristics", isAuthenticated, async (req, res) => {
     try {
+      const existing = await storage.getCharacteristics();
+      if (existing.length >= 50) {
+        return res.status(400).json({ error: "A maximum of 50 active characteristics is supported" });
+      }
       const data = insertCharacteristicSchema.parse(req.body);
-      const characteristic = await storage.createCharacteristic(data);
+      const responseConfig = data.type === "category" ? normalizeResponses({ id: "new", options: data.options || [], responseConfig: data.responseConfig || [] }) : [];
+      const characteristic = await storage.createCharacteristic({
+        ...data,
+        options: data.type === "category" ? responseConfig.map((response) => response.name) : [],
+        responseConfig,
+      });
       res.status(201).json(characteristic);
     } catch (error) {
       res.status(400).json({ error: "Invalid characteristic data" });
@@ -404,6 +537,10 @@ export async function registerRoutes(
         return res.status(400).json({ error: "No students found for the specified grade" });
       }
 
+      if (characteristics.length > 50) {
+        return res.status(400).json({ error: "A maximum of 50 active characteristics is supported" });
+      }
+
       // Clear existing placements for regeneration
       await storage.deleteAllPlacements();
 
@@ -469,29 +606,19 @@ export async function registerRoutes(
         }
       }
 
-      // Calculate balance score for a class
+      const activeCharacteristics = [...characteristics]
+        .sort((a, b) => (b.priority || 0) - (a.priority || 0))
+        .slice(0, 50);
+      const numericTargets = getNumericTargets(students, activeCharacteristics);
+
+      // Calculate balance score for a class using the same category/numeric model as generation.
       const calculateClassBalance = (classStudentList: Student[]): number => {
-        if (characteristics.length === 0 || classStudentList.length === 0) return 100;
-        
-        let totalScore = 0;
-        for (const char of characteristics) {
-          const distribution: Record<string, number> = {};
-          for (const s of classStudentList) {
-            const val = s.characteristics?.[char.name] || "unknown";
-            distribution[val] = (distribution[val] || 0) + 1;
-          }
-          
-          const values = Object.values(distribution);
-          if (values.length > 1) {
-            const mean = values.reduce((a, b) => a + b, 0) / values.length;
-            const variance = values.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / values.length;
-            const maxVariance = Math.pow(classStudentList.length, 2);
-            totalScore += Math.max(0, 100 - (variance / maxVariance) * 100);
-          } else {
-            totalScore += 100;
-          }
-        }
-        return totalScore / characteristics.length;
+        if (activeCharacteristics.length === 0 || classStudentList.length === 0) return 100;
+        const totalScore = activeCharacteristics.reduce(
+          (sum, char) => sum + calculateCharacteristicScore(classStudentList, char, numericTargets),
+          0,
+        );
+        return totalScore / activeCharacteristics.length;
       };
 
       // Calculate overall balance
@@ -709,9 +836,13 @@ export async function registerRoutes(
         return res.status(400).json({ error: "No placements found. Generate classes first." });
       }
 
-      // Calculate balance scores for each class
+      // Calculate balance scores for each class using the same category/numeric model as generation.
       const classBalances: { classId: string; className: string; balance: number }[] = [];
       let totalBalance = 0;
+      const activeCharacteristics = [...characteristics]
+        .sort((a, b) => (b.priority || 0) - (a.priority || 0))
+        .slice(0, 50);
+      const numericTargets = getNumericTargets(students, activeCharacteristics);
 
       for (const config of classConfigs) {
         const classPlacementStudentIds = placements.filter(p => p.classId === config.id).map(p => p.studentId);
@@ -720,26 +851,11 @@ export async function registerRoutes(
         let classScore = 0;
         if (classStudents.length === 0) {
           classScore = 0;
-        } else if (characteristics.length > 0) {
-          let charTotal = 0;
-          for (const char of characteristics) {
-            const distribution: Record<string, number> = {};
-            for (const s of classStudents) {
-              const val = s.characteristics?.[char.name] || "unknown";
-              distribution[val] = (distribution[val] || 0) + 1;
-            }
-
-            const values = Object.values(distribution);
-            if (values.length > 1) {
-              const mean = values.reduce((a, b) => a + b, 0) / values.length;
-              const variance = values.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / values.length;
-              const maxVariance = Math.pow(classStudents.length, 2);
-              charTotal += Math.max(0, 100 - (variance / maxVariance) * 100);
-            } else {
-              charTotal += 100;
-            }
-          }
-          classScore = charTotal / characteristics.length;
+        } else if (activeCharacteristics.length > 0) {
+          classScore = activeCharacteristics.reduce(
+            (sum, char) => sum + calculateCharacteristicScore(classStudents, char, numericTargets),
+            0,
+          ) / activeCharacteristics.length;
         } else {
           classScore = 100;
         }
@@ -963,6 +1079,76 @@ async function checkConflicts(
   return conflicts;
 }
 
+const isNumericCharacteristic = (char: Characteristic) => char.type === "scale" || char.type === "percentage";
+
+const getStudentCharacteristicValue = (student: Student, char: Characteristic) =>
+  ((student.characteristics || {}) as Record<string, string>)[char.name];
+
+const parseCharacteristicNumber = (value: string | undefined) => {
+  if (!value) return null;
+  const parsed = Number.parseFloat(value.replace("%", "").trim());
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const getNumericTargets = (students: Student[], characteristics: Characteristic[]) => {
+  const targets = new Map<string, { average: number; range: number }>();
+  for (const char of characteristics) {
+    if (!isNumericCharacteristic(char)) continue;
+    const values = students
+      .map((student) => parseCharacteristicNumber(getStudentCharacteristicValue(student, char)))
+      .filter((value): value is number => value !== null);
+    if (values.length === 0) continue;
+    const average = values.reduce((sum, value) => sum + value, 0) / values.length;
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    targets.set(char.id, { average, range: Math.max(1, max - min) });
+  }
+  return targets;
+};
+
+const calculateCharacteristicScore = (
+  classStudents: Student[],
+  char: Characteristic,
+  numericTargets: Map<string, { average: number; range: number }>,
+) => {
+  if (classStudents.length === 0) return 100;
+
+  if (isNumericCharacteristic(char)) {
+    const values = classStudents
+      .map((student) => parseCharacteristicNumber(getStudentCharacteristicValue(student, char)))
+      .filter((value): value is number => value !== null);
+    const target = numericTargets.get(char.id);
+    if (!target || values.length === 0) return 100;
+    const classAverage = values.reduce((sum, value) => sum + value, 0) / values.length;
+    const deviation = Math.abs(classAverage - target.average) / target.range;
+    return Math.max(0, Math.round(100 - Math.min(1, deviation) * 100));
+  }
+
+  const distribution: Record<string, number> = {};
+  for (const student of classStudents) {
+    const value = getStudentCharacteristicValue(student, char);
+    if (!value) continue;
+    distribution[value] = (distribution[value] || 0) + 1;
+  }
+
+  const values = Object.values(distribution);
+  if (values.length <= 1) return 100;
+  const mean = values.reduce((a, b) => a + b, 0) / values.length;
+  const variance = values.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / values.length;
+  const maxVariance = Math.max(1, Math.pow(classStudents.length, 2));
+  return Math.max(0, Math.round(100 - (variance / maxVariance) * 100));
+};
+
+const calculateCandidateBalanceScore = (
+  candidateStudents: Student[],
+  char: Characteristic,
+  numericTargets: Map<string, { average: number; range: number }>,
+) => {
+  const priority = char.priority || 1; // Priority is the balancing weight: higher priority has more influence.
+  const score = calculateCharacteristicScore(candidateStudents, char, numericTargets);
+  return (score - 100) * priority;
+};
+
 // Class generation algorithm with balancing
 async function generateBalancedClasses(
   students: Student[],
@@ -970,6 +1156,10 @@ async function generateBalancedClasses(
   rules: Rule[],
   characteristics: Characteristic[]
 ): Promise<ClassGenerationResult> {
+  const activeCharacteristics = [...characteristics]
+    .sort((a, b) => (b.priority || 0) - (a.priority || 0))
+    .slice(0, 50);
+  const numericTargets = getNumericTargets(students, activeCharacteristics);
   const numClasses = classConfigs.length;
   const classAssignments: Map<string, Student[]> = new Map();
   
@@ -1059,30 +1249,12 @@ async function generateBalancedClasses(
         }
       }
       
-      // Calculate balance score based on characteristics
+      // Calculate balance score based on active characteristics.
+      // Category responses are balanced by distribution; scale/percentage values are balanced numerically.
       let balanceScore = 0;
-      for (const char of characteristics) {
-        const charName = char.name;
-        const priority = char.priority || 1;
-        
-        // Count distribution in this class
-        const distribution: Record<string, number> = {};
-        for (const s of currentStudents) {
-          const val = s.characteristics?.[charName] || "unknown";
-          distribution[val] = (distribution[val] || 0) + 1;
-        }
-        for (const s of group) {
-          const val = s.characteristics?.[charName] || "unknown";
-          distribution[val] = (distribution[val] || 0) + 1;
-        }
-        
-        // Lower variance = better balance
-        const values = Object.values(distribution);
-        if (values.length > 0) {
-          const mean = values.reduce((a, b) => a + b, 0) / values.length;
-          const variance = values.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / values.length;
-          balanceScore -= variance * priority;
-        }
+      const candidateStudents = [...currentStudents, ...group];
+      for (const char of activeCharacteristics) {
+        balanceScore += calculateCandidateBalanceScore(candidateStudents, char, numericTargets);
       }
       
       // Prefer smaller classes to balance sizes
@@ -1167,24 +1339,10 @@ async function generateBalancedClasses(
   const generatedClasses: GeneratedClass[] = classConfigs.map(config => {
     const classStudents = classAssignments.get(config.id) || [];
     
-    // Calculate balance scores for each characteristic
+    // Calculate balance scores for each active characteristic using the same scoring model as generation.
     const balanceScores: Record<string, number> = {};
-    for (const char of characteristics) {
-      const distribution: Record<string, number> = {};
-      for (const s of classStudents) {
-        const val = s.characteristics?.[char.name] || "unknown";
-        distribution[val] = (distribution[val] || 0) + 1;
-      }
-      
-      const values = Object.values(distribution);
-      if (values.length > 1) {
-        const mean = values.reduce((a, b) => a + b, 0) / values.length;
-        const variance = values.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / values.length;
-        const maxVariance = Math.pow(classStudents.length, 2);
-        balanceScores[char.id] = Math.max(0, 100 - (variance / maxVariance) * 100);
-      } else {
-        balanceScores[char.id] = 100;
-      }
+    for (const char of activeCharacteristics) {
+      balanceScores[char.id] = calculateCharacteristicScore(classStudents, char, numericTargets);
     }
     
     return {
