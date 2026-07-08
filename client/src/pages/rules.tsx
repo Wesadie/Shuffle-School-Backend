@@ -362,7 +362,7 @@ export default function RulesPage() {
               <Label htmlFor="reason">Reason (Optional)</Label>
               <Textarea
                 id="reason"
-                value={formData.reason}
+                value={formData.reason ?? ""}
                 onChange={(e) => setFormData({ ...formData, reason: e.target.value })}
                 placeholder="Add a reason for this rule..."
                 rows={2}

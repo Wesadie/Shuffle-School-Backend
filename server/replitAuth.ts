@@ -35,7 +35,8 @@ export function getSession() {
       tableName: "sessions",
     });
   } else {
-    const MemoryStore = (memorystore as unknown as (s: typeof session) => typeof session.Store)(session);
+    type SessionStoreConstructor = new (options: { checkPeriod: number }) => session.Store;
+    const MemoryStore = (memorystore as unknown as (s: typeof session) => SessionStoreConstructor)(session);
     store = new MemoryStore({ checkPeriod: sessionTtl });
   }
 
