@@ -389,8 +389,8 @@ export default function StudentsPage() {
   }
 
   return (
-    <div className="p-6 space-y-6 max-w-full overflow-x-hidden">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+    <div className="flex h-full min-h-0 max-w-full flex-col overflow-hidden p-6">
+      <div className="flex flex-none flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-3xl font-semibold" data-testid="text-page-title">Student Roster</h1>
           <p className="text-muted-foreground mt-1">
@@ -409,7 +409,7 @@ export default function StudentsPage() {
         </div>
       </div>
 
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
+      <div className="mt-6 flex flex-none flex-col gap-4 sm:flex-row sm:items-center">
         <div className="relative flex-1 max-w-sm">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
@@ -451,7 +451,7 @@ export default function StudentsPage() {
       </div>
 
       {students.length === 0 ? (
-        <Card>
+        <Card className="mt-6 flex-1">
           <CardContent className="flex flex-col items-center justify-center py-16">
             <div className="rounded-full bg-muted p-4 mb-4">
               <Users className="h-8 w-8 text-muted-foreground" />
@@ -467,8 +467,8 @@ export default function StudentsPage() {
           </CardContent>
         </Card>
       ) : (
-        <Card className="min-w-0 max-w-full">
-          <CardHeader className="pb-0">
+        <Card className="mt-6 flex min-h-0 max-w-full flex-1 flex-col overflow-hidden">
+          <CardHeader className="flex-none pb-0">
             <CardTitle className="text-lg flex items-center gap-2">
               <span>{filteredStudents.length} Students</span>
               {searchQuery || selectedGrade !== "all" ? (
@@ -476,10 +476,9 @@ export default function StudentsPage() {
               ) : null}
             </CardTitle>
           </CardHeader>
-          <CardContent className="p-0 min-w-0">
-            <div className="max-w-full overflow-x-auto">
-              <Table className="min-w-max">
-                <TableHeader>
+          <CardContent className="min-h-0 min-w-0 flex-1 p-0 [&>div]:h-full [&>div]:max-w-full [&>div]:overflow-auto">
+            <Table className="min-w-max">
+                <TableHeader className="sticky top-0 z-10 bg-background">
                   <TableRow>
                     <TableHead className="w-12">
                       <Checkbox
@@ -591,7 +590,6 @@ export default function StudentsPage() {
                   ))}
                 </TableBody>
               </Table>
-            </div>
           </CardContent>
         </Card>
       )}
