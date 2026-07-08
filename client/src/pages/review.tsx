@@ -20,8 +20,9 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Link } from "wouter";
-import type { 
-  ClassConfig, Student, Placement, Rule, Characteristic, 
+import { characteristicValueToArray, isCharacteristicApplicableToGrade } from "@shared/characteristics";
+import type {
+  ClassConfig, Student, Placement, Rule, Characteristic,
   ConflictWarning, BoostResponse, BoostSuggestion, Teacher
 } from "@shared/schema";
 
@@ -34,10 +35,10 @@ interface ClassWithStudents {
 const isNumericCharacteristic = (char: Characteristic) => char.type === "scale" || char.type === "percentage";
 
 const getStudentCharacteristicValue = (student: Student, char: Characteristic) =>
-  ((student.characteristics || {}) as Record<string, string>)[char.name];
+  ((student.characteristics || {}) as Record<string, string | string[]>)[char.name];
 
-const parseCharacteristicNumber = (value: string | undefined) => {
-  if (!value) return null;
+const parseCharacteristicNumber = (value: string | string[] | undefined) => {
+  if (!value || Array.isArray(value)) return null;
   const parsed = Number.parseFloat(value.replace("%", "").trim());
   return Number.isFinite(parsed) ? parsed : null;
 };
@@ -191,6 +192,7 @@ export default function ReviewPage() {
     if (characteristics.length === 0 || classesWithStudents.length === 0) return [];
 
     const activeCharacteristics = [...characteristics]
+      .filter((char) => !char.tagOnly)
       .sort((a, b) => (b.priority || 0) - (a.priority || 0))
       .slice(0, 50);
 
@@ -198,15 +200,22 @@ export default function ReviewPage() {
       const distribution = classesWithStudents.map(({ config, students: classStudents }) => {
         const values: Record<string, number> = {};
         classStudents.forEach((student) => {
-          const rawValue = getStudentCharacteristicValue(student, char);
-          const charValue = rawValue || "Unset";
-          values[charValue] = (values[charValue] || 0) + 1;
+          if (!isCharacteristicApplicableToGrade(char, student.grade)) return;
+          const rawValues = characteristicValueToArray(getStudentCharacteristicValue(student, char));
+          if (rawValues.length === 0) {
+            values.Unset = (values.Unset || 0) + 1;
+            return;
+          }
+          rawValues.forEach((charValue) => {
+            values[charValue] = (values[charValue] || 0) + 1;
+          });
         });
         return { className: config.name, values };
       });
 
       if (isNumericCharacteristic(char)) {
         const allValues = students
+          .filter((student) => isCharacteristicApplicableToGrade(char, student.grade))
           .map((student) => parseCharacteristicNumber(getStudentCharacteristicValue(student, char)))
           .filter((value): value is number => value !== null);
         if (allValues.length === 0) {
@@ -216,6 +225,7 @@ export default function ReviewPage() {
         const range = Math.max(1, Math.max(...allValues) - Math.min(...allValues));
         const classScores = classesWithStudents.map(({ students: classStudents }) => {
           const values = classStudents
+            .filter((student) => isCharacteristicApplicableToGrade(char, student.grade))
             .map((student) => parseCharacteristicNumber(getStudentCharacteristicValue(student, char)))
             .filter((value): value is number => value !== null);
           if (values.length === 0) return 100;

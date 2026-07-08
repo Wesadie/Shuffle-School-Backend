@@ -20,7 +20,7 @@ import {
   type ClassGenerationResult,
   type GeneratedClass,
 } from "@shared/schema";
-import { CHARACTERISTIC_TYPES, defaultResponseColor, getStableResponseId, normalizeResponses } from "@shared/characteristics";
+import { CHARACTERISTIC_TYPES, characteristicValueToArray, defaultResponseColor, getStableResponseId, isCharacteristicApplicableToGrade, normalizeResponses } from "@shared/characteristics";
 import { z } from "zod";
 
 export async function registerRoutes(
@@ -278,6 +278,11 @@ export async function registerRoutes(
       type: z.enum(CHARACTERISTIC_TYPES),
       priority: z.number().int().positive(),
       responseConfig: z.array(responseSchema).default([]),
+      tagOnly: z.boolean().default(false),
+      multiSelect: z.boolean().default(false),
+      adminOnly: z.boolean().default(false),
+      applyToAllGrades: z.boolean().default(true),
+      applicableGrades: z.array(z.string().trim().min(1)).default([]),
     });
 
     const bodySchema = z.object({
@@ -315,6 +320,11 @@ export async function registerRoutes(
           priority: characteristics.length - index,
           options: responses.map((response) => response.name),
           responseConfig: responses,
+          tagOnly: char.tagOnly,
+          multiSelect: char.type === "category" ? char.multiSelect : false,
+          adminOnly: char.adminOnly,
+          applyToAllGrades: char.applyToAllGrades,
+          applicableGrades: char.applyToAllGrades ? [] : Array.from(new Set(char.applicableGrades.map((grade) => grade.trim()).filter(Boolean))),
         };
       });
 
@@ -329,6 +339,15 @@ export async function registerRoutes(
         error: error instanceof Error ? error.message : "Invalid characteristic settings",
       });
     }
+  });
+
+  app.get("/api/teacher-characteristics", isAuthenticated, async (_req, res) => {
+    const characteristicRows = await storage.getCharacteristics();
+    res.json(characteristicRows.filter((char) => !char.adminOnly).map((char) => ({
+      ...char,
+      responseConfig: char.type === "category" ? normalizeResponses(char) : [],
+      options: char.type === "category" ? normalizeResponses(char).map((response) => response.name) : char.options || [],
+    })));
   });
 
   app.get("/api/characteristics/:id", isAuthenticated, async (req, res) => {
@@ -355,6 +374,11 @@ export async function registerRoutes(
         ...data,
         options: data.type === "category" ? responseConfig.map((response) => response.name) : [],
         responseConfig,
+        tagOnly: data.tagOnly ?? false,
+        multiSelect: data.type === "category" ? data.multiSelect ?? false : false,
+        adminOnly: data.adminOnly ?? false,
+        applyToAllGrades: data.applyToAllGrades ?? true,
+        applicableGrades: data.applyToAllGrades === false ? data.applicableGrades ?? [] : [],
       });
       res.status(201).json(characteristic);
     } catch (error) {
@@ -607,6 +631,7 @@ export async function registerRoutes(
       }
 
       const activeCharacteristics = [...characteristics]
+        .filter((char) => !char.tagOnly)
         .sort((a, b) => (b.priority || 0) - (a.priority || 0))
         .slice(0, 50);
       const numericTargets = getNumericTargets(students, activeCharacteristics);
@@ -840,6 +865,7 @@ export async function registerRoutes(
       const classBalances: { classId: string; className: string; balance: number }[] = [];
       let totalBalance = 0;
       const activeCharacteristics = [...characteristics]
+        .filter((char) => !char.tagOnly)
         .sort((a, b) => (b.priority || 0) - (a.priority || 0))
         .slice(0, 50);
       const numericTargets = getNumericTargets(students, activeCharacteristics);
@@ -1082,9 +1108,10 @@ async function checkConflicts(
 const isNumericCharacteristic = (char: Characteristic) => char.type === "scale" || char.type === "percentage";
 
 const getStudentCharacteristicValue = (student: Student, char: Characteristic) =>
-  ((student.characteristics || {}) as Record<string, string>)[char.name];
+  ((student.characteristics || {}) as Record<string, string | string[]>)[char.name];
 
-const parseCharacteristicNumber = (value: string | undefined) => {
+const parseCharacteristicNumber = (value: string | string[] | undefined) => {
+  if (Array.isArray(value)) return null;
   if (!value) return null;
   const parsed = Number.parseFloat(value.replace("%", "").trim());
   return Number.isFinite(parsed) ? parsed : null;
@@ -1095,6 +1122,7 @@ const getNumericTargets = (students: Student[], characteristics: Characteristic[
   for (const char of characteristics) {
     if (!isNumericCharacteristic(char)) continue;
     const values = students
+      .filter((student) => isCharacteristicApplicableToGrade(char, student.grade))
       .map((student) => parseCharacteristicNumber(getStudentCharacteristicValue(student, char)))
       .filter((value): value is number => value !== null);
     if (values.length === 0) continue;
@@ -1115,6 +1143,7 @@ const calculateCharacteristicScore = (
 
   if (isNumericCharacteristic(char)) {
     const values = classStudents
+      .filter((student) => isCharacteristicApplicableToGrade(char, student.grade))
       .map((student) => parseCharacteristicNumber(getStudentCharacteristicValue(student, char)))
       .filter((value): value is number => value !== null);
     const target = numericTargets.get(char.id);
@@ -1126,9 +1155,11 @@ const calculateCharacteristicScore = (
 
   const distribution: Record<string, number> = {};
   for (const student of classStudents) {
-    const value = getStudentCharacteristicValue(student, char);
-    if (!value) continue;
-    distribution[value] = (distribution[value] || 0) + 1;
+    if (!isCharacteristicApplicableToGrade(char, student.grade)) continue;
+    const values = characteristicValueToArray(getStudentCharacteristicValue(student, char));
+    for (const value of values) {
+      distribution[value] = (distribution[value] || 0) + 1;
+    }
   }
 
   const values = Object.values(distribution);
@@ -1157,6 +1188,7 @@ async function generateBalancedClasses(
   characteristics: Characteristic[]
 ): Promise<ClassGenerationResult> {
   const activeCharacteristics = [...characteristics]
+    .filter((char) => !char.tagOnly)
     .sort((a, b) => (b.priority || 0) - (a.priority || 0))
     .slice(0, 50);
   const numericTargets = getNumericTargets(students, activeCharacteristics);

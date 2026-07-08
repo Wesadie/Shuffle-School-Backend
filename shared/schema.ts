@@ -23,7 +23,7 @@ export const students = pgTable("students", {
   grade: text("grade").notNull(),
   currentClass: text("current_class"),
   gender: text("gender"),
-  characteristics: jsonb("characteristics").$type<Record<string, string>>().default({}),
+  characteristics: jsonb("characteristics").$type<Record<string, string | string[]>>().default({}),
   notes: text("notes"),
   parentRequests: text("parent_requests"),
   parentNotes: text("parent_notes"),
@@ -64,6 +64,11 @@ export const characteristics = pgTable("characteristics", {
   options: jsonb("options").$type<string[]>().default([]),
   responseConfig: jsonb("response_config").$type<CharacteristicResponse[]>().default([]),
   priority: integer("priority").default(1),
+  tagOnly: boolean("tag_only").default(false),
+  multiSelect: boolean("multi_select").default(false),
+  adminOnly: boolean("admin_only").default(false),
+  applyToAllGrades: boolean("apply_to_all_grades").default(true),
+  applicableGrades: jsonb("applicable_grades").$type<string[]>().default([]),
 });
 
 export const insertCharacteristicSchema = createInsertSchema(characteristics).omit({ id: true });

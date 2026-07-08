@@ -42,6 +42,11 @@ export interface CharacteristicSettingsInput {
   priority: number;
   options: string[];
   responseConfig: CharacteristicResponse[];
+  tagOnly: boolean;
+  multiSelect: boolean;
+  adminOnly: boolean;
+  applyToAllGrades: boolean;
+  applicableGrades: string[];
 }
 
 export interface IStorage {
@@ -229,6 +234,11 @@ export class DatabaseStorage implements IStorage {
       options: insertChar.options ?? [],
       responseConfig: insertChar.responseConfig ?? [],
       priority: insertChar.priority ?? 1,
+      tagOnly: insertChar.tagOnly ?? false,
+      multiSelect: insertChar.multiSelect ?? false,
+      adminOnly: insertChar.adminOnly ?? false,
+      applyToAllGrades: insertChar.applyToAllGrades ?? true,
+      applicableGrades: insertChar.applicableGrades ?? [],
     }).returning();
     return char;
   }
@@ -278,15 +288,40 @@ export class DatabaseStorage implements IStorage {
         if (existing) {
           await client.query(
             `UPDATE characteristics
-             SET name = $2, type = $3, options = $4::jsonb, response_config = $5::jsonb, priority = $6
+             SET name = $2, type = $3, options = $4::jsonb, response_config = $5::jsonb, priority = $6,
+                 tag_only = $7, multi_select = $8, admin_only = $9, apply_to_all_grades = $10, applicable_grades = $11::jsonb
              WHERE id = $1`,
-            [id, char.name, char.type, JSON.stringify(options), JSON.stringify(responseConfig), char.priority],
+            [
+              id,
+              char.name,
+              char.type,
+              JSON.stringify(options),
+              JSON.stringify(responseConfig),
+              char.priority,
+              char.tagOnly,
+              char.multiSelect,
+              char.adminOnly,
+              char.applyToAllGrades,
+              JSON.stringify(char.applicableGrades),
+            ],
           );
         } else {
           await client.query(
-            `INSERT INTO characteristics (id, name, type, options, response_config, priority)
-             VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6)`,
-            [id, char.name, char.type, JSON.stringify(options), JSON.stringify(responseConfig), char.priority],
+            `INSERT INTO characteristics (id, name, type, options, response_config, priority, tag_only, multi_select, admin_only, apply_to_all_grades, applicable_grades)
+             VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6, $7, $8, $9, $10, $11::jsonb)`,
+            [
+              id,
+              char.name,
+              char.type,
+              JSON.stringify(options),
+              JSON.stringify(responseConfig),
+              char.priority,
+              char.tagOnly,
+              char.multiSelect,
+              char.adminOnly,
+              char.applyToAllGrades,
+              JSON.stringify(char.applicableGrades),
+            ],
           );
         }
       }

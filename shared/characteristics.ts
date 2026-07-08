@@ -81,3 +81,24 @@ export const responseTextColor = (background: string) => {
   const luminance = (0.299 * red + 0.587 * green + 0.114 * blue) / 255;
   return luminance > 0.62 ? "#111827" : "#ffffff";
 };
+
+export const normalizeGradeValue = (grade?: string | null) =>
+  (grade || "").replace(/^grade\s+/i, "").trim();
+
+export const isCharacteristicApplicableToGrade = (
+  characteristic: Pick<Characteristic, "applyToAllGrades" | "applicableGrades">,
+  grade?: string | null,
+) => {
+  if (characteristic.applyToAllGrades !== false) return true;
+  const normalizedGrade = normalizeGradeValue(grade);
+  return (characteristic.applicableGrades || []).map(normalizeGradeValue).includes(normalizedGrade);
+};
+
+export const characteristicValueToArray = (value: string | string[] | null | undefined) => {
+  if (Array.isArray(value)) return value.filter(Boolean);
+  if (!value) return [];
+  return [value];
+};
+
+export const formatCharacteristicValue = (value: string | string[] | null | undefined) =>
+  characteristicValueToArray(value).join(", ");

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Check, ChevronDown, ChevronRight, GripVertical, Palette, Plus, Save, Trash2, X } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, GripVertical, HelpCircle, Palette, Plus, Save, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -8,7 +8,9 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   Select,
   SelectContent,
@@ -24,7 +26,7 @@ import {
   normalizeResponses,
   responseTextColor,
 } from "@shared/characteristics";
-import type { Characteristic, CharacteristicResponse, Student } from "@shared/schema";
+import type { Characteristic, CharacteristicResponse, ClassConfig, Student } from "@shared/schema";
 
 type CharacteristicType = "category" | "scale" | "percentage";
 
@@ -34,6 +36,11 @@ type DraftCharacteristic = {
   type: CharacteristicType;
   priority: number;
   responseConfig: CharacteristicResponse[];
+  tagOnly: boolean;
+  multiSelect: boolean;
+  adminOnly: boolean;
+  applyToAllGrades: boolean;
+  applicableGrades: string[];
   isNew?: boolean;
 };
 
@@ -42,6 +49,23 @@ const friendlyTypeLabels: Record<CharacteristicType, string> = {
   scale: "Scale / Numeric",
   percentage: "Percentage",
 };
+
+const settingTooltips = {
+  tagOnly: {
+    title: "Use this Characteristic as a Tag Only",
+    body: "Turn this on if you would like to use this Characteristic as a tag only, rather than for balancing your classes.",
+  },
+  multiSelect: {
+    title: "Allow Multiple Responses",
+    body: "Turn this on if a student may have more than one response for this Characteristic.",
+  },
+  adminOnly: {
+    title: "Hide this Characteristic from Teachers",
+    body: "Turn this on if you don't want teachers to see this Characteristic in surveys or when sharing class lists.",
+  },
+};
+
+const normalizeGradeLabel = (grade?: string | null) => (grade || "").replace(/^grade\s+/i, "").trim();
 
 const colourFamilies = [
   {
@@ -89,6 +113,11 @@ const toDraft = (char: Characteristic): DraftCharacteristic => ({
   type: char.type as CharacteristicType,
   priority: char.priority || 1,
   responseConfig: char.type === "category" ? normalizeResponses(char) : [],
+  tagOnly: char.tagOnly ?? false,
+  multiSelect: char.multiSelect ?? false,
+  adminOnly: char.adminOnly ?? false,
+  applyToAllGrades: char.applyToAllGrades ?? true,
+  applicableGrades: char.applicableGrades || [],
 });
 
 export default function CharacteristicsPage() {
@@ -106,6 +135,21 @@ export default function CharacteristicsPage() {
   const { data: students = [] } = useQuery<Student[]>({
     queryKey: ["/api/students"],
   });
+
+  const { data: classConfigs = [] } = useQuery<ClassConfig[]>({
+    queryKey: ["/api/class-configs"],
+  });
+
+  const gradeOptions = useMemo(
+    () =>
+      Array.from(
+        new Set([
+          ...students.map((student) => normalizeGradeLabel(student.grade)),
+          ...classConfigs.map((config) => normalizeGradeLabel(config.grade)),
+        ].filter(Boolean)),
+      ).sort((a, b) => a.localeCompare(b, undefined, { numeric: true })),
+    [students, classConfigs],
+  );
 
   useEffect(() => {
     const nextDraft = [...characteristics]
@@ -136,6 +180,11 @@ export default function CharacteristicsPage() {
                 sortOrder: responseIndex + 1,
               }))
             : [],
+          tagOnly: char.tagOnly,
+          multiSelect: char.type === "category" ? char.multiSelect : false,
+          adminOnly: char.adminOnly,
+          applyToAllGrades: char.applyToAllGrades,
+          applicableGrades: char.applyToAllGrades ? [] : char.applicableGrades,
         })),
       };
       const response = await apiRequest("PUT", "/api/characteristics/settings", payload);
@@ -187,6 +236,11 @@ export default function CharacteristicsPage() {
       type: "category",
       priority: draft.length + 1,
       responseConfig: [],
+      tagOnly: false,
+      multiSelect: false,
+      adminOnly: false,
+      applyToAllGrades: true,
+      applicableGrades: [],
       isNew: true,
     };
     setDraft((current) => [...current, newCharacteristic]);
@@ -265,6 +319,58 @@ export default function CharacteristicsPage() {
   const cancelChanges = () => {
     setDraft([...characteristics].sort((a, b) => (b.priority || 0) - (a.priority || 0)).map(toDraft));
     toast({ title: "Unsaved changes discarded" });
+  };
+
+  const SettingTooltip = ({ setting }: { setting: keyof typeof settingTooltips }) => (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          className="inline-flex h-6 w-6 items-center justify-center rounded-full text-muted-foreground hover:text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+          aria-label={settingTooltips[setting].title}
+        >
+          <HelpCircle className="h-3.5 w-3.5" />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="top" align="start" className="max-w-xs">
+        <div className="space-y-1">
+          <p className="font-medium">{settingTooltips[setting].title}</p>
+          <p className="text-xs text-muted-foreground">{settingTooltips[setting].body}</p>
+        </div>
+      </TooltipContent>
+    </Tooltip>
+  );
+
+  const SettingToggle = ({
+    active,
+    label,
+    disabled,
+    onClick,
+  }: {
+    active: boolean;
+    label: string;
+    disabled?: boolean;
+    onClick: () => void;
+  }) => (
+    <Button
+      type="button"
+      variant={active ? "default" : "outline"}
+      size="sm"
+      disabled={disabled}
+      onClick={onClick}
+      aria-pressed={active}
+      className="h-8"
+    >
+      {active ? "On" : "Off"} · {label}
+    </Button>
+  );
+
+  const toggleApplicableGrade = (char: DraftCharacteristic, grade: string) => {
+    const normalized = normalizeGradeLabel(grade);
+    const selected = new Set(char.applicableGrades.map(normalizeGradeLabel));
+    if (selected.has(normalized)) selected.delete(normalized);
+    else selected.add(normalized);
+    updateCharacteristic(char.id, { applicableGrades: Array.from(selected) });
   };
 
   if (isLoading) {
@@ -351,6 +457,76 @@ export default function CharacteristicsPage() {
                           onChange={(event) => updateCharacteristic(char.id, { name: event.target.value })}
                           data-testid={`input-characteristic-name-${char.id}`}
                         />
+                        <div className="space-y-3 rounded-md border bg-muted/20 p-3">
+                          <div className="flex flex-wrap gap-2">
+                            <div className="flex items-center gap-1">
+                              <SettingToggle
+                                active={char.tagOnly}
+                                label="Tag Only"
+                                onClick={() => updateCharacteristic(char.id, { tagOnly: !char.tagOnly })}
+                              />
+                              <SettingTooltip setting="tagOnly" />
+                            </div>
+                            <div className="flex items-center gap-1">
+                              <SettingToggle
+                                active={char.multiSelect}
+                                label="Multi Select"
+                                disabled={char.type !== "category"}
+                                onClick={() => updateCharacteristic(char.id, { multiSelect: !char.multiSelect })}
+                              />
+                              <SettingTooltip setting="multiSelect" />
+                            </div>
+                            <div className="flex items-center gap-1">
+                              <SettingToggle
+                                active={char.adminOnly}
+                                label="Admin Only"
+                                onClick={() => updateCharacteristic(char.id, { adminOnly: !char.adminOnly })}
+                              />
+                              <SettingTooltip setting="adminOnly" />
+                            </div>
+                          </div>
+                          <div className="space-y-2">
+                            <div className="flex items-center gap-2">
+                              <Checkbox
+                                id={`all-grades-${char.id}`}
+                                checked={char.applyToAllGrades}
+                                onCheckedChange={(checked) =>
+                                  updateCharacteristic(char.id, {
+                                    applyToAllGrades: checked === true,
+                                    applicableGrades: checked === true ? [] : char.applicableGrades,
+                                  })
+                                }
+                              />
+                              <Label htmlFor={`all-grades-${char.id}`} className="text-sm font-normal">
+                                Apply to All Current Grades
+                              </Label>
+                            </div>
+                            {!char.applyToAllGrades && (
+                              <div className="flex flex-wrap gap-2 pl-6">
+                                {gradeOptions.length === 0 ? (
+                                  <span className="text-xs text-muted-foreground">No current grades configured yet.</span>
+                                ) : (
+                                  gradeOptions.map((grade) => {
+                                    const checked = char.applicableGrades.map(normalizeGradeLabel).includes(grade);
+                                    return (
+                                      <Button
+                                        key={grade}
+                                        type="button"
+                                        variant={checked ? "default" : "outline"}
+                                        size="sm"
+                                        className="h-7"
+                                        onClick={() => toggleApplicableGrade(char, grade)}
+                                        aria-pressed={checked}
+                                      >
+                                        Grade {grade}
+                                      </Button>
+                                    );
+                                  })
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        </div>
                       </div>
                       <div className="space-y-2">
                         <Label>Type</Label>
@@ -360,6 +536,7 @@ export default function CharacteristicsPage() {
                             updateCharacteristic(char.id, {
                               type: value,
                               responseConfig: value === "category" ? char.responseConfig : [],
+                              multiSelect: value === "category" ? char.multiSelect : false,
                             })
                           }
                         >

@@ -33,9 +33,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
-import { normalizeResponses } from "@shared/characteristics";
+import { characteristicValueToArray, formatCharacteristicValue, isCharacteristicApplicableToGrade, normalizeResponses } from "@shared/characteristics";
 import type { Student, InsertStudent, Characteristic, ClassConfig, CharacteristicResponse } from "@shared/schema";
 
 type SortField = "firstName" | "lastName" | "grade" | "currentClass";
@@ -183,8 +184,8 @@ export default function StudentsPage() {
     return lookup;
   }, [characteristics]);
 
-  const getCharacteristics = (student: Student): Record<string, string> =>
-    (student.characteristics || {}) as Record<string, string>;
+  const getCharacteristics = (student: Student): Record<string, string | string[]> =>
+    (student.characteristics || {}) as Record<string, string | string[]>;
 
   const formatGrade = (grade?: string | null) => {
     if (!grade) return "—";
@@ -195,13 +196,16 @@ export default function StudentsPage() {
     (grade || "").replace(/^grade\s+/i, "").trim();
 
   const getStudentDisplayId = (student: Student) =>
-    student.studentId || getCharacteristics(student).studentId || "—";
+    student.studentId || formatCharacteristicValue(getCharacteristics(student).studentId) || "—";
 
   const getNewGrade = (student: Student) =>
-    getCharacteristics(student).newGrade || "—";
+    formatCharacteristicValue(getCharacteristics(student).newGrade) || "—";
+
+  const getRawCharacteristicValue = (student: Student, name: string) =>
+    getCharacteristics(student)[name];
 
   const getCharacteristicValue = (student: Student, name: string) =>
-    getCharacteristics(student)[name] || "—";
+    formatCharacteristicValue(getRawCharacteristicValue(student, name)) || "—";
 
   const getRequestsTotal = (student: Student) =>
     [student.parentRequests, student.parentNotes].filter((value) => value && value.trim()).length;
@@ -221,7 +225,7 @@ export default function StudentsPage() {
   ]);
 
   const newGradeOptions = uniqueOptions([
-    ...students.map((student) => getCharacteristics(student).newGrade),
+    ...students.map((student) => getNewGrade(student)).filter((value) => value !== "—"),
     ...classConfigs.map((config) => config.grade),
     ...staticGrades,
   ]);
@@ -282,7 +286,7 @@ export default function StudentsPage() {
     setInlineDraft("");
   };
 
-  const updateCharacteristicData = (student: Student, name: string, value: string): Partial<InsertStudent> => ({
+  const updateCharacteristicData = (student: Student, name: string, value: string | string[]): Partial<InsertStudent> => ({
     characteristics: {
       ...getCharacteristics(student),
       [name]: value,
@@ -407,6 +411,64 @@ export default function StudentsPage() {
           })}
         </SelectContent>
       </Select>
+    );
+  };
+
+  const renderMultiSelectCell = (
+    student: Student,
+    key: string,
+    value: string | string[] | undefined,
+    options: string[],
+    buildData: (value: string[]) => Partial<InsertStudent>,
+    responses?: Map<string, CharacteristicResponse>,
+  ) => {
+    const keyForCell = cellKey(student, key);
+    const isSaving = savingCellKey === keyForCell;
+    const selectedValues = characteristicValueToArray(value);
+    const allOptions = uniqueOptions([...selectedValues, ...options]);
+    const displayValue = selectedValues.length > 0 ? selectedValues.join(", ") : "—";
+
+    const toggleValue = (option: string) => {
+      const next = selectedValues.includes(option)
+        ? selectedValues.filter((value) => value !== option)
+        : [...selectedValues, option];
+      void saveInlineUpdate(student, key, buildData(next));
+    };
+
+    return (
+      <Popover>
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            disabled={isSaving || allOptions.length === 0}
+            className="flex h-8 min-w-32 max-w-56 items-center gap-1.5 truncate rounded-sm text-left hover:bg-muted/60 focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-60"
+            title="Select values"
+          >
+            {selectedValues.slice(0, 3).map((selected) => {
+              const response = responses?.get(selected);
+              return response ? (
+                <span key={selected} className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: response.color }} />
+              ) : null;
+            })}
+            <span className="truncate">{isSaving ? "Saving…" : displayValue}</span>
+          </button>
+        </PopoverTrigger>
+        <PopoverContent className="w-56" align="start">
+          <div className="space-y-2">
+            <p className="text-sm font-medium">Select responses</p>
+            {allOptions.map((option) => {
+              const response = responses?.get(option);
+              return (
+                <label key={option} className="flex cursor-pointer items-center gap-2 rounded-sm p-1 text-sm hover:bg-muted">
+                  <Checkbox checked={selectedValues.includes(option)} onCheckedChange={() => toggleValue(option)} />
+                  {response && <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: response.color }} />}
+                  <span>{option}</span>
+                </label>
+              );
+            })}
+          </div>
+        </PopoverContent>
+      </Popover>
     );
   };
 
@@ -853,26 +915,39 @@ export default function StudentsPage() {
                         const responses = responseLookup.get(char.name);
                         const options = responses ? Array.from(responses.keys()) : char.options || [];
                         const isNumeric = char.type === "scale" || char.type === "percentage";
+                        const isApplicable = isCharacteristicApplicableToGrade(char, student.grade);
+                        const rawValue = getRawCharacteristicValue(student, char.name);
                         return (
                           <TableCell key={char.id} className="whitespace-nowrap">
-                            {char.type === "category" && options.length > 0
-                              ? renderSelectCell(
-                                  student,
-                                  `characteristic:${char.name}`,
-                                  getCharacteristicValue(student, char.name),
-                                  options,
-                                  (value) => updateCharacteristicData(student, char.name, value),
-                                  responses,
-                                )
-                              : renderTextCell(
-                                  student,
-                                  `characteristic:${char.name}:${char.type}`,
-                                  getCharacteristicValue(student, char.name),
-                                  (value) => updateCharacteristicData(student, char.name, value),
-                                  false,
-                                  "whitespace-nowrap",
-                                  isNumeric ? "number" : "text",
-                                )}
+                            {!isApplicable
+                              ? <span className="text-muted-foreground">—</span>
+                              : char.type === "category" && options.length > 0 && char.multiSelect
+                                ? renderMultiSelectCell(
+                                    student,
+                                    `characteristic:${char.name}`,
+                                    rawValue,
+                                    options,
+                                    (value) => updateCharacteristicData(student, char.name, value),
+                                    responses,
+                                  )
+                                : char.type === "category" && options.length > 0
+                                  ? renderSelectCell(
+                                      student,
+                                      `characteristic:${char.name}`,
+                                      getCharacteristicValue(student, char.name),
+                                      options,
+                                      (value) => updateCharacteristicData(student, char.name, value),
+                                      responses,
+                                    )
+                                  : renderTextCell(
+                                      student,
+                                      `characteristic:${char.name}:${char.type}`,
+                                      getCharacteristicValue(student, char.name),
+                                      (value) => updateCharacteristicData(student, char.name, value),
+                                      false,
+                                      "whitespace-nowrap",
+                                      isNumeric ? "number" : "text",
+                                    )}
                           </TableCell>
                         );
                       })}
@@ -993,18 +1068,49 @@ export default function StudentsPage() {
               <div className="space-y-4">
                 <Label>Characteristics</Label>
                 <div className="grid grid-cols-2 gap-4">
-                  {formCharacteristicColumns.map((char) => {
+                  {formCharacteristicColumns
+                    .filter((char) => isCharacteristicApplicableToGrade(char, formData.grade))
+                    .map((char) => {
                     const responses = responseLookup.get(char.name);
                     const options = responses ? Array.from(responses.keys()) : char.options || [];
                     const isNumeric = char.type === "scale" || char.type === "percentage";
-                    const selectedValue = (formData.characteristics as Record<string, string>)?.[char.name] || "";
+                    const rawSelectedValue = ((formData.characteristics || {}) as Record<string, string | string[]>)[char.name];
+                    const selectedValues = characteristicValueToArray(rawSelectedValue);
+                    const selectedValue = selectedValues[0] || "";
                     const selectedResponse = responses?.get(selectedValue);
                     return (
                       <div key={char.id} className="space-y-2">
                         <Label htmlFor={char.id} className="text-sm text-muted-foreground">
                           {char.name}
                         </Label>
-                        {char.type === "category" && options.length > 0 ? (
+                        {char.type === "category" && options.length > 0 && char.multiSelect ? (
+                          <div className="space-y-2 rounded-md border p-2">
+                            {options.map((option) => {
+                              const response = responses?.get(option);
+                              return (
+                                <label key={option} className="flex cursor-pointer items-center gap-2 text-sm">
+                                  <Checkbox
+                                    checked={selectedValues.includes(option)}
+                                    onCheckedChange={(checked) => {
+                                      const next = checked === true
+                                        ? Array.from(new Set([...selectedValues, option]))
+                                        : selectedValues.filter((value) => value !== option);
+                                      setFormData({
+                                        ...formData,
+                                        characteristics: {
+                                          ...formData.characteristics,
+                                          [char.name]: next,
+                                        },
+                                      });
+                                    }}
+                                  />
+                                  {response && <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: response.color }} />}
+                                  <span>{option}</span>
+                                </label>
+                              );
+                            })}
+                          </div>
+                        ) : char.type === "category" && options.length > 0 ? (
                           <Select
                             value={selectedValue || undefined}
                             onValueChange={(value) =>
@@ -1051,7 +1157,7 @@ export default function StudentsPage() {
                             type={isNumeric ? "number" : "text"}
                             min={isNumeric ? 0 : undefined}
                             max={char.type === "percentage" ? 100 : undefined}
-                            value={(formData.characteristics as Record<string, string>)?.[char.name] || ""}
+                            value={selectedValue}
                             onChange={(e) =>
                               setFormData({
                                 ...formData,

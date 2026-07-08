@@ -44,6 +44,7 @@ import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ClipboardCheck, Plus, Trash2, User, Users, UserMinus } from "lucide-react";
+import { isCharacteristicApplicableToGrade } from "@shared/characteristics";
 import type { Student, Characteristic, Survey } from "@shared/schema";
 
 const surveyFormSchema = z.object({
@@ -70,7 +71,7 @@ export default function SurveysPage() {
   });
 
   const { data: characteristics = [] } = useQuery<Characteristic[]>({
-    queryKey: ["/api/characteristics"],
+    queryKey: ["/api/teacher-characteristics"],
   });
 
   const form = useForm<SurveyFormValues>({
@@ -137,6 +138,10 @@ export default function SurveysPage() {
   };
 
   const selectedStudentId = form.watch("studentId");
+  const selectedStudent = students.find((student) => student.id === selectedStudentId);
+  const teacherVisibleCharacteristics = selectedStudent
+    ? characteristics.filter((char) => isCharacteristicApplicableToGrade(char, selectedStudent.grade))
+    : characteristics;
   const otherStudents = students.filter((s) => s.id !== selectedStudentId);
 
   const togglePairWith = (studentId: string) => {
@@ -234,11 +239,11 @@ export default function SurveysPage() {
                     )}
                   />
 
-                  {characteristics.length > 0 && selectedStudentId && (
+                  {teacherVisibleCharacteristics.length > 0 && selectedStudentId && (
                     <div className="space-y-4">
                       <Label className="text-base font-medium">Characteristic Ratings</Label>
                       <div className="grid gap-4">
-                        {characteristics.map((char) => (
+                        {teacherVisibleCharacteristics.map((char) => (
                           <div key={char.id} className="space-y-2">
                             <Label>{char.name}</Label>
                             {char.type === "category" && char.options && char.options.length > 0 ? (
