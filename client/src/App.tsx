@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Switch, Route, Link, useLocation } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider, useQuery } from "@tanstack/react-query";
@@ -11,11 +11,12 @@ import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
-import { Settings, HelpCircle, LogOut } from "lucide-react";
+import { BookOpen, HelpCircle, LayoutDashboard, LogOut, Settings } from "lucide-react";
 import { cn } from "@/lib/utils";
 import logoImage from "@assets/ChatGPT_Image_Dec_8,_2025,_01_03_50_PM_1765191843507.png";
 
 import NotFound from "@/pages/not-found";
+import DashboardPage from "@/pages/dashboard";
 import StudentsPage from "@/pages/students";
 import RulesPage from "@/pages/rules";
 import CharacteristicsPage from "@/pages/characteristics";
@@ -28,13 +29,26 @@ import TeachersPage from "@/pages/teachers";
 import LandingPage from "@/pages/landing";
 import SettingsPage from "@/pages/settings";
 import HelpPage from "@/pages/help";
+import TutorialsPage from "@/pages/tutorials";
 
 import type { Student, Placement, ClassConfig } from "@shared/schema";
+
+function RedirectToDashboard() {
+  const [, setLocation] = useLocation();
+
+  useEffect(() => {
+    setLocation("/dashboard");
+  }, [setLocation]);
+
+  return null;
+}
 
 function AuthenticatedRouter() {
   return (
     <Switch>
-      <Route path="/" component={StudentsPage} />
+      <Route path="/" component={RedirectToDashboard} />
+      <Route path="/dashboard" component={DashboardPage} />
+      <Route path="/students" component={StudentsPage} />
       <Route path="/teachers" component={TeachersPage} />
       <Route path="/rules" component={RulesPage} />
       <Route path="/characteristics" component={CharacteristicsPage} />
@@ -44,6 +58,7 @@ function AuthenticatedRouter() {
       <Route path="/sociogram" component={SociogramPage} />
       <Route path="/scenarios" component={ScenariosPage} />
       <Route path="/settings" component={SettingsPage} />
+      <Route path="/tutorials" component={TutorialsPage} />
       <Route path="/help" component={HelpPage} />
       <Route component={NotFound} />
     </Switch>
@@ -66,7 +81,8 @@ function TopNavigation() {
   const { user } = useAuth();
 
   const navItems = [
-    { label: "Students", href: "/" },
+    { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
+    { label: "Students", href: "/students" },
     { label: "Teachers", href: "/teachers" },
     { label: "Requests", href: "/rules" },
     { label: "Classes", href: "/generate" },
@@ -75,6 +91,7 @@ function TopNavigation() {
 
   const rightNavItems = [
     { label: "Settings", href: "/settings", icon: Settings },
+    { label: "Tutorials", href: "/tutorials", icon: BookOpen },
     { label: "Help", href: "/help", icon: HelpCircle },
   ];
 
@@ -95,7 +112,7 @@ function TopNavigation() {
   return (
     <header className="flex items-center justify-between gap-4 px-4 py-3 border-b sticky top-0 z-50 bg-background">
       <nav className="flex items-center gap-1">
-        <Link href="/">
+        <Link href="/dashboard">
           <div className="flex items-center gap-2 mr-4 cursor-pointer">
             <img src={logoImage} alt="ShuffleSchool Logo" className="h-7 w-7 rounded-md object-contain" />
             <span className="font-semibold hidden sm:inline">ShuffleSchool</span>
