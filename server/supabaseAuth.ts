@@ -35,6 +35,12 @@ function bearerTokenFrom(req: Parameters<RequestHandler>[0]): string | undefined
   return token;
 }
 
+async function verifySupabaseToken(token: string): Promise<SupabaseUser | undefined> {
+  const { data, error } = await supabase.auth.getUser(token);
+  if (error || !data.user) return undefined;
+  return data.user;
+}
+
 async function resolveSupabaseAccountContext(userId: string): Promise<AccountContext | undefined> {
   const [membership] = await db
     .select({
@@ -56,22 +62,36 @@ async function resolveSupabaseAccountContext(userId: string): Promise<AccountCon
   };
 }
 
+export const requireSupabaseUser: RequestHandler = async (req, res, next) => {
+  const token = bearerTokenFrom(req);
+  if (!token) return res.status(401).json({ message: "Supabase access token is required" });
+
+  try {
+    const user = await verifySupabaseToken(token);
+    if (!user) return res.status(401).json({ message: "Invalid Supabase access token" });
+    req.supabaseUser = user;
+    return next();
+  } catch (error) {
+    return res.status(401).json({ message: "Failed to verify Supabase access token" });
+  }
+};
+
 export const authenticateSupabaseJwt: RequestHandler = async (req, res, next) => {
   const token = bearerTokenFrom(req);
   if (!token) return next();
 
   try {
-    const { data, error } = await supabase.auth.getUser(token);
-    if (error || !data.user) {
+    const user = await verifySupabaseToken(token);
+    if (!user) {
       return res.status(401).json({ message: "Invalid Supabase access token" });
     }
 
-    const accountContext = await resolveSupabaseAccountContext(data.user.id);
+    const accountContext = await resolveSupabaseAccountContext(user.id);
     if (!accountContext) {
       return res.status(403).json({ message: "No active account membership found" });
     }
 
-    req.supabaseUser = data.user;
+    req.supabaseUser = user;
     req.supabaseAccountContext = accountContext;
     return next();
   } catch (error) {
