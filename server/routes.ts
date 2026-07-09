@@ -29,6 +29,16 @@ export async function registerRoutes(
   app: Express
 ): Promise<Server> {
   const accountIdFor = (req: Express.Request) => getAccountContext(req).accountId;
+  const isDemoWorkspace = (req: Express.Request) => getAccountContext(req).workspaceMode === "demo";
+  const blockDemoWorkspace = (req: Express.Request, res: any, action: string) => {
+    if (!isDemoWorkspace(req)) return false;
+    res.status(403).json({ error: `${action} is disabled in demo workspaces` });
+    return true;
+  };
+  const hasAnyField = (body: unknown, fields: string[]) => {
+    if (!body || typeof body !== "object") return false;
+    return fields.some((field) => Object.prototype.hasOwnProperty.call(body, field));
+  };
 
   // Setup authentication
   await setupAuth(app);
@@ -80,6 +90,9 @@ export async function registerRoutes(
   });
 
   app.patch("/api/students/:id", isAuthenticated, async (req, res) => {
+    if (isDemoWorkspace(req) && hasAnyField(req.body, ["firstName", "lastName", "studentId"])) {
+      return res.status(403).json({ error: "Student identity fields are disabled in demo workspaces" });
+    }
     const student = await storage.updateStudent(accountIdFor(req), req.params.id, req.body);
     if (!student) {
       return res.status(404).json({ error: "Student not found" });
@@ -88,6 +101,12 @@ export async function registerRoutes(
   });
 
   app.delete("/api/students/:id", isAuthenticated, async (req, res) => {
+    if (isDemoWorkspace(req)) {
+      const existingStudents = await storage.getStudents(accountIdFor(req));
+      if (existingStudents.length <= 1) {
+        return res.status(403).json({ error: "Deleting all students is disabled in demo workspaces" });
+      }
+    }
     const deleted = await storage.deleteStudent(accountIdFor(req), req.params.id);
     if (!deleted) {
       return res.status(404).json({ error: "Student not found" });
@@ -96,6 +115,7 @@ export async function registerRoutes(
   });
 
   app.post("/api/students/bulk-import", isAuthenticated, async (req, res) => {
+    if (blockDemoWorkspace(req, res, "Student import")) return;
     try {
       const { students } = req.body;
       if (!Array.isArray(students)) {
@@ -196,6 +216,7 @@ export async function registerRoutes(
   });
 
   app.delete("/api/students", isAuthenticated, async (req, res) => {
+    if (blockDemoWorkspace(req, res, "Deleting all students")) return;
     await storage.deleteAllStudents(accountIdFor(req));
     res.status(204).send();
   });
@@ -205,6 +226,13 @@ export async function registerRoutes(
       const { ids } = req.body;
       if (!Array.isArray(ids)) {
         return res.status(400).json({ error: "ids must be an array" });
+      }
+      if (isDemoWorkspace(req)) {
+        const existingStudents = await storage.getStudents(accountIdFor(req));
+        const requestedIds = new Set(ids);
+        if (existingStudents.length > 0 && existingStudents.every((student) => requestedIds.has(student.id))) {
+          return res.status(403).json({ error: "Deleting all students is disabled in demo workspaces" });
+        }
       }
       let deletedCount = 0;
       for (const id of ids) {
@@ -979,6 +1007,9 @@ export async function registerRoutes(
   });
 
   app.patch("/api/teachers/:id", isAuthenticated, async (req, res) => {
+    if (isDemoWorkspace(req) && hasAnyField(req.body, ["firstName", "lastName", "email"])) {
+      return res.status(403).json({ error: "Teacher identity fields are disabled in demo workspaces" });
+    }
     const teacher = await storage.updateTeacher(accountIdFor(req), req.params.id, req.body);
     if (!teacher) {
       return res.status(404).json({ error: "Teacher not found" });
@@ -987,6 +1018,12 @@ export async function registerRoutes(
   });
 
   app.delete("/api/teachers/:id", isAuthenticated, async (req, res) => {
+    if (isDemoWorkspace(req)) {
+      const existingTeachers = await storage.getTeachers(accountIdFor(req));
+      if (existingTeachers.length <= 1) {
+        return res.status(403).json({ error: "Deleting all teachers is disabled in demo workspaces" });
+      }
+    }
     const deleted = await storage.deleteTeacher(accountIdFor(req), req.params.id);
     if (!deleted) {
       return res.status(404).json({ error: "Teacher not found" });
@@ -995,6 +1032,7 @@ export async function registerRoutes(
   });
 
   app.post("/api/teachers/bulk-import", isAuthenticated, async (req, res) => {
+    if (blockDemoWorkspace(req, res, "Teacher import")) return;
     try {
       const { teachers } = req.body;
       if (!Array.isArray(teachers)) {
@@ -1012,6 +1050,13 @@ export async function registerRoutes(
       const { ids } = req.body;
       if (!Array.isArray(ids)) {
         return res.status(400).json({ error: "ids must be an array" });
+      }
+      if (isDemoWorkspace(req)) {
+        const existingTeachers = await storage.getTeachers(accountIdFor(req));
+        const requestedIds = new Set(ids);
+        if (existingTeachers.length > 0 && existingTeachers.every((teacher) => requestedIds.has(teacher.id))) {
+          return res.status(403).json({ error: "Deleting all teachers is disabled in demo workspaces" });
+        }
       }
       let deletedCount = 0;
       for (const id of ids) {
