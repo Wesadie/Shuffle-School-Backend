@@ -34,7 +34,7 @@ export async function resolveAccountContext(): Promise<AccountContext> {
 
 export const attachAccountContext: RequestHandler = async (req, res, next) => {
   try {
-    const context = await resolveAccountContext();
+    const context = req.supabaseAccountContext ?? await resolveAccountContext();
     req.accountContext = context;
     runWithAccountContext(context, next);
   } catch (error) {

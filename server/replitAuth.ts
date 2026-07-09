@@ -175,6 +175,11 @@ export async function setupAuth(app: Express) {
 export const isAuthenticated: RequestHandler = async (req, res, next) => {
   console.log("[auth] authentication middleware entered");
 
+  if (req.supabaseUser && req.supabaseAccountContext) {
+    console.log("[auth] authentication middleware completed: Supabase authenticated");
+    return next();
+  }
+
   // In no-auth mode, allow everything
   if (!hasReplitAuthConfig) {
     return devIsAuthenticated(req, res, next);

@@ -3,6 +3,7 @@ import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { setupAuth, isAuthenticated } from "./replitAuth";
 import { attachAccountContext, getAccountContext } from "./accountContext";
+import { authenticateSupabaseJwt } from "./supabaseAuth";
 import {
   insertStudentSchema,
   insertRuleSchema,
@@ -42,11 +43,18 @@ export async function registerRoutes(
 
   // Setup authentication
   await setupAuth(app);
-  app.use("/api", isAuthenticated, attachAccountContext);
+  app.use("/api", authenticateSupabaseJwt, isAuthenticated, attachAccountContext);
 
   // Auth routes
   app.get('/api/auth/user', async (req: any, res) => {
     try {
+      if (req.supabaseUser) {
+        return res.json({
+          id: req.supabaseUser.id,
+          email: req.supabaseUser.email,
+          accountContext: req.accountContext,
+        });
+      }
       const userId = req.user.claims.sub;
       const user = await storage.getUser(userId);
       res.json(user);
