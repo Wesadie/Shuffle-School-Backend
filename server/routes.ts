@@ -2,7 +2,7 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { setupAuth, isAuthenticated } from "./replitAuth";
-import { attachAccountContext } from "./accountContext";
+import { attachAccountContext, getAccountContext } from "./accountContext";
 import {
   insertStudentSchema,
   insertRuleSchema,
@@ -28,6 +28,8 @@ export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
+  const accountIdFor = (req: Express.Request) => getAccountContext(req).accountId;
+
   // Setup authentication
   await setupAuth(app);
   app.use("/api", isAuthenticated, attachAccountContext);
@@ -45,10 +47,10 @@ export async function registerRoutes(
   });
 
   // Students CRUD (protected)
-  app.get("/api/students", isAuthenticated, async (_req, res) => {
+  app.get("/api/students", isAuthenticated, async (req, res) => {
     console.log("[api/students] request entered GET /api/students");
     try {
-      const students = await storage.getStudents();
+      const students = await storage.getStudents(accountIdFor(req));
       console.log(`[api/students] request completed with row count: ${students.length}`);
       res.json(students);
     } catch (error) {
@@ -60,7 +62,7 @@ export async function registerRoutes(
   });
 
   app.get("/api/students/:id", isAuthenticated, async (req, res) => {
-    const student = await storage.getStudent(req.params.id);
+    const student = await storage.getStudent(accountIdFor(req), req.params.id);
     if (!student) {
       return res.status(404).json({ error: "Student not found" });
     }
@@ -70,7 +72,7 @@ export async function registerRoutes(
   app.post("/api/students", isAuthenticated, async (req, res) => {
     try {
       const data = insertStudentSchema.parse(req.body);
-      const student = await storage.createStudent(data);
+      const student = await storage.createStudent(accountIdFor(req), data);
       res.status(201).json(student);
     } catch (error) {
       res.status(400).json({ error: "Invalid student data" });
@@ -78,7 +80,7 @@ export async function registerRoutes(
   });
 
   app.patch("/api/students/:id", isAuthenticated, async (req, res) => {
-    const student = await storage.updateStudent(req.params.id, req.body);
+    const student = await storage.updateStudent(accountIdFor(req), req.params.id, req.body);
     if (!student) {
       return res.status(404).json({ error: "Student not found" });
     }
@@ -86,7 +88,7 @@ export async function registerRoutes(
   });
 
   app.delete("/api/students/:id", isAuthenticated, async (req, res) => {
-    const deleted = await storage.deleteStudent(req.params.id);
+    const deleted = await storage.deleteStudent(accountIdFor(req), req.params.id);
     if (!deleted) {
       return res.status(404).json({ error: "Student not found" });
     }
@@ -101,7 +103,7 @@ export async function registerRoutes(
       }
       
       const standardFields = ["firstName", "lastName", "grade", "currentClass", "gender", "notes", "parentRequests", "parentNotes"];
-      const existingCharacteristics = await storage.getCharacteristics();
+      const existingCharacteristics = await storage.getCharacteristics(accountIdFor(req));
       const characteristicByName = new Map(existingCharacteristics.map((char) => [char.name, char]));
       const importedValuesByCharacteristic = new Map<string, Set<string>>();
       
@@ -137,7 +139,7 @@ export async function registerRoutes(
                 sortOrder: index + 1,
               }))
             : [];
-          const created = await storage.createCharacteristic({
+          const created = await storage.createCharacteristic(accountIdFor(req), {
             name,
             type,
             options: responseConfig.map((response) => response.name),
@@ -160,7 +162,7 @@ export async function registerRoutes(
               existingResponseNames.add(value);
             }
           }
-          await storage.updateCharacteristic(existing.id, {
+          await storage.updateCharacteristic(accountIdFor(req), existing.id, {
             options: responses.map((response) => response.name),
             responseConfig: responses,
           });
@@ -186,7 +188,7 @@ export async function registerRoutes(
         };
       });
       
-      const result = await storage.bulkImportStudents(processedStudents);
+      const result = await storage.bulkImportStudents(accountIdFor(req), processedStudents);
       res.status(201).json(result);
     } catch (error) {
       res.status(400).json({ error: "Failed to import students" });
@@ -194,7 +196,7 @@ export async function registerRoutes(
   });
 
   app.delete("/api/students", isAuthenticated, async (req, res) => {
-    await storage.deleteAllStudents();
+    await storage.deleteAllStudents(accountIdFor(req));
     res.status(204).send();
   });
 
@@ -206,7 +208,7 @@ export async function registerRoutes(
       }
       let deletedCount = 0;
       for (const id of ids) {
-        const deleted = await storage.deleteStudent(id);
+        const deleted = await storage.deleteStudent(accountIdFor(req), id);
         if (deleted) deletedCount++;
       }
       res.json({ count: deletedCount });
@@ -217,12 +219,12 @@ export async function registerRoutes(
 
   // Rules CRUD (protected)
   app.get("/api/rules", isAuthenticated, async (req, res) => {
-    const rules = await storage.getRules();
+    const rules = await storage.getRules(accountIdFor(req));
     res.json(rules);
   });
 
   app.get("/api/rules/:id", isAuthenticated, async (req, res) => {
-    const rule = await storage.getRule(req.params.id);
+    const rule = await storage.getRule(accountIdFor(req), req.params.id);
     if (!rule) {
       return res.status(404).json({ error: "Rule not found" });
     }
@@ -232,7 +234,7 @@ export async function registerRoutes(
   app.post("/api/rules", isAuthenticated, async (req, res) => {
     try {
       const data = insertRuleSchema.parse(req.body);
-      const rule = await storage.createRule(data);
+      const rule = await storage.createRule(accountIdFor(req), data);
       res.status(201).json(rule);
     } catch (error) {
       res.status(400).json({ error: "Invalid rule data" });
@@ -240,7 +242,7 @@ export async function registerRoutes(
   });
 
   app.patch("/api/rules/:id", isAuthenticated, async (req, res) => {
-    const rule = await storage.updateRule(req.params.id, req.body);
+    const rule = await storage.updateRule(accountIdFor(req), req.params.id, req.body);
     if (!rule) {
       return res.status(404).json({ error: "Rule not found" });
     }
@@ -248,7 +250,7 @@ export async function registerRoutes(
   });
 
   app.delete("/api/rules/:id", isAuthenticated, async (req, res) => {
-    const deleted = await storage.deleteRule(req.params.id);
+    const deleted = await storage.deleteRule(accountIdFor(req), req.params.id);
     if (!deleted) {
       return res.status(404).json({ error: "Rule not found" });
     }
@@ -256,8 +258,8 @@ export async function registerRoutes(
   });
 
   // Characteristics CRUD (protected)
-  app.get("/api/characteristics", isAuthenticated, async (_req, res) => {
-    const characteristicRows = await storage.getCharacteristics();
+  app.get("/api/characteristics", isAuthenticated, async (req, res) => {
+    const characteristicRows = await storage.getCharacteristics(accountIdFor(req));
     res.json(characteristicRows.map((char) => ({
       ...char,
       responseConfig: char.type === "category" ? normalizeResponses(char) : [],
@@ -330,7 +332,7 @@ export async function registerRoutes(
         };
       });
 
-      const saved = await storage.saveCharacteristicSettings(canonicalCharacteristics);
+      const saved = await storage.saveCharacteristicSettings(accountIdFor(req), canonicalCharacteristics);
       res.json(saved.map((char) => ({
         ...char,
         responseConfig: char.type === "category" ? normalizeResponses(char) : [],
@@ -343,8 +345,8 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/teacher-characteristics", isAuthenticated, async (_req, res) => {
-    const characteristicRows = await storage.getCharacteristics();
+  app.get("/api/teacher-characteristics", isAuthenticated, async (req, res) => {
+    const characteristicRows = await storage.getCharacteristics(accountIdFor(req));
     res.json(characteristicRows.filter((char) => !char.adminOnly).map((char) => ({
       ...char,
       responseConfig: char.type === "category" ? normalizeResponses(char) : [],
@@ -353,7 +355,7 @@ export async function registerRoutes(
   });
 
   app.get("/api/characteristics/:id", isAuthenticated, async (req, res) => {
-    const characteristic = await storage.getCharacteristic(req.params.id);
+    const characteristic = await storage.getCharacteristic(accountIdFor(req), req.params.id);
     if (!characteristic) {
       return res.status(404).json({ error: "Characteristic not found" });
     }
@@ -366,13 +368,13 @@ export async function registerRoutes(
 
   app.post("/api/characteristics", isAuthenticated, async (req, res) => {
     try {
-      const existing = await storage.getCharacteristics();
+      const existing = await storage.getCharacteristics(accountIdFor(req));
       if (existing.length >= 50) {
         return res.status(400).json({ error: "A maximum of 50 active characteristics is supported" });
       }
       const data = insertCharacteristicSchema.parse(req.body);
       const responseConfig = data.type === "category" ? normalizeResponses({ id: "new", options: data.options || [], responseConfig: data.responseConfig || [] }) : [];
-      const characteristic = await storage.createCharacteristic({
+      const characteristic = await storage.createCharacteristic(accountIdFor(req), {
         ...data,
         options: data.type === "category" ? responseConfig.map((response) => response.name) : [],
         responseConfig,
@@ -389,7 +391,7 @@ export async function registerRoutes(
   });
 
   app.patch("/api/characteristics/:id", isAuthenticated, async (req, res) => {
-    const characteristic = await storage.updateCharacteristic(req.params.id, req.body);
+    const characteristic = await storage.updateCharacteristic(accountIdFor(req), req.params.id, req.body);
     if (!characteristic) {
       return res.status(404).json({ error: "Characteristic not found" });
     }
@@ -397,7 +399,7 @@ export async function registerRoutes(
   });
 
   app.delete("/api/characteristics/:id", isAuthenticated, async (req, res) => {
-    const deleted = await storage.deleteCharacteristic(req.params.id);
+    const deleted = await storage.deleteCharacteristic(accountIdFor(req), req.params.id);
     if (!deleted) {
       return res.status(404).json({ error: "Characteristic not found" });
     }
@@ -413,9 +415,9 @@ export async function registerRoutes(
       const totalCount = orderedIds.length;
       for (let i = 0; i < orderedIds.length; i++) {
         const priority = totalCount - i;
-        await storage.updateCharacteristic(orderedIds[i], { priority });
+        await storage.updateCharacteristic(accountIdFor(req), orderedIds[i], { priority });
       }
-      const characteristics = await storage.getCharacteristics();
+      const characteristics = await storage.getCharacteristics(accountIdFor(req));
       res.json(characteristics);
     } catch (error) {
       res.status(400).json({ error: "Failed to reorder characteristics" });
@@ -424,12 +426,12 @@ export async function registerRoutes(
 
   // Class Configs CRUD (protected)
   app.get("/api/class-configs", isAuthenticated, async (req, res) => {
-    const configs = await storage.getClassConfigs();
+    const configs = await storage.getClassConfigs(accountIdFor(req));
     res.json(configs);
   });
 
   app.get("/api/class-configs/:id", isAuthenticated, async (req, res) => {
-    const config = await storage.getClassConfig(req.params.id);
+    const config = await storage.getClassConfig(accountIdFor(req), req.params.id);
     if (!config) {
       return res.status(404).json({ error: "Class config not found" });
     }
@@ -439,7 +441,7 @@ export async function registerRoutes(
   app.post("/api/class-configs", isAuthenticated, async (req, res) => {
     try {
       const data = insertClassConfigSchema.parse(req.body);
-      const config = await storage.createClassConfig(data);
+      const config = await storage.createClassConfig(accountIdFor(req), data);
       res.status(201).json(config);
     } catch (error) {
       res.status(400).json({ error: "Invalid class config data" });
@@ -447,7 +449,7 @@ export async function registerRoutes(
   });
 
   app.patch("/api/class-configs/:id", isAuthenticated, async (req, res) => {
-    const config = await storage.updateClassConfig(req.params.id, req.body);
+    const config = await storage.updateClassConfig(accountIdFor(req), req.params.id, req.body);
     if (!config) {
       return res.status(404).json({ error: "Class config not found" });
     }
@@ -455,7 +457,7 @@ export async function registerRoutes(
   });
 
   app.delete("/api/class-configs/:id", isAuthenticated, async (req, res) => {
-    const deleted = await storage.deleteClassConfig(req.params.id);
+    const deleted = await storage.deleteClassConfig(accountIdFor(req), req.params.id);
     if (!deleted) {
       return res.status(404).json({ error: "Class config not found" });
     }
@@ -463,18 +465,18 @@ export async function registerRoutes(
   });
 
   app.delete("/api/class-configs", isAuthenticated, async (req, res) => {
-    await storage.deleteAllClassConfigs();
+    await storage.deleteAllClassConfigs(accountIdFor(req));
     res.status(204).send();
   });
 
   // Placements CRUD (protected)
   app.get("/api/placements", isAuthenticated, async (req, res) => {
-    const placements = await storage.getPlacements();
+    const placements = await storage.getPlacements(accountIdFor(req));
     res.json(placements);
   });
 
   app.get("/api/placements/:id", isAuthenticated, async (req, res) => {
-    const placement = await storage.getPlacement(req.params.id);
+    const placement = await storage.getPlacement(accountIdFor(req), req.params.id);
     if (!placement) {
       return res.status(404).json({ error: "Placement not found" });
     }
@@ -484,7 +486,7 @@ export async function registerRoutes(
   app.post("/api/placements", isAuthenticated, async (req, res) => {
     try {
       const data = insertPlacementSchema.parse(req.body);
-      const placement = await storage.createPlacement(data);
+      const placement = await storage.createPlacement(accountIdFor(req), data);
       res.status(201).json(placement);
     } catch (error) {
       res.status(400).json({ error: "Invalid placement data" });
@@ -492,7 +494,7 @@ export async function registerRoutes(
   });
 
   app.patch("/api/placements/:id", isAuthenticated, async (req, res) => {
-    const placement = await storage.updatePlacement(req.params.id, req.body);
+    const placement = await storage.updatePlacement(accountIdFor(req), req.params.id, req.body);
     if (!placement) {
       return res.status(404).json({ error: "Placement not found" });
     }
@@ -500,7 +502,7 @@ export async function registerRoutes(
   });
 
   app.delete("/api/placements/:id", isAuthenticated, async (req, res) => {
-    const deleted = await storage.deletePlacement(req.params.id);
+    const deleted = await storage.deletePlacement(accountIdFor(req), req.params.id);
     if (!deleted) {
       return res.status(404).json({ error: "Placement not found" });
     }
@@ -508,7 +510,7 @@ export async function registerRoutes(
   });
 
   app.delete("/api/placements", isAuthenticated, async (req, res) => {
-    await storage.deleteAllPlacements();
+    await storage.deleteAllPlacements(accountIdFor(req));
     res.status(204).send();
   });
 
@@ -517,21 +519,21 @@ export async function registerRoutes(
     try {
       const { studentId, targetClassId } = req.body;
       
-      const placements = await storage.getPlacements();
+      const placements = await storage.getPlacements(accountIdFor(req));
       const existingPlacement = placements.find(p => p.studentId === studentId);
       
       if (existingPlacement) {
-        const updated = await storage.updatePlacement(existingPlacement.id, {
+        const updated = await storage.updatePlacement(accountIdFor(req), existingPlacement.id, {
           classId: targetClassId,
         });
         
         // Check for conflicts after move
-        const rules = await storage.getRules();
+        const rules = await storage.getRules(accountIdFor(req));
         const conflicts = await checkConflicts(studentId, targetClassId, rules, placements.filter(p => p.id !== existingPlacement.id).concat(updated!));
         
         res.json({ placement: updated, conflicts });
       } else {
-        const newPlacement = await storage.createPlacement({
+        const newPlacement = await storage.createPlacement(accountIdFor(req), {
           studentId,
           classId: targetClassId,
         });
@@ -547,11 +549,11 @@ export async function registerRoutes(
     try {
       const { grade } = req.body;
       
-      const allStudents = await storage.getStudents();
+      const allStudents = await storage.getStudents(accountIdFor(req));
       const students = grade ? allStudents.filter(s => s.grade === grade) : allStudents;
-      const classConfigs = await storage.getClassConfigs();
-      const rules = await storage.getRules();
-      const characteristics = await storage.getCharacteristics();
+      const classConfigs = await storage.getClassConfigs(accountIdFor(req));
+      const rules = await storage.getRules(accountIdFor(req));
+      const characteristics = await storage.getCharacteristics(accountIdFor(req));
 
       const targetConfigs = grade ? classConfigs.filter(c => c.grade === grade) : classConfigs;
 
@@ -568,7 +570,7 @@ export async function registerRoutes(
       }
 
       // Clear existing placements for regeneration
-      await storage.deleteAllPlacements();
+      await storage.deleteAllPlacements(accountIdFor(req));
 
       // Generate balanced class assignments
       const result = await generateBalancedClasses(students, targetConfigs, rules, characteristics);
@@ -576,7 +578,7 @@ export async function registerRoutes(
       // Save placements
       for (const generatedClass of result.classes) {
         for (const student of generatedClass.students) {
-          await storage.createPlacement({
+          await storage.createPlacement(accountIdFor(req), {
             studentId: student.id,
             classId: generatedClass.classConfig.id,
           });
@@ -593,11 +595,11 @@ export async function registerRoutes(
   // Boost optimization - suggest student swaps to improve balance (protected)
   app.post("/api/boost", isAuthenticated, async (req, res) => {
     try {
-      const placements = await storage.getPlacements();
-      const students = await storage.getStudents();
-      const classConfigs = await storage.getClassConfigs();
-      const characteristics = await storage.getCharacteristics();
-      const rules = await storage.getRules();
+      const placements = await storage.getPlacements(accountIdFor(req));
+      const students = await storage.getStudents(accountIdFor(req));
+      const classConfigs = await storage.getClassConfigs(accountIdFor(req));
+      const characteristics = await storage.getCharacteristics(accountIdFor(req));
+      const rules = await storage.getRules(accountIdFor(req));
 
       if (placements.length === 0) {
         return res.status(400).json({ error: "No placements found. Generate classes first." });
@@ -773,7 +775,7 @@ export async function registerRoutes(
     try {
       const { student1Id, student1NewClassId, student2Id, student2NewClassId } = req.body;
       
-      const placements = await storage.getPlacements();
+      const placements = await storage.getPlacements(accountIdFor(req));
       
       const placement1 = placements.find(p => p.studentId === student1Id);
       const placement2 = placements.find(p => p.studentId === student2Id);
@@ -783,8 +785,8 @@ export async function registerRoutes(
       }
       
       // Update both placements
-      await storage.updatePlacement(placement1.id, { classId: student1NewClassId });
-      await storage.updatePlacement(placement2.id, { classId: student2NewClassId });
+      await storage.updatePlacement(accountIdFor(req), placement1.id, { classId: student1NewClassId });
+      await storage.updatePlacement(accountIdFor(req), placement2.id, { classId: student2NewClassId });
       
       res.json({ success: true });
     } catch (error) {
@@ -794,12 +796,12 @@ export async function registerRoutes(
 
   // Surveys CRUD (protected)
   app.get("/api/surveys", isAuthenticated, async (req, res) => {
-    const surveys = await storage.getSurveys();
+    const surveys = await storage.getSurveys(accountIdFor(req));
     res.json(surveys);
   });
 
   app.get("/api/surveys/:id", isAuthenticated, async (req, res) => {
-    const survey = await storage.getSurvey(req.params.id);
+    const survey = await storage.getSurvey(accountIdFor(req), req.params.id);
     if (!survey) {
       return res.status(404).json({ error: "Survey not found" });
     }
@@ -807,14 +809,14 @@ export async function registerRoutes(
   });
 
   app.get("/api/surveys/student/:studentId", isAuthenticated, async (req, res) => {
-    const surveys = await storage.getSurveysByStudent(req.params.studentId);
+    const surveys = await storage.getSurveysByStudent(accountIdFor(req), req.params.studentId);
     res.json(surveys);
   });
 
   app.post("/api/surveys", isAuthenticated, async (req, res) => {
     try {
       const data = insertSurveySchema.parse(req.body);
-      const survey = await storage.createSurvey(data);
+      const survey = await storage.createSurvey(accountIdFor(req), data);
       res.status(201).json(survey);
     } catch (error) {
       res.status(400).json({ error: "Invalid survey data" });
@@ -822,7 +824,7 @@ export async function registerRoutes(
   });
 
   app.patch("/api/surveys/:id", isAuthenticated, async (req, res) => {
-    const survey = await storage.updateSurvey(req.params.id, req.body);
+    const survey = await storage.updateSurvey(accountIdFor(req), req.params.id, req.body);
     if (!survey) {
       return res.status(404).json({ error: "Survey not found" });
     }
@@ -830,7 +832,7 @@ export async function registerRoutes(
   });
 
   app.delete("/api/surveys/:id", isAuthenticated, async (req, res) => {
-    const deleted = await storage.deleteSurvey(req.params.id);
+    const deleted = await storage.deleteSurvey(accountIdFor(req), req.params.id);
     if (!deleted) {
       return res.status(404).json({ error: "Survey not found" });
     }
@@ -839,12 +841,12 @@ export async function registerRoutes(
 
   // Scenarios CRUD (protected)
   app.get("/api/scenarios", isAuthenticated, async (req, res) => {
-    const scenarios = await storage.getScenarios();
+    const scenarios = await storage.getScenarios(accountIdFor(req));
     res.json(scenarios);
   });
 
   app.get("/api/scenarios/:id", isAuthenticated, async (req, res) => {
-    const scenario = await storage.getScenario(req.params.id);
+    const scenario = await storage.getScenario(accountIdFor(req), req.params.id);
     if (!scenario) {
       return res.status(404).json({ error: "Scenario not found" });
     }
@@ -854,10 +856,10 @@ export async function registerRoutes(
   app.post("/api/scenarios", isAuthenticated, async (req, res) => {
     try {
       // Get current placements and calculate balance metrics
-      const placements = await storage.getPlacements();
-      const students = await storage.getStudents();
-      const classConfigs = await storage.getClassConfigs();
-      const characteristics = await storage.getCharacteristics();
+      const placements = await storage.getPlacements(accountIdFor(req));
+      const students = await storage.getStudents(accountIdFor(req));
+      const classConfigs = await storage.getClassConfigs(accountIdFor(req));
+      const characteristics = await storage.getCharacteristics(accountIdFor(req));
 
       if (placements.length === 0) {
         return res.status(400).json({ error: "No placements found. Generate classes first." });
@@ -906,7 +908,7 @@ export async function registerRoutes(
       };
 
       const data = insertScenarioSchema.parse(scenarioData);
-      const scenario = await storage.createScenario(data);
+      const scenario = await storage.createScenario(accountIdFor(req), data);
       res.status(201).json(scenario);
     } catch (error) {
       console.error("Scenario creation error:", error);
@@ -915,7 +917,7 @@ export async function registerRoutes(
   });
 
   app.delete("/api/scenarios/:id", isAuthenticated, async (req, res) => {
-    const deleted = await storage.deleteScenario(req.params.id);
+    const deleted = await storage.deleteScenario(accountIdFor(req), req.params.id);
     if (!deleted) {
       return res.status(404).json({ error: "Scenario not found" });
     }
@@ -925,7 +927,7 @@ export async function registerRoutes(
   // Restore placements from a scenario (protected)
   app.post("/api/scenarios/:id/restore", isAuthenticated, async (req, res) => {
     try {
-      const scenario = await storage.getScenario(req.params.id);
+      const scenario = await storage.getScenario(accountIdFor(req), req.params.id);
       if (!scenario) {
         return res.status(404).json({ error: "Scenario not found" });
       }
@@ -936,11 +938,11 @@ export async function registerRoutes(
       }
 
       // Clear current placements
-      await storage.deleteAllPlacements();
+      await storage.deleteAllPlacements(accountIdFor(req));
 
       // Restore placements from scenario
       for (const placement of placementsToRestore) {
-        await storage.createPlacement({
+        await storage.createPlacement(accountIdFor(req), {
           studentId: placement.studentId,
           classId: placement.classId,
         });
@@ -954,12 +956,12 @@ export async function registerRoutes(
 
   // Teachers CRUD (protected)
   app.get("/api/teachers", isAuthenticated, async (req, res) => {
-    const teachers = await storage.getTeachers();
+    const teachers = await storage.getTeachers(accountIdFor(req));
     res.json(teachers);
   });
 
   app.get("/api/teachers/:id", isAuthenticated, async (req, res) => {
-    const teacher = await storage.getTeacher(req.params.id);
+    const teacher = await storage.getTeacher(accountIdFor(req), req.params.id);
     if (!teacher) {
       return res.status(404).json({ error: "Teacher not found" });
     }
@@ -969,7 +971,7 @@ export async function registerRoutes(
   app.post("/api/teachers", isAuthenticated, async (req, res) => {
     try {
       const data = insertTeacherSchema.parse(req.body);
-      const teacher = await storage.createTeacher(data);
+      const teacher = await storage.createTeacher(accountIdFor(req), data);
       res.status(201).json(teacher);
     } catch (error) {
       res.status(400).json({ error: "Invalid teacher data" });
@@ -977,7 +979,7 @@ export async function registerRoutes(
   });
 
   app.patch("/api/teachers/:id", isAuthenticated, async (req, res) => {
-    const teacher = await storage.updateTeacher(req.params.id, req.body);
+    const teacher = await storage.updateTeacher(accountIdFor(req), req.params.id, req.body);
     if (!teacher) {
       return res.status(404).json({ error: "Teacher not found" });
     }
@@ -985,7 +987,7 @@ export async function registerRoutes(
   });
 
   app.delete("/api/teachers/:id", isAuthenticated, async (req, res) => {
-    const deleted = await storage.deleteTeacher(req.params.id);
+    const deleted = await storage.deleteTeacher(accountIdFor(req), req.params.id);
     if (!deleted) {
       return res.status(404).json({ error: "Teacher not found" });
     }
@@ -998,7 +1000,7 @@ export async function registerRoutes(
       if (!Array.isArray(teachers)) {
         return res.status(400).json({ error: "teachers must be an array" });
       }
-      const result = await storage.bulkImportTeachers(teachers);
+      const result = await storage.bulkImportTeachers(accountIdFor(req), teachers);
       res.status(201).json(result);
     } catch (error) {
       res.status(400).json({ error: "Failed to import teachers" });
@@ -1013,7 +1015,7 @@ export async function registerRoutes(
       }
       let deletedCount = 0;
       for (const id of ids) {
-        const deleted = await storage.deleteTeacher(id);
+        const deleted = await storage.deleteTeacher(accountIdFor(req), id);
         if (deleted) deletedCount++;
       }
       res.json({ count: deletedCount });
@@ -1025,7 +1027,7 @@ export async function registerRoutes(
   // App Settings routes
   app.get("/api/app-settings", isAuthenticated, async (req, res) => {
     try {
-      const settings = await storage.getAppSettings();
+      const settings = await storage.getAppSettings(accountIdFor(req));
       res.json(settings);
     } catch (error) {
       console.error("Error fetching app settings:", error);
@@ -1035,7 +1037,7 @@ export async function registerRoutes(
 
   app.put("/api/app-settings", isAuthenticated, async (req, res) => {
     try {
-      const settings = await storage.updateAppSettings(req.body);
+      const settings = await storage.updateAppSettings(accountIdFor(req), req.body);
       res.json(settings);
     } catch (error) {
       console.error("Error updating app settings:", error);

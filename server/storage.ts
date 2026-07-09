@@ -30,7 +30,6 @@ import {
   scenarios,
   users,
   appSettings,
-  DEVELOPMENT_ACCOUNT_ID,
 } from "@shared/schema";
 import { db, pool } from "./db";
 import { and, eq, inArray } from "drizzle-orm";
@@ -50,6 +49,13 @@ export interface CharacteristicSettingsInput {
   applicableGrades: string[];
 }
 
+function requireAccountId(accountId: string): string {
+  if (!accountId) {
+    throw new Error("Account ID is required for school-owned storage operations");
+  }
+  return accountId;
+}
+
 export class DatabaseStorage {
   async getUser(id: string): Promise<User | undefined> {
     const [user] = await db.select().from(users).where(eq(users.id, id));
@@ -65,51 +71,42 @@ export class DatabaseStorage {
     return user;
   }
 
-  async getStudents(accountId = DEVELOPMENT_ACCOUNT_ID): Promise<Student[]> {
-    const rows = await db.select().from(students).where(eq(students.accountId, accountId));
-    return rows;
+  async getStudents(accountId: string): Promise<Student[]> {
+    accountId = requireAccountId(accountId);
+    return await db.select().from(students).where(eq(students.accountId, accountId));
   }
 
-  async getStudent(accountId: string, id?: string): Promise<Student | undefined> {
-    if (!id) { id = accountId; accountId = DEVELOPMENT_ACCOUNT_ID; }
+  async getStudent(accountId: string, id: string): Promise<Student | undefined> {
+    accountId = requireAccountId(accountId);
     const [student] = await db.select().from(students).where(and(eq(students.accountId, accountId), eq(students.id, id)));
     return student || undefined;
   }
 
-  async createStudent(accountId: string | InsertStudent, insertStudent?: InsertStudent): Promise<Student> {
-    if (typeof accountId !== "string") { insertStudent = accountId; accountId = DEVELOPMENT_ACCOUNT_ID; }
-    if (!insertStudent) throw new Error("Student data is required");
+  async createStudent(accountId: string, insertStudent: InsertStudent): Promise<Student> {
+    accountId = requireAccountId(accountId);
     const [student] = await db.insert(students).values({
-      id: randomUUID(),
-      accountId,
-      firstName: insertStudent.firstName,
-      lastName: insertStudent.lastName,
-      grade: insertStudent.grade,
-      currentClass: insertStudent.currentClass ?? null,
-      gender: insertStudent.gender ?? null,
-      characteristics: insertStudent.characteristics ?? {},
-      notes: insertStudent.notes ?? null,
-      parentRequests: insertStudent.parentRequests ?? null,
-      parentNotes: insertStudent.parentNotes ?? null,
+      id: randomUUID(), accountId, firstName: insertStudent.firstName, lastName: insertStudent.lastName, grade: insertStudent.grade,
+      currentClass: insertStudent.currentClass ?? null, gender: insertStudent.gender ?? null,
+      characteristics: insertStudent.characteristics ?? {}, notes: insertStudent.notes ?? null,
+      parentRequests: insertStudent.parentRequests ?? null, parentNotes: insertStudent.parentNotes ?? null,
     }).returning();
     return student;
   }
 
-  async updateStudent(accountId: string, id: string | Partial<InsertStudent>, updates?: Partial<InsertStudent>): Promise<Student | undefined> {
-    if (!updates) { updates = id as Partial<InsertStudent>; id = accountId; accountId = DEVELOPMENT_ACCOUNT_ID; }
-    const [updated] = await db.update(students).set(updates).where(and(eq(students.accountId, accountId), eq(students.id, id as string))).returning();
+  async updateStudent(accountId: string, id: string, updates: Partial<InsertStudent>): Promise<Student | undefined> {
+    accountId = requireAccountId(accountId);
+    const [updated] = await db.update(students).set(updates).where(and(eq(students.accountId, accountId), eq(students.id, id))).returning();
     return updated || undefined;
   }
 
-  async deleteStudent(accountId: string, id?: string): Promise<boolean> {
-    if (!id) { id = accountId; accountId = DEVELOPMENT_ACCOUNT_ID; }
+  async deleteStudent(accountId: string, id: string): Promise<boolean> {
+    accountId = requireAccountId(accountId);
     const result = await db.delete(students).where(and(eq(students.accountId, accountId), eq(students.id, id))).returning();
     return result.length > 0;
   }
 
-  async bulkImportStudents(accountId: string | InsertStudent[], studentList?: InsertStudent[]): Promise<{ count: number }> {
-    if (Array.isArray(accountId)) { studentList = accountId; accountId = DEVELOPMENT_ACCOUNT_ID; }
-    if (!studentList) throw new Error("Student list is required");
+  async bulkImportStudents(accountId: string, studentList: InsertStudent[]): Promise<{ count: number }> {
+    accountId = requireAccountId(accountId);
     let count = 0;
     for (const student of studentList) {
       await this.createStudent(accountId, student);
@@ -118,23 +115,24 @@ export class DatabaseStorage {
     return { count };
   }
 
-  async deleteAllStudents(accountId = DEVELOPMENT_ACCOUNT_ID): Promise<void> {
+  async deleteAllStudents(accountId: string): Promise<void> {
+    accountId = requireAccountId(accountId);
     await db.delete(students).where(eq(students.accountId, accountId));
   }
 
-  async getRules(accountId = DEVELOPMENT_ACCOUNT_ID): Promise<Rule[]> {
+  async getRules(accountId: string): Promise<Rule[]> {
+    accountId = requireAccountId(accountId);
     return await db.select().from(rules).where(eq(rules.accountId, accountId));
   }
 
-  async getRule(accountId: string, id?: string): Promise<Rule | undefined> {
-    if (!id) { id = accountId; accountId = DEVELOPMENT_ACCOUNT_ID; }
+  async getRule(accountId: string, id: string): Promise<Rule | undefined> {
+    accountId = requireAccountId(accountId);
     const [rule] = await db.select().from(rules).where(and(eq(rules.accountId, accountId), eq(rules.id, id)));
     return rule || undefined;
   }
 
-  async createRule(accountId: string | InsertRule, insertRule?: InsertRule): Promise<Rule> {
-    if (typeof accountId !== "string") { insertRule = accountId; accountId = DEVELOPMENT_ACCOUNT_ID; }
-    if (!insertRule) throw new Error("Rule data is required");
+  async createRule(accountId: string, insertRule: InsertRule): Promise<Rule> {
+    accountId = requireAccountId(accountId);
     const studentIds = [insertRule.studentId1, insertRule.studentId2];
     const linkedStudents = await db.select({ id: students.id }).from(students).where(and(eq(students.accountId, accountId), inArray(students.id, studentIds)));
     if (linkedStudents.length !== 2) throw new Error("Rule students must belong to the current account");
@@ -142,38 +140,38 @@ export class DatabaseStorage {
     return rule;
   }
 
-  async updateRule(accountId: string, id: string | Partial<InsertRule>, updates?: Partial<InsertRule>): Promise<Rule | undefined> {
-    if (!updates) { updates = id as Partial<InsertRule>; id = accountId; accountId = DEVELOPMENT_ACCOUNT_ID; }
+  async updateRule(accountId: string, id: string, updates: Partial<InsertRule>): Promise<Rule | undefined> {
+    accountId = requireAccountId(accountId);
     if (updates.studentId1 || updates.studentId2) {
-      const existing = await this.getRule(accountId, id as string);
+      const existing = await this.getRule(accountId, id);
       if (!existing) return undefined;
       const studentIds = [updates.studentId1 ?? existing.studentId1, updates.studentId2 ?? existing.studentId2];
       const linkedStudents = await db.select({ id: students.id }).from(students).where(and(eq(students.accountId, accountId), inArray(students.id, studentIds)));
       if (linkedStudents.length !== 2) throw new Error("Rule students must belong to the current account");
     }
-    const [updated] = await db.update(rules).set(updates).where(and(eq(rules.accountId, accountId), eq(rules.id, id as string))).returning();
+    const [updated] = await db.update(rules).set(updates).where(and(eq(rules.accountId, accountId), eq(rules.id, id))).returning();
     return updated || undefined;
   }
 
-  async deleteRule(accountId: string, id?: string): Promise<boolean> {
-    if (!id) { id = accountId; accountId = DEVELOPMENT_ACCOUNT_ID; }
+  async deleteRule(accountId: string, id: string): Promise<boolean> {
+    accountId = requireAccountId(accountId);
     const result = await db.delete(rules).where(and(eq(rules.accountId, accountId), eq(rules.id, id))).returning();
     return result.length > 0;
   }
 
-  async getCharacteristics(accountId = DEVELOPMENT_ACCOUNT_ID): Promise<Characteristic[]> {
+  async getCharacteristics(accountId: string): Promise<Characteristic[]> {
+    accountId = requireAccountId(accountId);
     return await db.select().from(characteristics).where(eq(characteristics.accountId, accountId));
   }
 
-  async getCharacteristic(accountId: string, id?: string): Promise<Characteristic | undefined> {
-    if (!id) { id = accountId; accountId = DEVELOPMENT_ACCOUNT_ID; }
+  async getCharacteristic(accountId: string, id: string): Promise<Characteristic | undefined> {
+    accountId = requireAccountId(accountId);
     const [char] = await db.select().from(characteristics).where(and(eq(characteristics.accountId, accountId), eq(characteristics.id, id)));
     return char || undefined;
   }
 
-  async createCharacteristic(accountId: string | InsertCharacteristic, insertChar?: InsertCharacteristic): Promise<Characteristic> {
-    if (typeof accountId !== "string") { insertChar = accountId; accountId = DEVELOPMENT_ACCOUNT_ID; }
-    if (!insertChar) throw new Error("Characteristic data is required");
+  async createCharacteristic(accountId: string, insertChar: InsertCharacteristic): Promise<Characteristic> {
+    accountId = requireAccountId(accountId);
     const [char] = await db.insert(characteristics).values({
       id: randomUUID(), accountId, name: insertChar.name, type: insertChar.type,
       options: insertChar.options ?? [], responseConfig: insertChar.responseConfig ?? [], priority: insertChar.priority ?? 1,
@@ -183,21 +181,20 @@ export class DatabaseStorage {
     return char;
   }
 
-  async updateCharacteristic(accountId: string, id: string | Partial<InsertCharacteristic>, updates?: Partial<InsertCharacteristic>): Promise<Characteristic | undefined> {
-    if (!updates) { updates = id as Partial<InsertCharacteristic>; id = accountId; accountId = DEVELOPMENT_ACCOUNT_ID; }
-    const [updated] = await db.update(characteristics).set(updates).where(and(eq(characteristics.accountId, accountId), eq(characteristics.id, id as string))).returning();
+  async updateCharacteristic(accountId: string, id: string, updates: Partial<InsertCharacteristic>): Promise<Characteristic | undefined> {
+    accountId = requireAccountId(accountId);
+    const [updated] = await db.update(characteristics).set(updates).where(and(eq(characteristics.accountId, accountId), eq(characteristics.id, id))).returning();
     return updated || undefined;
   }
 
-  async deleteCharacteristic(accountId: string, id?: string): Promise<boolean> {
-    if (!id) { id = accountId; accountId = DEVELOPMENT_ACCOUNT_ID; }
+  async deleteCharacteristic(accountId: string, id: string): Promise<boolean> {
+    accountId = requireAccountId(accountId);
     const result = await db.delete(characteristics).where(and(eq(characteristics.accountId, accountId), eq(characteristics.id, id))).returning();
     return result.length > 0;
   }
 
-  async saveCharacteristicSettings(accountId: string | CharacteristicSettingsInput[], nextCharacteristics?: CharacteristicSettingsInput[]): Promise<Characteristic[]> {
-    if (Array.isArray(accountId)) { nextCharacteristics = accountId; accountId = DEVELOPMENT_ACCOUNT_ID; }
-    if (!nextCharacteristics) throw new Error("Characteristic settings are required");
+  async saveCharacteristicSettings(accountId: string, nextCharacteristics: CharacteristicSettingsInput[]): Promise<Characteristic[]> {
+    accountId = requireAccountId(accountId);
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
@@ -232,52 +229,53 @@ export class DatabaseStorage {
     }
   }
 
-  async getClassConfigs(accountId = DEVELOPMENT_ACCOUNT_ID): Promise<ClassConfig[]> {
+  async getClassConfigs(accountId: string): Promise<ClassConfig[]> {
+    accountId = requireAccountId(accountId);
     return await db.select().from(classConfigs).where(eq(classConfigs.accountId, accountId));
   }
 
-  async getClassConfig(accountId: string, id?: string): Promise<ClassConfig | undefined> {
-    if (!id) { id = accountId; accountId = DEVELOPMENT_ACCOUNT_ID; }
+  async getClassConfig(accountId: string, id: string): Promise<ClassConfig | undefined> {
+    accountId = requireAccountId(accountId);
     const [config] = await db.select().from(classConfigs).where(and(eq(classConfigs.accountId, accountId), eq(classConfigs.id, id)));
     return config || undefined;
   }
 
-  async createClassConfig(accountId: string | InsertClassConfig, insertConfig?: InsertClassConfig): Promise<ClassConfig> {
-    if (typeof accountId !== "string") { insertConfig = accountId; accountId = DEVELOPMENT_ACCOUNT_ID; }
-    if (!insertConfig) throw new Error("Class config data is required");
+  async createClassConfig(accountId: string, insertConfig: InsertClassConfig): Promise<ClassConfig> {
+    accountId = requireAccountId(accountId);
     const [config] = await db.insert(classConfigs).values({ id: randomUUID(), accountId, name: insertConfig.name, grade: insertConfig.grade, capacity: insertConfig.capacity ?? 30 }).returning();
     return config;
   }
 
-  async updateClassConfig(accountId: string, id: string | Partial<InsertClassConfig>, updates?: Partial<InsertClassConfig>): Promise<ClassConfig | undefined> {
-    if (!updates) { updates = id as Partial<InsertClassConfig>; id = accountId; accountId = DEVELOPMENT_ACCOUNT_ID; }
-    const [updated] = await db.update(classConfigs).set(updates).where(and(eq(classConfigs.accountId, accountId), eq(classConfigs.id, id as string))).returning();
+  async updateClassConfig(accountId: string, id: string, updates: Partial<InsertClassConfig>): Promise<ClassConfig | undefined> {
+    accountId = requireAccountId(accountId);
+    const [updated] = await db.update(classConfigs).set(updates).where(and(eq(classConfigs.accountId, accountId), eq(classConfigs.id, id))).returning();
     return updated || undefined;
   }
 
-  async deleteClassConfig(accountId: string, id?: string): Promise<boolean> {
-    if (!id) { id = accountId; accountId = DEVELOPMENT_ACCOUNT_ID; }
+  async deleteClassConfig(accountId: string, id: string): Promise<boolean> {
+    accountId = requireAccountId(accountId);
     const result = await db.delete(classConfigs).where(and(eq(classConfigs.accountId, accountId), eq(classConfigs.id, id))).returning();
     return result.length > 0;
   }
 
-  async deleteAllClassConfigs(accountId = DEVELOPMENT_ACCOUNT_ID): Promise<void> {
+  async deleteAllClassConfigs(accountId: string): Promise<void> {
+    accountId = requireAccountId(accountId);
     await db.delete(classConfigs).where(eq(classConfigs.accountId, accountId));
   }
 
-  async getPlacements(accountId = DEVELOPMENT_ACCOUNT_ID): Promise<Placement[]> {
+  async getPlacements(accountId: string): Promise<Placement[]> {
+    accountId = requireAccountId(accountId);
     return await db.select().from(placements).where(eq(placements.accountId, accountId));
   }
 
-  async getPlacement(accountId: string, id?: string): Promise<Placement | undefined> {
-    if (!id) { id = accountId; accountId = DEVELOPMENT_ACCOUNT_ID; }
+  async getPlacement(accountId: string, id: string): Promise<Placement | undefined> {
+    accountId = requireAccountId(accountId);
     const [placement] = await db.select().from(placements).where(and(eq(placements.accountId, accountId), eq(placements.id, id)));
     return placement || undefined;
   }
 
-  async createPlacement(accountId: string | InsertPlacement, insertPlacement?: InsertPlacement): Promise<Placement> {
-    if (typeof accountId !== "string") { insertPlacement = accountId; accountId = DEVELOPMENT_ACCOUNT_ID; }
-    if (!insertPlacement) throw new Error("Placement data is required");
+  async createPlacement(accountId: string, insertPlacement: InsertPlacement): Promise<Placement> {
+    accountId = requireAccountId(accountId);
     const [student] = await db.select({ id: students.id }).from(students).where(and(eq(students.accountId, accountId), eq(students.id, insertPlacement.studentId)));
     const [config] = await db.select({ id: classConfigs.id }).from(classConfigs).where(and(eq(classConfigs.accountId, accountId), eq(classConfigs.id, insertPlacement.classId)));
     if (!student || !config) throw new Error("Placement references must belong to the current account");
@@ -285,9 +283,9 @@ export class DatabaseStorage {
     return placement;
   }
 
-  async updatePlacement(accountId: string, id: string | Partial<InsertPlacement>, updates?: Partial<InsertPlacement>): Promise<Placement | undefined> {
-    if (!updates) { updates = id as Partial<InsertPlacement>; id = accountId; accountId = DEVELOPMENT_ACCOUNT_ID; }
-    const existing = await this.getPlacement(accountId, id as string);
+  async updatePlacement(accountId: string, id: string, updates: Partial<InsertPlacement>): Promise<Placement | undefined> {
+    accountId = requireAccountId(accountId);
+    const existing = await this.getPlacement(accountId, id);
     if (!existing) return undefined;
     if (updates.studentId) {
       const [student] = await db.select({ id: students.id }).from(students).where(and(eq(students.accountId, accountId), eq(students.id, updates.studentId)));
@@ -297,23 +295,23 @@ export class DatabaseStorage {
       const [config] = await db.select({ id: classConfigs.id }).from(classConfigs).where(and(eq(classConfigs.accountId, accountId), eq(classConfigs.id, updates.classId)));
       if (!config) throw new Error("Placement class must belong to the current account");
     }
-    const [updated] = await db.update(placements).set(updates).where(and(eq(placements.accountId, accountId), eq(placements.id, id as string))).returning();
+    const [updated] = await db.update(placements).set(updates).where(and(eq(placements.accountId, accountId), eq(placements.id, id))).returning();
     return updated || undefined;
   }
 
-  async deletePlacement(accountId: string, id?: string): Promise<boolean> {
-    if (!id) { id = accountId; accountId = DEVELOPMENT_ACCOUNT_ID; }
+  async deletePlacement(accountId: string, id: string): Promise<boolean> {
+    accountId = requireAccountId(accountId);
     const result = await db.delete(placements).where(and(eq(placements.accountId, accountId), eq(placements.id, id))).returning();
     return result.length > 0;
   }
 
-  async deleteAllPlacements(accountId = DEVELOPMENT_ACCOUNT_ID): Promise<void> {
+  async deleteAllPlacements(accountId: string): Promise<void> {
+    accountId = requireAccountId(accountId);
     await db.delete(placements).where(eq(placements.accountId, accountId));
   }
 
-  async bulkCreatePlacements(accountId: string | InsertPlacement[], placementList?: InsertPlacement[]): Promise<{ count: number }> {
-    if (Array.isArray(accountId)) { placementList = accountId; accountId = DEVELOPMENT_ACCOUNT_ID; }
-    if (!placementList) throw new Error("Placement list is required");
+  async bulkCreatePlacements(accountId: string, placementList: InsertPlacement[]): Promise<{ count: number }> {
+    accountId = requireAccountId(accountId);
     let count = 0;
     for (const placement of placementList) {
       await this.createPlacement(accountId, placement);
@@ -322,24 +320,24 @@ export class DatabaseStorage {
     return { count };
   }
 
-  async getSurveys(accountId = DEVELOPMENT_ACCOUNT_ID): Promise<Survey[]> {
+  async getSurveys(accountId: string): Promise<Survey[]> {
+    accountId = requireAccountId(accountId);
     return await db.select().from(surveys).where(eq(surveys.accountId, accountId));
   }
 
-  async getSurvey(accountId: string, id?: string): Promise<Survey | undefined> {
-    if (!id) { id = accountId; accountId = DEVELOPMENT_ACCOUNT_ID; }
+  async getSurvey(accountId: string, id: string): Promise<Survey | undefined> {
+    accountId = requireAccountId(accountId);
     const [survey] = await db.select().from(surveys).where(and(eq(surveys.accountId, accountId), eq(surveys.id, id)));
     return survey || undefined;
   }
 
-  async getSurveysByStudent(accountId: string, studentId?: string): Promise<Survey[]> {
-    if (!studentId) { studentId = accountId; accountId = DEVELOPMENT_ACCOUNT_ID; }
+  async getSurveysByStudent(accountId: string, studentId: string): Promise<Survey[]> {
+    accountId = requireAccountId(accountId);
     return await db.select().from(surveys).where(and(eq(surveys.accountId, accountId), eq(surveys.studentId, studentId)));
   }
 
-  async createSurvey(accountId: string | InsertSurvey, insertSurvey?: InsertSurvey): Promise<Survey> {
-    if (typeof accountId !== "string") { insertSurvey = accountId; accountId = DEVELOPMENT_ACCOUNT_ID; }
-    if (!insertSurvey) throw new Error("Survey data is required");
+  async createSurvey(accountId: string, insertSurvey: InsertSurvey): Promise<Survey> {
+    accountId = requireAccountId(accountId);
     const [student] = await db.select({ id: students.id }).from(students).where(and(eq(students.accountId, accountId), eq(students.id, insertSurvey.studentId)));
     if (!student) throw new Error("Survey student must belong to the current account");
     const referencedIds = [...(insertSurvey.pairWith ?? []), ...(insertSurvey.separateFrom ?? [])];
@@ -351,9 +349,9 @@ export class DatabaseStorage {
     return survey;
   }
 
-  async updateSurvey(accountId: string, id: string | Partial<InsertSurvey>, updates?: Partial<InsertSurvey>): Promise<Survey | undefined> {
-    if (!updates) { updates = id as Partial<InsertSurvey>; id = accountId; accountId = DEVELOPMENT_ACCOUNT_ID; }
-    const existing = await this.getSurvey(accountId, id as string);
+  async updateSurvey(accountId: string, id: string, updates: Partial<InsertSurvey>): Promise<Survey | undefined> {
+    accountId = requireAccountId(accountId);
+    const existing = await this.getSurvey(accountId, id);
     if (!existing) return undefined;
     if (updates.studentId) {
       const [student] = await db.select({ id: students.id }).from(students).where(and(eq(students.accountId, accountId), eq(students.id, updates.studentId)));
@@ -364,72 +362,71 @@ export class DatabaseStorage {
       const linkedStudents = await db.select({ id: students.id }).from(students).where(and(eq(students.accountId, accountId), inArray(students.id, referencedIds)));
       if (linkedStudents.length !== new Set(referencedIds).size) throw new Error("Survey references must belong to the current account");
     }
-    const [updated] = await db.update(surveys).set(updates).where(and(eq(surveys.accountId, accountId), eq(surveys.id, id as string))).returning();
+    const [updated] = await db.update(surveys).set(updates).where(and(eq(surveys.accountId, accountId), eq(surveys.id, id))).returning();
     return updated || undefined;
   }
 
-  async deleteSurvey(accountId: string, id?: string): Promise<boolean> {
-    if (!id) { id = accountId; accountId = DEVELOPMENT_ACCOUNT_ID; }
+  async deleteSurvey(accountId: string, id: string): Promise<boolean> {
+    accountId = requireAccountId(accountId);
     const result = await db.delete(surveys).where(and(eq(surveys.accountId, accountId), eq(surveys.id, id))).returning();
     return result.length > 0;
   }
 
-  async getScenarios(accountId = DEVELOPMENT_ACCOUNT_ID): Promise<Scenario[]> {
+  async getScenarios(accountId: string): Promise<Scenario[]> {
+    accountId = requireAccountId(accountId);
     return await db.select().from(scenarios).where(eq(scenarios.accountId, accountId));
   }
 
-  async getScenario(accountId: string, id?: string): Promise<Scenario | undefined> {
-    if (!id) { id = accountId; accountId = DEVELOPMENT_ACCOUNT_ID; }
+  async getScenario(accountId: string, id: string): Promise<Scenario | undefined> {
+    accountId = requireAccountId(accountId);
     const [scenario] = await db.select().from(scenarios).where(and(eq(scenarios.accountId, accountId), eq(scenarios.id, id)));
     return scenario || undefined;
   }
 
-  async createScenario(accountId: string | InsertScenario, insertScenario?: InsertScenario): Promise<Scenario> {
-    if (typeof accountId !== "string") { insertScenario = accountId; accountId = DEVELOPMENT_ACCOUNT_ID; }
-    if (!insertScenario) throw new Error("Scenario data is required");
+  async createScenario(accountId: string, insertScenario: InsertScenario): Promise<Scenario> {
+    accountId = requireAccountId(accountId);
     await this.validateScenarioPlacements(accountId, insertScenario.placements ?? []);
     const [scenario] = await db.insert(scenarios).values({ id: randomUUID(), accountId, name: insertScenario.name, createdAt: insertScenario.createdAt, placements: insertScenario.placements ?? [], balanceMetrics: insertScenario.balanceMetrics ?? { overallBalance: 0, classBalances: [] } }).returning();
     return scenario;
   }
 
-  async deleteScenario(accountId: string, id?: string): Promise<boolean> {
-    if (!id) { id = accountId; accountId = DEVELOPMENT_ACCOUNT_ID; }
+  async deleteScenario(accountId: string, id: string): Promise<boolean> {
+    accountId = requireAccountId(accountId);
     const result = await db.delete(scenarios).where(and(eq(scenarios.accountId, accountId), eq(scenarios.id, id))).returning();
     return result.length > 0;
   }
 
-  async getTeachers(accountId = DEVELOPMENT_ACCOUNT_ID): Promise<Teacher[]> {
+  async getTeachers(accountId: string): Promise<Teacher[]> {
+    accountId = requireAccountId(accountId);
     return await db.select().from(teachers).where(eq(teachers.accountId, accountId));
   }
 
-  async getTeacher(accountId: string, id?: string): Promise<Teacher | undefined> {
-    if (!id) { id = accountId; accountId = DEVELOPMENT_ACCOUNT_ID; }
+  async getTeacher(accountId: string, id: string): Promise<Teacher | undefined> {
+    accountId = requireAccountId(accountId);
     const [teacher] = await db.select().from(teachers).where(and(eq(teachers.accountId, accountId), eq(teachers.id, id)));
     return teacher || undefined;
   }
 
-  async createTeacher(accountId: string | InsertTeacher, insertTeacher?: InsertTeacher): Promise<Teacher> {
-    if (typeof accountId !== "string") { insertTeacher = accountId; accountId = DEVELOPMENT_ACCOUNT_ID; }
-    if (!insertTeacher) throw new Error("Teacher data is required");
+  async createTeacher(accountId: string, insertTeacher: InsertTeacher): Promise<Teacher> {
+    accountId = requireAccountId(accountId);
     const [teacher] = await db.insert(teachers).values({ id: randomUUID(), accountId, firstName: insertTeacher.firstName, lastName: insertTeacher.lastName, email: insertTeacher.email, currentClass: insertTeacher.currentClass ?? null, allocatedClass: insertTeacher.allocatedClass ?? null, surveyStatus: insertTeacher.surveyStatus ?? "Not Sent", surveyDate: insertTeacher.surveyDate ?? null }).returning();
     return teacher;
   }
 
-  async updateTeacher(accountId: string, id: string | Partial<InsertTeacher>, updates?: Partial<InsertTeacher>): Promise<Teacher | undefined> {
-    if (!updates) { updates = id as Partial<InsertTeacher>; id = accountId; accountId = DEVELOPMENT_ACCOUNT_ID; }
-    const [updated] = await db.update(teachers).set(updates).where(and(eq(teachers.accountId, accountId), eq(teachers.id, id as string))).returning();
+  async updateTeacher(accountId: string, id: string, updates: Partial<InsertTeacher>): Promise<Teacher | undefined> {
+    accountId = requireAccountId(accountId);
+    const [updated] = await db.update(teachers).set(updates).where(and(eq(teachers.accountId, accountId), eq(teachers.id, id))).returning();
     return updated || undefined;
   }
 
-  async deleteTeacher(accountId: string, id?: string): Promise<boolean> {
-    if (!id) { id = accountId; accountId = DEVELOPMENT_ACCOUNT_ID; }
+  async deleteTeacher(accountId: string, id: string): Promise<boolean> {
+    accountId = requireAccountId(accountId);
     const result = await db.delete(teachers).where(and(eq(teachers.accountId, accountId), eq(teachers.id, id))).returning();
     return result.length > 0;
   }
 
-  async bulkImportTeachers(accountId: string | InsertTeacher[], teacherList?: InsertTeacher[]): Promise<{ count: number }> {
-    if (Array.isArray(accountId)) { teacherList = accountId; accountId = DEVELOPMENT_ACCOUNT_ID; }
-    if (!teacherList) throw new Error("Teacher list is required");
+  async bulkImportTeachers(accountId: string, teacherList: InsertTeacher[]): Promise<{ count: number }> {
+    accountId = requireAccountId(accountId);
     let count = 0;
     for (const teacher of teacherList) {
       await this.createTeacher(accountId, teacher);
@@ -438,7 +435,8 @@ export class DatabaseStorage {
     return { count };
   }
 
-  async getAppSettings(accountId = DEVELOPMENT_ACCOUNT_ID): Promise<AppSettings> {
+  async getAppSettings(accountId: string): Promise<AppSettings> {
+    accountId = requireAccountId(accountId);
     const [settings] = await db.select().from(appSettings).where(eq(appSettings.accountId, accountId));
     if (!settings) {
       const [newSettings] = await db.insert(appSettings).values({ id: randomUUID(), accountId, maxFriendNominations: 1, allowTeacherStudentRequests: true, allowTeacherTeacherRequests: true }).returning();
@@ -447,15 +445,15 @@ export class DatabaseStorage {
     return settings;
   }
 
-  async updateAppSettings(accountId: string | Partial<InsertAppSettings>, updates?: Partial<InsertAppSettings>): Promise<AppSettings> {
-    if (typeof accountId !== "string") { updates = accountId; accountId = DEVELOPMENT_ACCOUNT_ID; }
-    if (!updates) throw new Error("Settings updates are required");
+  async updateAppSettings(accountId: string, updates: Partial<InsertAppSettings>): Promise<AppSettings> {
+    accountId = requireAccountId(accountId);
     const current = await this.getAppSettings(accountId);
     const [updated] = await db.update(appSettings).set(updates).where(and(eq(appSettings.accountId, accountId), eq(appSettings.id, current.id))).returning();
     return updated;
   }
 
   private async validateScenarioPlacements(accountId: string, scenarioPlacements: { studentId: string; classId: string }[]): Promise<void> {
+    accountId = requireAccountId(accountId);
     const studentIds = Array.from(new Set(scenarioPlacements.map((placement) => placement.studentId)));
     const classIds = Array.from(new Set(scenarioPlacements.map((placement) => placement.classId)));
     if (studentIds.length) {

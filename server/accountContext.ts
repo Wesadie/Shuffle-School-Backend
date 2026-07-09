@@ -3,6 +3,7 @@ import { DEVELOPMENT_ACCOUNT_ID } from "@shared/schema";
 import { db } from "./db";
 import { accounts } from "@shared/schema";
 import { eq } from "drizzle-orm";
+import { runWithAccountContext } from "./requestAccountContext";
 
 export interface AccountContext {
   accountId: string;
@@ -31,10 +32,11 @@ export async function resolveAccountContext(): Promise<AccountContext> {
   };
 }
 
-export const attachAccountContext: RequestHandler = async (_req, res, next) => {
+export const attachAccountContext: RequestHandler = async (req, res, next) => {
   try {
-    _req.accountContext = await resolveAccountContext();
-    next();
+    const context = await resolveAccountContext();
+    req.accountContext = context;
+    runWithAccountContext(context, next);
   } catch (error) {
     res.status(500).json({ message: "Failed to resolve account context" });
   }
