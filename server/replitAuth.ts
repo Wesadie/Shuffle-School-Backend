@@ -10,6 +10,7 @@ import { storage } from "./storage";
 import memorystore from "memorystore";
 
 const hasReplitAuthConfig = !!process.env.REPL_ID;
+const isProduction = process.env.NODE_ENV === "production";
 const ISSUER_URL = process.env.ISSUER_URL ?? "https://replit.com/oidc";
 
 const getOidcConfig = memoize(
@@ -82,25 +83,26 @@ const devIsAuthenticated: RequestHandler = (_req, _res, next) => {
 export async function setupAuth(app: Express) {
   app.set("trust proxy", 1);
 
-  // If REPL_ID is missing, enable no-auth mode so the app can boot in Replit
+  // If REPL_ID is missing outside production, enable no-auth mode so the app can boot in development.
   if (!hasReplitAuthConfig) {
-    // Still install a session to keep behavior consistent
     app.use(getSession());
 
-    // Minimal auth endpoints for the UI
-    app.get("/api/auth/user", (_req, res) => {
-      res.json({
-        id: "dev-user",
-        email: "dev@example.com",
-        firstName: "Dev",
-        lastName: "User",
-        profileImageUrl: "",
+    if (!isProduction) {
+      // Minimal auth endpoints for the UI
+      app.get("/api/auth/user", (_req, res) => {
+        res.json({
+          id: "dev-user",
+          email: "dev@example.com",
+          firstName: "Dev",
+          lastName: "User",
+          profileImageUrl: "",
+        });
       });
-    });
 
-    // Provide dummy login/logout to avoid 404s
-    app.get("/api/login", (_req, res) => res.redirect("/"));
-    app.get("/api/logout", (_req, res) => res.redirect("/"));
+      // Provide dummy login/logout to avoid 404s
+      app.get("/api/login", (_req, res) => res.redirect("/"));
+      app.get("/api/logout", (_req, res) => res.redirect("/"));
+    }
 
     return; // Skip real OIDC setup
   }
@@ -180,9 +182,13 @@ export const isAuthenticated: RequestHandler = async (req, res, next) => {
     return next();
   }
 
-  // In no-auth mode, allow everything
+  // In no-auth mode, allow everything outside production only.
   if (!hasReplitAuthConfig) {
-    return devIsAuthenticated(req, res, next);
+    if (!isProduction) {
+      return devIsAuthenticated(req, res, next);
+    }
+    console.log("[auth] authentication middleware completed: production auth required");
+    return res.status(401).json({ message: "Unauthorized" });
   }
 
   const user = req.user as any;
