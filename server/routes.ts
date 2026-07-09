@@ -2,6 +2,7 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { setupAuth, isAuthenticated } from "./replitAuth";
+import { attachAccountContext } from "./accountContext";
 import {
   insertStudentSchema,
   insertRuleSchema,
@@ -29,9 +30,10 @@ export async function registerRoutes(
 ): Promise<Server> {
   // Setup authentication
   await setupAuth(app);
+  app.use("/api", isAuthenticated, attachAccountContext);
 
   // Auth routes
-  app.get('/api/auth/user', isAuthenticated, async (req: any, res) => {
+  app.get('/api/auth/user', async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
       const user = await storage.getUser(userId);

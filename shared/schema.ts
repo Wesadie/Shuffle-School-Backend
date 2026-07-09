@@ -24,6 +24,7 @@ export const accounts = pgTable("accounts", {
   slug: text("slug").unique(),
   type: text("type").notNull().default("school"),
   status: text("status").notNull().default("trialing"),
+  workspaceMode: text("workspace_mode").notNull().default("demo"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   createdBy: uuid("created_by"),
