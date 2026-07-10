@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Switch, Route, Link, useLocation } from "wouter";
-import { queryClient } from "./lib/queryClient";
+import { getAuthHeaders, queryClient } from "./lib/queryClient";
 import { QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -186,7 +186,7 @@ function TopNavigation() {
 
 function AppContent() {
   const { toast } = useToast();
-  const { isAuthenticated, isLoading } = useAuth();
+  const { user, isAuthenticated, isLoading } = useAuth();
   const [importOpen, setImportOpen] = useState(false);
   const [location] = useLocation();
 
@@ -221,36 +221,33 @@ function AppContent() {
       return;
     }
 
-    const classMap = new Map(classConfigs.map((c) => [c.id, c.name]));
-    const studentMap = new Map(students.map((s) => [s.id, s]));
-
-    const csvRows = ["First Name,Last Name,Grade,Assigned Class"];
-    
-    placements.forEach((p) => {
-      const student = studentMap.get(p.studentId);
-      const className = classMap.get(p.classId) || "Unassigned";
-      if (student) {
-        csvRows.push(
-          `"${student.firstName}","${student.lastName}","${student.grade}","${className}"`
-        );
+    try {
+      const res = await fetch("/api/exports/class-placements.csv", {
+        credentials: "include",
+        headers: await getAuthHeaders(),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        toast({
+          title: body?.code === "TRIAL_EXPORT_RESTRICTED" ? "Upgrade required" : "Export failed",
+          description: body?.message || "Final exports are not available for this workspace.",
+          variant: "destructive",
+        });
+        return;
       }
-    });
-
-    const csvContent = csvRows.join("\n");
-    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `class-placements-${new Date().toISOString().split("T")[0]}.csv`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-
-    toast({
-      title: "Export complete",
-      description: `Exported ${placements.length} student placements`,
-    });
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `class-placements-${new Date().toISOString().split("T")[0]}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      toast({ title: "Export complete", description: `Exported ${placements.length} student placements` });
+    } catch {
+      toast({ title: "Export failed", variant: "destructive" });
+    }
   };
 
   if (isLoading) {
@@ -265,9 +262,28 @@ function AppContent() {
     return <PublicRouter />;
   }
 
+  const accountContext = user?.accountContext;
+  const trialEndsAt = accountContext?.trialEndsAt ? new Date(accountContext.trialEndsAt) : null;
+  const trialDaysRemaining = trialEndsAt
+    ? Math.max(0, Math.ceil((trialEndsAt.getTime() - Date.now()) / (24 * 60 * 60 * 1000)))
+    : null;
+  const trialUsesRemaining = accountContext?.subscriptionStatus === "trialing"
+    ? Math.max(0, 3 - (accountContext.successfulSolverGenerations || 0))
+    : null;
+
   return (
     <div className="flex flex-col h-screen w-full">
       <TopNavigation />
+      {accountContext?.subscriptionStatus === "trialing" && (
+        <div className={cn(
+          "border-b px-4 py-2 text-sm",
+          accountContext.trialExpired ? "bg-destructive/10 text-destructive" : "bg-primary/10 text-primary"
+        )}>
+          {accountContext.trialExpired
+            ? "Trial expired: this workspace is read-only until you upgrade. Your data is preserved."
+            : `Trial: ${trialDaysRemaining ?? 0} day${trialDaysRemaining === 1 ? "" : "s"} remaining · ${trialUsesRemaining} of 3 solver generations remaining · final exports unlock after upgrade.`}
+        </div>
+      )}
       <main className="flex-1 overflow-auto">
         <AuthenticatedRouter />
       </main>

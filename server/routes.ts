@@ -7,6 +7,13 @@ import { authenticateSupabaseJwt, requireSupabaseUser } from "./supabaseAuth";
 import { onboardSupabaseUser } from "./onboarding";
 import { createAuthHandoff, exchangeAuthHandoff } from "./authHandoff";
 import {
+  requireWritableWorkspace,
+  requireFinalExportAccess,
+  reserveTrialSolverGeneration,
+  releaseTrialSolverGeneration,
+  solverAccessResponse,
+} from "./accessControl";
+import {
   insertStudentSchema,
   insertRuleSchema,
   insertCharacteristicSchema,
@@ -32,7 +39,10 @@ export async function registerRoutes(
   app: Express
 ): Promise<Server> {
   const accountIdFor = (req: Express.Request) => getAccountContext(req).accountId;
-  const isDemoWorkspace = (req: Express.Request) => getAccountContext(req).workspaceMode === "demo";
+  const isDemoWorkspace = (req: Express.Request) => {
+    const context = getAccountContext(req);
+    return context.workspaceMode === "demo" && context.subscriptionStatus !== "trialing" && context.subscriptionStatus !== "active";
+  };
   const blockDemoWorkspace = (req: Express.Request, res: any, action: string) => {
     if (!isDemoWorkspace(req)) return false;
     res.status(403).json({ error: `${action} is disabled in demo workspaces` });
@@ -69,6 +79,38 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/exports/class-placements.csv", isAuthenticated, requireFinalExportAccess, async (req, res) => {
+    const [students, placements, classConfigs] = await Promise.all([
+      storage.getStudents(accountIdFor(req)),
+      storage.getPlacements(accountIdFor(req)),
+      storage.getClassConfigs(accountIdFor(req)),
+    ]);
+    const classMap = new Map(classConfigs.map((c) => [c.id, c.name]));
+    const studentMap = new Map(students.map((s) => [s.id, s]));
+    const csvEscape = (value: unknown) => `"${String(value ?? "").replace(/"/g, '""')}"`;
+    const rows = [["First Name", "Last Name", "Grade", "Assigned Class"].map(csvEscape).join(",")];
+    for (const placement of placements) {
+      const student = studentMap.get(placement.studentId);
+      if (!student) continue;
+      rows.push([student.firstName, student.lastName, student.grade, classMap.get(placement.classId) || "Unassigned"].map(csvEscape).join(","));
+    }
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="class-placements-${new Date().toISOString().split("T")[0]}.csv"`);
+    res.send(rows.join("\n"));
+  });
+
+  app.get("/api/exports/teachers.csv", isAuthenticated, requireFinalExportAccess, async (req, res) => {
+    const teachers = await storage.getTeachers(accountIdFor(req));
+    const csvEscape = (value: unknown) => `"${String(value ?? "").replace(/"/g, '""')}"`;
+    const rows = [["First Name", "Last Name", "Email", "Current Class", "Allocated Class", "Survey Status", "Survey Date"].map(csvEscape).join(",")];
+    for (const teacher of teachers) {
+      rows.push([teacher.firstName, teacher.lastName, teacher.email, teacher.currentClass, teacher.allocatedClass, teacher.surveyStatus, teacher.surveyDate].map(csvEscape).join(","));
+    }
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="teachers-${new Date().toISOString().split("T")[0]}.csv"`);
+    res.send(rows.join("\n"));
+  });
+
   // Students CRUD (protected)
   app.get("/api/students", isAuthenticated, async (req, res) => {
     console.log("[api/students] request entered GET /api/students");
@@ -92,7 +134,7 @@ export async function registerRoutes(
     res.json(student);
   });
 
-  app.post("/api/students", isAuthenticated, async (req, res) => {
+  app.post("/api/students", isAuthenticated, requireWritableWorkspace, async (req, res) => {
     try {
       const data = insertStudentSchema.parse(req.body);
       const student = await storage.createStudent(accountIdFor(req), data);
@@ -102,7 +144,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/students/:id", isAuthenticated, async (req, res) => {
+  app.patch("/api/students/:id", isAuthenticated, requireWritableWorkspace, async (req, res) => {
     if (isDemoWorkspace(req) && hasAnyField(req.body, ["firstName", "lastName", "studentId"])) {
       return res.status(403).json({ error: "Student identity fields are disabled in demo workspaces" });
     }
@@ -113,7 +155,7 @@ export async function registerRoutes(
     res.json(student);
   });
 
-  app.delete("/api/students/:id", isAuthenticated, async (req, res) => {
+  app.delete("/api/students/:id", isAuthenticated, requireWritableWorkspace, async (req, res) => {
     if (isDemoWorkspace(req)) {
       const existingStudents = await storage.getStudents(accountIdFor(req));
       if (existingStudents.length <= 1) {
@@ -127,7 +169,7 @@ export async function registerRoutes(
     res.status(204).send();
   });
 
-  app.post("/api/students/bulk-import", isAuthenticated, async (req, res) => {
+  app.post("/api/students/bulk-import", isAuthenticated, requireWritableWorkspace, async (req, res) => {
     if (blockDemoWorkspace(req, res, "Student import")) return;
     try {
       const { students } = req.body;
@@ -228,13 +270,13 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/students", isAuthenticated, async (req, res) => {
+  app.delete("/api/students", isAuthenticated, requireWritableWorkspace, async (req, res) => {
     if (blockDemoWorkspace(req, res, "Deleting all students")) return;
     await storage.deleteAllStudents(accountIdFor(req));
     res.status(204).send();
   });
 
-  app.post("/api/students/bulk-delete", isAuthenticated, async (req, res) => {
+  app.post("/api/students/bulk-delete", isAuthenticated, requireWritableWorkspace, async (req, res) => {
     try {
       const { ids } = req.body;
       if (!Array.isArray(ids)) {
@@ -272,7 +314,7 @@ export async function registerRoutes(
     res.json(rule);
   });
 
-  app.post("/api/rules", isAuthenticated, async (req, res) => {
+  app.post("/api/rules", isAuthenticated, requireWritableWorkspace, async (req, res) => {
     try {
       const data = insertRuleSchema.parse(req.body);
       const rule = await storage.createRule(accountIdFor(req), data);
@@ -282,7 +324,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/rules/:id", isAuthenticated, async (req, res) => {
+  app.patch("/api/rules/:id", isAuthenticated, requireWritableWorkspace, async (req, res) => {
     const rule = await storage.updateRule(accountIdFor(req), req.params.id, req.body);
     if (!rule) {
       return res.status(404).json({ error: "Rule not found" });
@@ -290,7 +332,7 @@ export async function registerRoutes(
     res.json(rule);
   });
 
-  app.delete("/api/rules/:id", isAuthenticated, async (req, res) => {
+  app.delete("/api/rules/:id", isAuthenticated, requireWritableWorkspace, async (req, res) => {
     const deleted = await storage.deleteRule(accountIdFor(req), req.params.id);
     if (!deleted) {
       return res.status(404).json({ error: "Rule not found" });
@@ -308,7 +350,7 @@ export async function registerRoutes(
     })));
   });
 
-  app.put("/api/characteristics/settings", isAuthenticated, async (req, res) => {
+  app.put("/api/characteristics/settings", isAuthenticated, requireWritableWorkspace, async (req, res) => {
     const responseSchema = z.object({
       id: z.string().min(1),
       name: z.string().trim().min(1),
@@ -407,7 +449,7 @@ export async function registerRoutes(
     });
   });
 
-  app.post("/api/characteristics", isAuthenticated, async (req, res) => {
+  app.post("/api/characteristics", isAuthenticated, requireWritableWorkspace, async (req, res) => {
     try {
       const existing = await storage.getCharacteristics(accountIdFor(req));
       if (existing.length >= 50) {
@@ -431,7 +473,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/characteristics/:id", isAuthenticated, async (req, res) => {
+  app.patch("/api/characteristics/:id", isAuthenticated, requireWritableWorkspace, async (req, res) => {
     const characteristic = await storage.updateCharacteristic(accountIdFor(req), req.params.id, req.body);
     if (!characteristic) {
       return res.status(404).json({ error: "Characteristic not found" });
@@ -439,7 +481,7 @@ export async function registerRoutes(
     res.json(characteristic);
   });
 
-  app.delete("/api/characteristics/:id", isAuthenticated, async (req, res) => {
+  app.delete("/api/characteristics/:id", isAuthenticated, requireWritableWorkspace, async (req, res) => {
     const deleted = await storage.deleteCharacteristic(accountIdFor(req), req.params.id);
     if (!deleted) {
       return res.status(404).json({ error: "Characteristic not found" });
@@ -447,7 +489,7 @@ export async function registerRoutes(
     res.status(204).send();
   });
 
-  app.post("/api/characteristics/reorder", isAuthenticated, async (req, res) => {
+  app.post("/api/characteristics/reorder", isAuthenticated, requireWritableWorkspace, async (req, res) => {
     try {
       const { orderedIds } = req.body;
       if (!Array.isArray(orderedIds)) {
@@ -479,7 +521,7 @@ export async function registerRoutes(
     res.json(config);
   });
 
-  app.post("/api/class-configs", isAuthenticated, async (req, res) => {
+  app.post("/api/class-configs", isAuthenticated, requireWritableWorkspace, async (req, res) => {
     try {
       const data = insertClassConfigSchema.parse(req.body);
       const config = await storage.createClassConfig(accountIdFor(req), data);
@@ -489,7 +531,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/class-configs/:id", isAuthenticated, async (req, res) => {
+  app.patch("/api/class-configs/:id", isAuthenticated, requireWritableWorkspace, async (req, res) => {
     const config = await storage.updateClassConfig(accountIdFor(req), req.params.id, req.body);
     if (!config) {
       return res.status(404).json({ error: "Class config not found" });
@@ -497,7 +539,7 @@ export async function registerRoutes(
     res.json(config);
   });
 
-  app.delete("/api/class-configs/:id", isAuthenticated, async (req, res) => {
+  app.delete("/api/class-configs/:id", isAuthenticated, requireWritableWorkspace, async (req, res) => {
     const deleted = await storage.deleteClassConfig(accountIdFor(req), req.params.id);
     if (!deleted) {
       return res.status(404).json({ error: "Class config not found" });
@@ -505,7 +547,7 @@ export async function registerRoutes(
     res.status(204).send();
   });
 
-  app.delete("/api/class-configs", isAuthenticated, async (req, res) => {
+  app.delete("/api/class-configs", isAuthenticated, requireWritableWorkspace, async (req, res) => {
     await storage.deleteAllClassConfigs(accountIdFor(req));
     res.status(204).send();
   });
@@ -524,7 +566,7 @@ export async function registerRoutes(
     res.json(placement);
   });
 
-  app.post("/api/placements", isAuthenticated, async (req, res) => {
+  app.post("/api/placements", isAuthenticated, requireWritableWorkspace, async (req, res) => {
     try {
       const data = insertPlacementSchema.parse(req.body);
       const placement = await storage.createPlacement(accountIdFor(req), data);
@@ -534,7 +576,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/placements/:id", isAuthenticated, async (req, res) => {
+  app.patch("/api/placements/:id", isAuthenticated, requireWritableWorkspace, async (req, res) => {
     const placement = await storage.updatePlacement(accountIdFor(req), req.params.id, req.body);
     if (!placement) {
       return res.status(404).json({ error: "Placement not found" });
@@ -542,7 +584,7 @@ export async function registerRoutes(
     res.json(placement);
   });
 
-  app.delete("/api/placements/:id", isAuthenticated, async (req, res) => {
+  app.delete("/api/placements/:id", isAuthenticated, requireWritableWorkspace, async (req, res) => {
     const deleted = await storage.deletePlacement(accountIdFor(req), req.params.id);
     if (!deleted) {
       return res.status(404).json({ error: "Placement not found" });
@@ -550,13 +592,13 @@ export async function registerRoutes(
     res.status(204).send();
   });
 
-  app.delete("/api/placements", isAuthenticated, async (req, res) => {
+  app.delete("/api/placements", isAuthenticated, requireWritableWorkspace, async (req, res) => {
     await storage.deleteAllPlacements(accountIdFor(req));
     res.status(204).send();
   });
 
   // Move student (reassign to different class) (protected)
-  app.post("/api/placements/move", isAuthenticated, async (req, res) => {
+  app.post("/api/placements/move", isAuthenticated, requireWritableWorkspace, async (req, res) => {
     try {
       const { studentId, targetClassId } = req.body;
       
@@ -587,6 +629,9 @@ export async function registerRoutes(
 
   // Class generation algorithm (protected)
   app.post("/api/generate-classes", isAuthenticated, async (req, res) => {
+    const context = getAccountContext(req);
+    let reservedTrialUse = false;
+
     try {
       const { grade } = req.body;
       
@@ -610,6 +655,12 @@ export async function registerRoutes(
         return res.status(400).json({ error: "A maximum of 50 active characteristics is supported" });
       }
 
+      const reservation = await reserveTrialSolverGeneration(context);
+      if (reservation === "expired" || reservation === "limit") {
+        return res.status(403).json(solverAccessResponse(reservation));
+      }
+      reservedTrialUse = reservation === "reserved";
+
       // Clear existing placements for regeneration
       await storage.deleteAllPlacements(accountIdFor(req));
 
@@ -626,8 +677,16 @@ export async function registerRoutes(
         }
       }
 
-      res.json(result);
+      res.json({
+        ...result,
+        trial: {
+          successfulSolverGenerations: context.successfulSolverGenerations,
+          solverGenerationsLimit: 3,
+          solverGenerationsRemaining: Math.max(0, 3 - context.successfulSolverGenerations),
+        },
+      });
     } catch (error) {
+      if (reservedTrialUse) await releaseTrialSolverGeneration(context);
       console.error("Generation error:", error);
       res.status(500).json({ error: "Failed to generate classes" });
     }
@@ -812,7 +871,7 @@ export async function registerRoutes(
   });
 
   // Apply a boost suggestion (swap two students) (protected)
-  app.post("/api/boost/apply", isAuthenticated, async (req, res) => {
+  app.post("/api/boost/apply", isAuthenticated, requireWritableWorkspace, async (req, res) => {
     try {
       const { student1Id, student1NewClassId, student2Id, student2NewClassId } = req.body;
       
@@ -854,7 +913,7 @@ export async function registerRoutes(
     res.json(surveys);
   });
 
-  app.post("/api/surveys", isAuthenticated, async (req, res) => {
+  app.post("/api/surveys", isAuthenticated, requireWritableWorkspace, async (req, res) => {
     try {
       const data = insertSurveySchema.parse(req.body);
       const survey = await storage.createSurvey(accountIdFor(req), data);
@@ -864,7 +923,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/surveys/:id", isAuthenticated, async (req, res) => {
+  app.patch("/api/surveys/:id", isAuthenticated, requireWritableWorkspace, async (req, res) => {
     const survey = await storage.updateSurvey(accountIdFor(req), req.params.id, req.body);
     if (!survey) {
       return res.status(404).json({ error: "Survey not found" });
@@ -872,7 +931,7 @@ export async function registerRoutes(
     res.json(survey);
   });
 
-  app.delete("/api/surveys/:id", isAuthenticated, async (req, res) => {
+  app.delete("/api/surveys/:id", isAuthenticated, requireWritableWorkspace, async (req, res) => {
     const deleted = await storage.deleteSurvey(accountIdFor(req), req.params.id);
     if (!deleted) {
       return res.status(404).json({ error: "Survey not found" });
@@ -894,7 +953,7 @@ export async function registerRoutes(
     res.json(scenario);
   });
 
-  app.post("/api/scenarios", isAuthenticated, async (req, res) => {
+  app.post("/api/scenarios", isAuthenticated, requireWritableWorkspace, async (req, res) => {
     try {
       // Get current placements and calculate balance metrics
       const placements = await storage.getPlacements(accountIdFor(req));
@@ -957,7 +1016,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/scenarios/:id", isAuthenticated, async (req, res) => {
+  app.delete("/api/scenarios/:id", isAuthenticated, requireWritableWorkspace, async (req, res) => {
     const deleted = await storage.deleteScenario(accountIdFor(req), req.params.id);
     if (!deleted) {
       return res.status(404).json({ error: "Scenario not found" });
@@ -966,7 +1025,7 @@ export async function registerRoutes(
   });
 
   // Restore placements from a scenario (protected)
-  app.post("/api/scenarios/:id/restore", isAuthenticated, async (req, res) => {
+  app.post("/api/scenarios/:id/restore", isAuthenticated, requireWritableWorkspace, async (req, res) => {
     try {
       const scenario = await storage.getScenario(accountIdFor(req), req.params.id);
       if (!scenario) {
@@ -1009,7 +1068,7 @@ export async function registerRoutes(
     res.json(teacher);
   });
 
-  app.post("/api/teachers", isAuthenticated, async (req, res) => {
+  app.post("/api/teachers", isAuthenticated, requireWritableWorkspace, async (req, res) => {
     try {
       const data = insertTeacherSchema.parse(req.body);
       const teacher = await storage.createTeacher(accountIdFor(req), data);
@@ -1019,7 +1078,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/teachers/:id", isAuthenticated, async (req, res) => {
+  app.patch("/api/teachers/:id", isAuthenticated, requireWritableWorkspace, async (req, res) => {
     if (isDemoWorkspace(req) && hasAnyField(req.body, ["firstName", "lastName", "email"])) {
       return res.status(403).json({ error: "Teacher identity fields are disabled in demo workspaces" });
     }
@@ -1030,7 +1089,7 @@ export async function registerRoutes(
     res.json(teacher);
   });
 
-  app.delete("/api/teachers/:id", isAuthenticated, async (req, res) => {
+  app.delete("/api/teachers/:id", isAuthenticated, requireWritableWorkspace, async (req, res) => {
     if (isDemoWorkspace(req)) {
       const existingTeachers = await storage.getTeachers(accountIdFor(req));
       if (existingTeachers.length <= 1) {
@@ -1044,7 +1103,7 @@ export async function registerRoutes(
     res.status(204).send();
   });
 
-  app.post("/api/teachers/bulk-import", isAuthenticated, async (req, res) => {
+  app.post("/api/teachers/bulk-import", isAuthenticated, requireWritableWorkspace, async (req, res) => {
     if (blockDemoWorkspace(req, res, "Teacher import")) return;
     try {
       const { teachers } = req.body;
@@ -1058,7 +1117,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/teachers/bulk-delete", isAuthenticated, async (req, res) => {
+  app.post("/api/teachers/bulk-delete", isAuthenticated, requireWritableWorkspace, async (req, res) => {
     try {
       const { ids } = req.body;
       if (!Array.isArray(ids)) {
@@ -1093,7 +1152,7 @@ export async function registerRoutes(
     }
   });
 
-  app.put("/api/app-settings", isAuthenticated, async (req, res) => {
+  app.put("/api/app-settings", isAuthenticated, requireWritableWorkspace, async (req, res) => {
     try {
       const settings = await storage.updateAppSettings(accountIdFor(req), req.body);
       res.json(settings);

@@ -6,6 +6,11 @@ interface OnboardingAccount {
   accountId: string;
   accountStatus: string;
   workspaceMode: "demo" | "live";
+  subscriptionStatus: string;
+  trialEndsAt: string | null;
+  trialExpired: boolean;
+  successfulSolverGenerations: number;
+  isNewAccount: boolean;
 }
 
 function profileNameFromMetadata(metadata: Record<string, unknown> | undefined) {
@@ -36,9 +41,16 @@ async function ensureOnboardingAccount(user: NonNullable<Express.Request["supaba
     );
 
     const existing = await client.query<OnboardingAccount>(
-      `SELECT a.id AS "accountId", a.status AS "accountStatus", a.workspace_mode AS "workspaceMode"
+      `SELECT a.id AS "accountId", a.status AS "accountStatus", a.workspace_mode AS "workspaceMode",
+              COALESCE(s.status, 'trialing') AS "subscriptionStatus",
+              s.trial_ends_at AS "trialEndsAt",
+              COALESCE(s.status, 'trialing') <> 'active' AND s.trial_ends_at IS NOT NULL AND s.trial_ends_at <= NOW() AS "trialExpired",
+              COALESCE(u.successful_solver_generations, 0) AS "successfulSolverGenerations",
+              FALSE AS "isNewAccount"
        FROM account_memberships am
        JOIN accounts a ON a.id = am.account_id
+       LEFT JOIN account_subscriptions s ON s.account_id = a.id
+       LEFT JOIN account_usage u ON u.account_id = a.id
        WHERE am.user_id = $1 AND am.status = 'active'
        ORDER BY am.created_at ASC
        LIMIT 1`,
@@ -46,8 +58,20 @@ async function ensureOnboardingAccount(user: NonNullable<Express.Request["supaba
     );
 
     if (existing.rows[0]) {
+      await client.query(
+        `INSERT INTO account_usage (account_id, successful_solver_generations)
+         VALUES ($1, 0)
+         ON CONFLICT (account_id) DO NOTHING`,
+        [existing.rows[0].accountId],
+      );
       await client.query("COMMIT");
-      return existing.rows[0];
+      const account = existing.rows[0];
+      return {
+        ...account,
+        trialEndsAt: account.trialEndsAt ? new Date(account.trialEndsAt).toISOString() : null,
+        successfulSolverGenerations: Number(account.successfulSolverGenerations || 0),
+        isNewAccount: false,
+      };
     }
 
     const accountName = firstName ? `${firstName}'s ShuffleSchool Demo` : "ShuffleSchool Demo Account";
@@ -60,7 +84,7 @@ async function ensureOnboardingAccount(user: NonNullable<Express.Request["supaba
 
     const accountId = account.rows[0].accountId;
     const now = new Date();
-    const trialEndsAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+    const trialEndsAt = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
 
     await client.query(
       `INSERT INTO account_memberships (account_id, user_id, role, status, accepted_at)
@@ -76,8 +100,22 @@ async function ensureOnboardingAccount(user: NonNullable<Express.Request["supaba
       [accountId, now, trialEndsAt],
     );
 
+    await client.query(
+      `INSERT INTO account_usage (account_id, successful_solver_generations)
+       VALUES ($1, 0)
+       ON CONFLICT (account_id) DO NOTHING`,
+      [accountId],
+    );
+
     await client.query("COMMIT");
-    return account.rows[0];
+    return {
+      ...account.rows[0],
+      subscriptionStatus: "trialing",
+      trialEndsAt: trialEndsAt.toISOString(),
+      trialExpired: false,
+      successfulSolverGenerations: 0,
+      isNewAccount: true,
+    };
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
@@ -93,7 +131,7 @@ export const onboardSupabaseUser: RequestHandler = async (req, res) => {
 
   try {
     const account = await ensureOnboardingAccount(req.supabaseUser);
-    const seed = await seedDemoData(account.accountId);
+    const seed = account.isNewAccount ? await seedDemoData(account.accountId) : null;
 
     req.supabaseAccountContext = account;
     req.accountContext = account;

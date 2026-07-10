@@ -31,7 +31,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
-import { queryClient, apiRequest } from "@/lib/queryClient";
+import { queryClient, apiRequest, getAuthHeaders } from "@/lib/queryClient";
 import type { Teacher, InsertTeacher } from "@shared/schema";
 
 type SortField = "firstName" | "lastName" | "email" | "currentClass" | "surveyStatus";
@@ -215,35 +215,39 @@ export default function TeachersPage() {
     event.target.value = "";
   };
 
-  const handleExport = () => {
+  const handleExport = async () => {
     if (teachers.length === 0) {
       toast({ title: "No teachers to export", variant: "destructive" });
       return;
     }
 
-    const csvRows = ["First Name,Last Name,Email,Current Class,Allocated Class,Survey Status,Survey Date"];
-
-    teachers.forEach((teacher) => {
-      csvRows.push(
-        `"${teacher.firstName}","${teacher.lastName}","${teacher.email}","${teacher.currentClass || ""}","${teacher.allocatedClass || ""}","${teacher.surveyStatus || ""}","${teacher.surveyDate || ""}"`
-      );
-    });
-
-    const csvContent = csvRows.join("\n");
-    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `teachers-${new Date().toISOString().split("T")[0]}.csv`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-
-    toast({
-      title: "Export complete",
-      description: `Exported ${teachers.length} teachers`,
-    });
+    try {
+      const res = await fetch("/api/exports/teachers.csv", {
+        credentials: "include",
+        headers: await getAuthHeaders(),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        toast({
+          title: body?.code === "TRIAL_EXPORT_RESTRICTED" ? "Upgrade required" : "Export failed",
+          description: body?.message || "Teacher exports are not available for this workspace.",
+          variant: "destructive",
+        });
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `teachers-${new Date().toISOString().split("T")[0]}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      toast({ title: "Export complete", description: `Exported ${teachers.length} teachers` });
+    } catch {
+      toast({ title: "Export failed", variant: "destructive" });
+    }
   };
 
   const handleDownloadTemplate = () => {

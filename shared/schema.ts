@@ -75,6 +75,13 @@ export const accountSubscriptions = pgTable("account_subscriptions", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+export const accountUsage = pgTable("account_usage", {
+  accountId: uuid("account_id").primaryKey().references(() => accounts.id, { onDelete: "cascade" }),
+  successfulSolverGenerations: integer("successful_solver_generations").notNull().default(0),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 export type Account = typeof accounts.$inferSelect;
 export type InsertAccount = typeof accounts.$inferInsert;
 export type Profile = typeof profiles.$inferSelect;
@@ -83,6 +90,8 @@ export type AccountMembership = typeof accountMemberships.$inferSelect;
 export type InsertAccountMembership = typeof accountMemberships.$inferInsert;
 export type AccountSubscription = typeof accountSubscriptions.$inferSelect;
 export type InsertAccountSubscription = typeof accountSubscriptions.$inferInsert;
+export type AccountUsage = typeof accountUsage.$inferSelect;
+export type InsertAccountUsage = typeof accountUsage.$inferInsert;
 
 // Short-lived, single-use cross-domain auth handoff codes
 export const authHandoffs = pgTable("auth_handoffs", {

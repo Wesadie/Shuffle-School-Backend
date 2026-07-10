@@ -1,8 +1,6 @@
 import type { RequestHandler } from "express";
 import { createClient, type User as SupabaseUser } from "@supabase/supabase-js";
-import { and, eq } from "drizzle-orm";
-import { accounts, accountMemberships } from "@shared/schema";
-import { db } from "./db";
+import { pool } from "./db";
 import type { AccountContext } from "./accountContext";
 
 const SUPABASE_URL = process.env.SUPABASE_URL ?? "https://xhtyynajsnnuxfvfqghg.supabase.co";
@@ -64,23 +62,41 @@ async function verifySupabaseToken(token: string): Promise<SupabaseUser | undefi
 }
 
 async function resolveSupabaseAccountContext(userId: string): Promise<AccountContext | undefined> {
-  const [membership] = await db
-    .select({
-      accountId: accounts.id,
-      accountStatus: accounts.status,
-      workspaceMode: accounts.workspaceMode,
-    })
-    .from(accountMemberships)
-    .innerJoin(accounts, eq(accountMemberships.accountId, accounts.id))
-    .where(and(eq(accountMemberships.userId, userId), eq(accountMemberships.status, "active")))
-    .limit(1);
+  const result = await pool.query<{
+    accountId: string;
+    accountStatus: string;
+    workspaceMode: string;
+    subscriptionStatus: string;
+    trialEndsAt: Date | null;
+    trialExpired: boolean;
+    successfulSolverGenerations: number;
+  }>(
+    `SELECT a.id AS "accountId", a.status AS "accountStatus", a.workspace_mode AS "workspaceMode",
+            COALESCE(s.status, 'trialing') AS "subscriptionStatus",
+            s.trial_ends_at AS "trialEndsAt",
+            COALESCE(s.status, 'trialing') <> 'active' AND s.trial_ends_at IS NOT NULL AND s.trial_ends_at <= NOW() AS "trialExpired",
+            COALESCE(u.successful_solver_generations, 0)::int AS "successfulSolverGenerations"
+     FROM account_memberships am
+     JOIN accounts a ON a.id = am.account_id
+     LEFT JOIN account_subscriptions s ON s.account_id = a.id
+     LEFT JOIN account_usage u ON u.account_id = a.id
+     WHERE am.user_id = $1 AND am.status = 'active'
+     ORDER BY am.created_at ASC
+     LIMIT 1`,
+    [userId],
+  );
 
+  const membership = result.rows[0];
   if (!membership) return undefined;
 
   return {
     accountId: membership.accountId,
     accountStatus: membership.accountStatus,
     workspaceMode: membership.workspaceMode === "demo" ? "demo" : "live",
+    subscriptionStatus: membership.subscriptionStatus,
+    trialEndsAt: membership.trialEndsAt ? membership.trialEndsAt.toISOString() : null,
+    trialExpired: membership.subscriptionStatus === "active" ? false : membership.trialExpired,
+    successfulSolverGenerations: membership.successfulSolverGenerations,
   };
 }
 

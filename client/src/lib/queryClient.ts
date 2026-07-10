@@ -8,6 +8,10 @@ async function authHeaders(data?: unknown): Promise<HeadersInit> {
   return headers;
 }
 
+export function getAuthHeaders(data?: unknown): Promise<HeadersInit> {
+  return authHeaders(data);
+}
+
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
     const text = (await res.text()) || res.statusText;

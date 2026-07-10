@@ -9,6 +9,10 @@ export interface AccountContext {
   accountId: string;
   accountStatus: string;
   workspaceMode: "demo" | "live";
+  subscriptionStatus: string;
+  trialEndsAt: string | null;
+  trialExpired: boolean;
+  successfulSolverGenerations: number;
 }
 
 declare global {
@@ -29,6 +33,10 @@ export async function resolveAccountContext(): Promise<AccountContext> {
     accountId: account?.id ?? DEVELOPMENT_ACCOUNT_ID,
     accountStatus: account?.status ?? "active",
     workspaceMode: account?.workspaceMode === "demo" ? "demo" : "live",
+    subscriptionStatus: "active",
+    trialEndsAt: null,
+    trialExpired: false,
+    successfulSolverGenerations: 0,
   };
 }
 

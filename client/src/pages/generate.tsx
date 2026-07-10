@@ -17,6 +17,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Progress } from "@/components/ui/progress";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/hooks/useAuth";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useLocation } from "wouter";
 import {
@@ -30,6 +31,7 @@ import type { ClassConfig, InsertClassConfig, Student, Rule, Characteristic, Tea
 
 export default function GeneratePage() {
   const { toast } = useToast();
+  const { user } = useAuth();
   const [, setLocation] = useLocation();
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
@@ -97,13 +99,24 @@ export default function GeneratePage() {
     mutationFn: () => apiRequest("POST", "/api/generate-classes", {}),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/placements"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
       setIsGenerating(false);
       toast({ title: "Classes generated successfully!" });
       setLocation("/review");
     },
-    onError: () => {
+    onError: (error: Error) => {
       setIsGenerating(false);
-      toast({ title: "Failed to generate classes", variant: "destructive" });
+      const isLimit = error.message.includes("TRIAL_SOLVER_LIMIT_REACHED");
+      const isExpired = error.message.includes("TRIAL_EXPIRED");
+      toast({
+        title: isLimit ? "Trial solver limit reached" : isExpired ? "Trial expired" : "Failed to generate classes",
+        description: isLimit
+          ? "You have used all 3 trial generations. Upgrade to generate more class lists."
+          : isExpired
+            ? "Your trial has expired. This workspace is now read-only until you upgrade."
+            : undefined,
+        variant: "destructive",
+      });
     },
   });
 
@@ -133,6 +146,13 @@ export default function GeneratePage() {
   const canGenerate = students.length > 0 && classConfigs.length > 0 && totalCapacity >= students.length;
 
   const isLoading = configsLoading || studentsLoading;
+  const accountContext = user?.accountContext;
+  const trialUsesRemaining = accountContext?.subscriptionStatus === "trialing"
+    ? Math.max(0, 3 - (accountContext.successfulSolverGenerations || 0))
+    : null;
+  const trialEndsAt = accountContext?.trialEndsAt ? new Date(accountContext.trialEndsAt) : null;
+  const trialTimeRemaining = trialEndsAt ? Math.max(0, trialEndsAt.getTime() - Date.now()) : null;
+  const trialDaysRemaining = trialTimeRemaining === null ? null : Math.ceil(trialTimeRemaining / (24 * 60 * 60 * 1000));
 
   if (isLoading) {
     return (
@@ -171,6 +191,18 @@ export default function GeneratePage() {
           </Button>
         </div>
       </div>
+
+      {accountContext?.subscriptionStatus === "trialing" && (
+        <Alert variant={accountContext.trialExpired ? "destructive" : "default"}>
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>{accountContext.trialExpired ? "Trial expired" : "Trial access"}</AlertTitle>
+          <AlertDescription>
+            {accountContext.trialExpired
+              ? "This workspace is read-only until you upgrade. You can still view existing data and solver results."
+              : `${trialDaysRemaining ?? 0} day${trialDaysRemaining === 1 ? "" : "s"} remaining. ${trialUsesRemaining} of 3 trial solver generations remaining.`}
+          </AlertDescription>
+        </Alert>
+      )}
 
       <div className="grid gap-4 md:grid-cols-4">
         <Card>
