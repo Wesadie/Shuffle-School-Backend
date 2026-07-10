@@ -6,10 +6,22 @@ import { db } from "./db";
 import type { AccountContext } from "./accountContext";
 
 const SUPABASE_URL = process.env.SUPABASE_URL ?? "https://xhtyynajsnnuxfvfqghg.supabase.co";
-const SUPABASE_PUBLISHABLE_KEY =
-  process.env.SUPABASE_ANON_KEY ??
-  process.env.SUPABASE_PUBLISHABLE_KEY ??
+const SUPABASE_KEY_FALLBACK =
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhodHl5bmFqc25udXhmdmZxZ2hnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM0Mjc1NDgsImV4cCI6MjA5OTAwMzU0OH0.5mE-xJlm_Dx8CYdAamFEUMczd_jS0wCpgPjAtBZjNAQ";
+
+// Tracks which env var supplied the Supabase key for diagnostics (never logs the value).
+function resolveSupabaseKey(): {
+  key: string;
+  source: "SUPABASE_ANON_KEY" | "SUPABASE_PUBLISHABLE_KEY" | "fallback";
+} {
+  if (process.env.SUPABASE_ANON_KEY != null)
+    return { key: process.env.SUPABASE_ANON_KEY, source: "SUPABASE_ANON_KEY" };
+  if (process.env.SUPABASE_PUBLISHABLE_KEY != null)
+    return { key: process.env.SUPABASE_PUBLISHABLE_KEY, source: "SUPABASE_PUBLISHABLE_KEY" };
+  return { key: SUPABASE_KEY_FALLBACK, source: "fallback" };
+}
+
+const { key: SUPABASE_PUBLISHABLE_KEY, source: SUPABASE_KEY_SOURCE } = resolveSupabaseKey();
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
   auth: {
@@ -37,7 +49,17 @@ function bearerTokenFrom(req: Parameters<RequestHandler>[0]): string | undefined
 
 async function verifySupabaseToken(token: string): Promise<SupabaseUser | undefined> {
   const { data, error } = await supabase.auth.getUser(token);
-  if (error || !data.user) return undefined;
+  if (error || !data.user) {
+    console.error("[supabaseAuth] token verification failed", {
+      message: error?.message,
+      status: (error as { status?: number } | undefined)?.status,
+      code: (error as { code?: string } | undefined)?.code,
+      supabaseUrl: SUPABASE_URL,
+      keySource: SUPABASE_KEY_SOURCE,
+      keyLength: SUPABASE_PUBLISHABLE_KEY.length,
+    });
+    return undefined;
+  }
   return data.user;
 }
 
