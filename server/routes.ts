@@ -12,6 +12,8 @@ import {
   reserveTrialSolverGeneration,
   releaseTrialSolverGeneration,
   solverAccessResponse,
+  wouldExceedLearnerCapacity,
+  learnerCapacityExceededResponse,
 } from "./accessControl";
 import {
   insertStudentSchema,
@@ -137,6 +139,11 @@ export async function registerRoutes(
   app.post("/api/students", isAuthenticated, requireWritableWorkspace, async (req, res) => {
     try {
       const data = insertStudentSchema.parse(req.body);
+      const context = getAccountContext(req);
+      const currentStudentCount = (await storage.getStudents(accountIdFor(req))).length;
+      if (wouldExceedLearnerCapacity(context, currentStudentCount, 1)) {
+        return res.status(403).json(learnerCapacityExceededResponse(context));
+      }
       const student = await storage.createStudent(accountIdFor(req), data);
       res.status(201).json(student);
     } catch (error) {
@@ -175,6 +182,12 @@ export async function registerRoutes(
       const { students } = req.body;
       if (!Array.isArray(students)) {
         return res.status(400).json({ error: "students must be an array" });
+      }
+
+      const context = getAccountContext(req);
+      const currentStudentCount = (await storage.getStudents(accountIdFor(req))).length;
+      if (wouldExceedLearnerCapacity(context, currentStudentCount, students.length)) {
+        return res.status(403).json(learnerCapacityExceededResponse(context));
       }
       
       const standardFields = ["firstName", "lastName", "grade", "currentClass", "gender", "notes", "parentRequests", "parentNotes"];

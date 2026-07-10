@@ -7,9 +7,10 @@ export const TRIAL_SOLVER_LIMIT = 3;
 export type AccessErrorCode =
   | "TRIAL_EXPIRED"
   | "TRIAL_SOLVER_LIMIT_REACHED"
-  | "TRIAL_EXPORT_RESTRICTED";
+  | "TRIAL_EXPORT_RESTRICTED"
+  | "LEARNER_CAPACITY_EXCEEDED";
 
-function accessError(code: AccessErrorCode, message: string) {
+export function accessError(code: AccessErrorCode, message: string) {
   return { code, message };
 }
 
@@ -45,6 +46,19 @@ export const requireFinalExportAccess: RequestHandler = (req, res, next) => {
   }
   next();
 };
+
+export function wouldExceedLearnerCapacity(context: AccountContext, currentLearners: number, learnersToAdd: number): boolean {
+  return isSubscriptionActive(context)
+    && context.licensedLearnerCount !== null
+    && currentLearners + learnersToAdd > context.licensedLearnerCount;
+}
+
+export function learnerCapacityExceededResponse(context: AccountContext) {
+  return accessError(
+    "LEARNER_CAPACITY_EXCEEDED",
+    `This account is licensed for ${context.licensedLearnerCount} learners. Upgrade or remove learners before adding more.`,
+  );
+}
 
 export async function reserveTrialSolverGeneration(context: AccountContext): Promise<"reserved" | "active" | "expired" | "limit"> {
   if (isSubscriptionActive(context)) return "active";

@@ -7,6 +7,7 @@ interface OnboardingAccount {
   accountStatus: string;
   workspaceMode: "demo" | "live";
   subscriptionStatus: string;
+  licensedLearnerCount: number | null;
   trialEndsAt: string | null;
   trialExpired: boolean;
   successfulSolverGenerations: number;
@@ -43,6 +44,7 @@ async function ensureOnboardingAccount(user: NonNullable<Express.Request["supaba
     const existing = await client.query<OnboardingAccount>(
       `SELECT a.id AS "accountId", a.status AS "accountStatus", a.workspace_mode AS "workspaceMode",
               COALESCE(s.status, 'trialing') AS "subscriptionStatus",
+              s.licensed_learner_count AS "licensedLearnerCount",
               s.trial_ends_at AS "trialEndsAt",
               COALESCE(s.status, 'trialing') <> 'active' AND s.trial_ends_at IS NOT NULL AND s.trial_ends_at <= NOW() AS "trialExpired",
               COALESCE(u.successful_solver_generations, 0) AS "successfulSolverGenerations",
@@ -68,6 +70,7 @@ async function ensureOnboardingAccount(user: NonNullable<Express.Request["supaba
       const account = existing.rows[0];
       return {
         ...account,
+        licensedLearnerCount: account.licensedLearnerCount === null ? null : Number(account.licensedLearnerCount),
         trialEndsAt: account.trialEndsAt ? new Date(account.trialEndsAt).toISOString() : null,
         successfulSolverGenerations: Number(account.successfulSolverGenerations || 0),
         isNewAccount: false,
@@ -111,6 +114,7 @@ async function ensureOnboardingAccount(user: NonNullable<Express.Request["supaba
     return {
       ...account.rows[0],
       subscriptionStatus: "trialing",
+      licensedLearnerCount: null,
       trialEndsAt: trialEndsAt.toISOString(),
       trialExpired: false,
       successfulSolverGenerations: 0,

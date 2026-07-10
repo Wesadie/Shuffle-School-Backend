@@ -67,12 +67,14 @@ async function resolveSupabaseAccountContext(userId: string): Promise<AccountCon
     accountStatus: string;
     workspaceMode: string;
     subscriptionStatus: string;
+    licensedLearnerCount: number | null;
     trialEndsAt: Date | null;
     trialExpired: boolean;
     successfulSolverGenerations: number;
   }>(
     `SELECT a.id AS "accountId", a.status AS "accountStatus", a.workspace_mode AS "workspaceMode",
             COALESCE(s.status, 'trialing') AS "subscriptionStatus",
+            s.licensed_learner_count AS "licensedLearnerCount",
             s.trial_ends_at AS "trialEndsAt",
             COALESCE(s.status, 'trialing') <> 'active' AND s.trial_ends_at IS NOT NULL AND s.trial_ends_at <= NOW() AS "trialExpired",
             COALESCE(u.successful_solver_generations, 0)::int AS "successfulSolverGenerations"
@@ -94,6 +96,7 @@ async function resolveSupabaseAccountContext(userId: string): Promise<AccountCon
     accountStatus: membership.accountStatus,
     workspaceMode: membership.workspaceMode === "demo" ? "demo" : "live",
     subscriptionStatus: membership.subscriptionStatus,
+    licensedLearnerCount: membership.licensedLearnerCount,
     trialEndsAt: membership.trialEndsAt ? membership.trialEndsAt.toISOString() : null,
     trialExpired: membership.subscriptionStatus === "active" ? false : membership.trialExpired,
     successfulSolverGenerations: membership.successfulSolverGenerations,
