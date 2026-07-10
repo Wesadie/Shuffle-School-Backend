@@ -88,44 +88,51 @@ app.use((req, res, next) => {
   next();
 });
 
+const portArgIndex = process.argv.indexOf("--port");
+const cliPort =
+  portArgIndex >= 0 ? Number.parseInt(process.argv[portArgIndex + 1] ?? "", 10) : undefined;
+const envPort = process.env.PORT ? Number.parseInt(process.env.PORT, 10) : undefined;
+const port = Number.isFinite(cliPort) ? cliPort : Number.isFinite(envPort) ? envPort : 5000;
+
+process.env.PORT = String(port);
+
+httpServer.listen(
+  {
+    port,
+    host: "0.0.0.0",
+  },
+  () => {
+    log(`serving on port ${port}`);
+    console.log(`Local: http://localhost:${port}/`);
+  },
+);
+
 (async () => {
-  const { registerRoutes } = await import("./routes");
-  await registerRoutes(httpServer, app);
+  try {
+    const { registerRoutes } = await import("./routes");
+    await registerRoutes(httpServer, app);
 
-  app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
-    const status = err.status || err.statusCode || 500;
-    const message = err.message || "Internal Server Error";
+    app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
+      const status = err.status || err.statusCode || 500;
+      const message = err.message || "Internal Server Error";
 
-    res.status(status).json({ message });
-    throw err;
-  });
+      res.status(status).json({ message });
+      throw err;
+    });
 
-  // importantly only setup vite in development and after
-  // setting up all the other routes so the catch-all route
-  // doesn't interfere with the other routes
-  if (process.env.NODE_ENV === "production") {
-    serveStatic(app);
-  } else {
-    const { setupVite } = await import("./vite");
-    await setupVite(httpServer, app);
+    // importantly only setup vite in development and after
+    // setting up all the other routes so the catch-all route
+    // doesn't interfere with the other routes
+    if (process.env.NODE_ENV === "production") {
+      serveStatic(app);
+    } else {
+      const { setupVite } = await import("./vite");
+      await setupVite(httpServer, app);
+    }
+  } catch (error) {
+    console.error("[startup] failed to finish application setup", {
+      message: error instanceof Error ? error.message : String(error),
+    });
+    process.exitCode = 1;
   }
-
-  const portArgIndex = process.argv.indexOf("--port");
-  const cliPort =
-    portArgIndex >= 0 ? Number.parseInt(process.argv[portArgIndex + 1] ?? "", 10) : undefined;
-  const envPort = process.env.PORT ? Number.parseInt(process.env.PORT, 10) : undefined;
-  const port = Number.isFinite(cliPort) ? cliPort : Number.isFinite(envPort) ? envPort : 5000;
-
-  process.env.PORT = String(port);
-
-  httpServer.listen(
-    {
-      port,
-      host: "0.0.0.0",
-    },
-    () => {
-      log(`serving on port ${port}`);
-      console.log(`Local: http://localhost:${port}/`);
-    },
-  );
 })();
