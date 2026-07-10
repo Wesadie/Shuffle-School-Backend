@@ -93,7 +93,10 @@ export const accountPaymentTransactions = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     completedAt: timestamp("completed_at", { withTimezone: true }),
   },
-  (table) => [index("account_payment_transactions_account_id_idx").on(table.accountId)],
+  (table) => [
+    index("account_payment_transactions_account_id_idx").on(table.accountId),
+    unique("account_payment_transactions_provider_payment_id_unique").on(table.providerPaymentId),
+  ],
 );
 
 export const accountUsage = pgTable("account_usage", {
