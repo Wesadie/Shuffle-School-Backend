@@ -61,6 +61,10 @@ export const accountSubscriptions = pgTable("account_subscriptions", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   accountId: uuid("account_id").notNull().unique().references(() => accounts.id, { onDelete: "cascade" }),
   status: text("status").notNull().default("trialing"),
+  planType: text("plan_type"),
+  licensedLearnerCount: integer("licensed_learner_count"),
+  licenseStartedAt: timestamp("license_started_at", { withTimezone: true }),
+  licenseEndsAt: timestamp("license_ends_at", { withTimezone: true }),
   trialStartedAt: timestamp("trial_started_at", { withTimezone: true }),
   trialEndsAt: timestamp("trial_ends_at", { withTimezone: true }),
   currentPeriodStartedAt: timestamp("current_period_started_at", { withTimezone: true }),
@@ -74,6 +78,23 @@ export const accountSubscriptions = pgTable("account_subscriptions", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+export const accountPaymentTransactions = pgTable(
+  "account_payment_transactions",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    accountId: uuid("account_id").notNull().references(() => accounts.id, { onDelete: "cascade" }),
+    transactionType: text("transaction_type").notNull(),
+    paymentStatus: text("payment_status").notNull(),
+    learnerQuantity: integer("learner_quantity").notNull(),
+    amountCents: integer("amount_cents").notNull(),
+    paymentProvider: text("payment_provider"),
+    providerPaymentId: text("provider_payment_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+  },
+  (table) => [index("account_payment_transactions_account_id_idx").on(table.accountId)],
+);
 
 export const accountUsage = pgTable("account_usage", {
   accountId: uuid("account_id").primaryKey().references(() => accounts.id, { onDelete: "cascade" }),
@@ -90,6 +111,8 @@ export type AccountMembership = typeof accountMemberships.$inferSelect;
 export type InsertAccountMembership = typeof accountMemberships.$inferInsert;
 export type AccountSubscription = typeof accountSubscriptions.$inferSelect;
 export type InsertAccountSubscription = typeof accountSubscriptions.$inferInsert;
+export type AccountPaymentTransaction = typeof accountPaymentTransactions.$inferSelect;
+export type InsertAccountPaymentTransaction = typeof accountPaymentTransactions.$inferInsert;
 export type AccountUsage = typeof accountUsage.$inferSelect;
 export type InsertAccountUsage = typeof accountUsage.$inferInsert;
 
