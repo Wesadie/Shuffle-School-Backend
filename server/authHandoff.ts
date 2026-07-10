@@ -19,6 +19,7 @@ const HANDOFF_TTL_SECONDS = 120;
  */
 export const createAuthHandoff: RequestHandler = async (req, res) => {
   if (!req.supabaseUser) {
+    console.warn("[authHandoff] create rejected: missing Supabase user");
     return res.status(401).json({ message: "Authenticated Supabase user required" });
   }
 
@@ -26,6 +27,12 @@ export const createAuthHandoff: RequestHandler = async (req, res) => {
     typeof req.body?.refresh_token === "string" ? req.body.refresh_token : null;
   const accessToken =
     req.header("authorization")?.replace(/^Bearer\s+/i, "") ?? null;
+
+  console.log("[authHandoff] create entered", {
+    userId: req.supabaseUser.id,
+    hasAccessToken: Boolean(accessToken),
+    hasRefreshToken: Boolean(refreshToken),
+  });
 
   if (!accessToken || !refreshToken) {
     return res.status(400).json({ message: "Access token and refresh token are required" });
@@ -44,16 +51,22 @@ export const createAuthHandoff: RequestHandler = async (req, res) => {
        VALUES ($1, $2, $3, $4, $5)`,
       [code, req.supabaseUser.id, accessToken, refreshToken, expiresAt],
     );
+
+    console.log("[authHandoff] create inserted handoff", {
+      userId: req.supabaseUser.id,
+      expiresAt: expiresAt.toISOString(),
+    });
   } catch (error) {
     console.error("[authHandoff] failed to create handoff", {
       message: error instanceof Error ? error.message : String(error),
+      code: typeof error === "object" && error !== null && "code" in error ? String(error.code) : undefined,
     });
     return res.status(500).json({ message: "Failed to create auth handoff" });
   } finally {
     client.release();
   }
 
-  res.status(201).json({ code });
+  return res.status(200).json({ code });
 };
 
 /**
