@@ -102,7 +102,7 @@ function TopNavigation() {
     if (session) {
       await supabase.auth.signOut();
       queryClient.clear();
-      window.location.href = "/";
+      window.location.href = "https://preview--school-solver-site.lovable.app/login";
     } else {
       window.location.href = "/api/logout";
     }
