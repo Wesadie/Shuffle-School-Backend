@@ -13,6 +13,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { BookOpen, HelpCircle, LayoutDashboard, LogOut, Settings } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { supabase } from "@/integrations/supabase/client";
 import logoImage from "@assets/ChatGPT_Image_Dec_8,_2025,_01_03_50_PM_1765191843507.png";
 
 import NotFound from "@/pages/not-found";
@@ -30,6 +31,7 @@ import LandingPage from "@/pages/landing";
 import SettingsPage from "@/pages/settings";
 import HelpPage from "@/pages/help";
 import TutorialsPage from "@/pages/tutorials";
+import AuthHandoffPage from "@/pages/auth-handoff";
 
 import type { Student, Placement, ClassConfig } from "@shared/schema";
 
@@ -95,8 +97,15 @@ function TopNavigation() {
     { label: "Help", href: "/help", icon: HelpCircle },
   ];
 
-  const handleLogout = () => {
-    window.location.href = "/api/logout";
+  const handleLogout = async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (session) {
+      await supabase.auth.signOut();
+      queryClient.clear();
+      window.location.href = "/";
+    } else {
+      window.location.href = "/api/logout";
+    }
   };
 
   const getInitials = () => {
@@ -179,6 +188,13 @@ function AppContent() {
   const { toast } = useToast();
   const { isAuthenticated, isLoading } = useAuth();
   const [importOpen, setImportOpen] = useState(false);
+  const [location] = useLocation();
+
+  // Cross-domain auth handoff: runs before auth gate so unauthenticated
+  // users arriving from Lovable can establish a session.
+  if (location.startsWith("/auth/handoff")) {
+    return <AuthHandoffPage />;
+  }
 
   const { data: students = [] } = useQuery<Student[]>({
     queryKey: ["/api/students"],

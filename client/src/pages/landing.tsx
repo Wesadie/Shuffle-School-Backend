@@ -6,8 +6,12 @@ import { Link } from "wouter";
 import logoImage from "@assets/ChatGPT_Image_Dec_8,_2025,_01_03_50_PM_1765191843507.png";
 
 export default function LandingPage() {
+  const marketingUrl = import.meta.env.VITE_MARKETING_URL || "";
+
   const handleLogin = () => {
-    window.location.href = "/api/login";
+    if (marketingUrl) {
+      window.location.href = marketingUrl;
+    }
   };
 
   return (
@@ -68,9 +72,11 @@ export default function LandingPage() {
             </Card>
           </div>
 
-          <Button size="lg" onClick={handleLogin} data-testid="button-login">
-            Log In to Get Started
-          </Button>
+          {marketingUrl && (
+            <Button size="lg" onClick={handleLogin} data-testid="button-login">
+              Sign In to Get Started
+            </Button>
+          )}
         </div>
       </main>
 

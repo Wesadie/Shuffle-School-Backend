@@ -84,6 +84,17 @@ export type InsertAccountMembership = typeof accountMemberships.$inferInsert;
 export type AccountSubscription = typeof accountSubscriptions.$inferSelect;
 export type InsertAccountSubscription = typeof accountSubscriptions.$inferInsert;
 
+// Short-lived, single-use cross-domain auth handoff codes
+export const authHandoffs = pgTable("auth_handoffs", {
+  code: text("code").primaryKey(),
+  userId: uuid("user_id").notNull(),
+  accessToken: text("access_token").notNull(),
+  refreshToken: text("refresh_token").notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  used: boolean("used").notNull().default(false),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 // Student model
 export const students = pgTable("students", {
   id: varchar("id", { length: 36 }).primaryKey(),

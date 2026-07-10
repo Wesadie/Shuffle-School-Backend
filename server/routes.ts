@@ -5,6 +5,7 @@ import { setupAuth, isAuthenticated } from "./replitAuth";
 import { attachAccountContext, getAccountContext } from "./accountContext";
 import { authenticateSupabaseJwt, requireSupabaseUser } from "./supabaseAuth";
 import { onboardSupabaseUser } from "./onboarding";
+import { createAuthHandoff, exchangeAuthHandoff } from "./authHandoff";
 import {
   insertStudentSchema,
   insertRuleSchema,
@@ -45,6 +46,8 @@ export async function registerRoutes(
   // Setup authentication
   await setupAuth(app);
   app.post("/api/onboarding/supabase", requireSupabaseUser, onboardSupabaseUser);
+  app.post("/api/auth/handoff", requireSupabaseUser, createAuthHandoff);
+  app.post("/api/auth/exchange", exchangeAuthHandoff);
   app.use("/api", authenticateSupabaseJwt, isAuthenticated, attachAccountContext);
 
   // Auth routes
