@@ -100,11 +100,22 @@ function getAmountCents(body: PayfastItnBody) {
   return Math.round(amount * 100);
 }
 
+function redactSensitiveItnFields(body: PayfastItnBody) {
+  const redacted = { ...body };
+  delete redacted.merchant_key;
+  return redacted;
+}
+
 export async function handlePayfastItn(req: Request, res: Response) {
   try {
     const body = normalizeBody(req.body);
+    console.log("[api/payments/payfast/itn] ITN received", {
+      body: redactSensitiveItnFields(body),
+      headers: req.headers,
+    });
 
     if (body.merchant_id !== payfastConfig.merchantId) {
+
       return res.status(400).send("Invalid merchant");
     }
 
