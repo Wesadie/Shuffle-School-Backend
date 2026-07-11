@@ -39,11 +39,15 @@ function buildSignaturePayload(body: PayfastItnBody) {
   return `${payload}&passphrase=${encodePayfastValue(payfastConfig.passphrase)}`;
 }
 
+function calculateSignature(body: PayfastItnBody) {
+  return crypto.createHash("md5").update(buildSignaturePayload(body)).digest("hex");
+}
+
 function verifySignature(body: PayfastItnBody) {
   const receivedSignature = body.signature;
   if (!receivedSignature) return false;
 
-  const expectedSignature = crypto.createHash("md5").update(buildSignaturePayload(body)).digest("hex");
+  const expectedSignature = calculateSignature(body);
   return expectedSignature.toLowerCase() === receivedSignature.toLowerCase();
 }
 
@@ -65,6 +69,27 @@ async function validateWithPayfast(body: PayfastItnBody) {
 
   const text = (await response.text()).trim();
   return response.ok && text === "VALID";
+}
+
+function logItnDiagnostics(
+  body: PayfastItnBody,
+  diagnostics: {
+    merchantIdMatched: boolean;
+    signaturePassed: boolean;
+    calculatedSignature: string;
+    payfastServerValidationPassed: boolean | null;
+    rejectionReason: string;
+  },
+) {
+  console.warn("[api/payments/payfast/itn] temporary diagnostic rejection log", {
+    paymentStatus: body.payment_status,
+    merchantIdMatched: diagnostics.merchantIdMatched,
+    signaturePassed: diagnostics.signaturePassed,
+    receivedSignature: body.signature,
+    calculatedSignature: diagnostics.calculatedSignature,
+    payfastServerValidationPassed: diagnostics.payfastServerValidationPassed,
+    rejectionReason: diagnostics.rejectionReason,
+  });
 }
 
 function requirePlanType(value: string | undefined): LicensePlanType {
@@ -96,18 +121,44 @@ function getAmountCents(body: PayfastItnBody) {
 }
 
 export async function handlePayfastItn(req: Request, res: Response) {
-  try {
-    const body = normalizeBody(req.body);
+  const body = normalizeBody(req.body);
+  const merchantIdMatched = body.merchant_id === payfastConfig.merchantId;
+  const calculatedSignature = calculateSignature(body);
+  const signaturePassed = verifySignature(body);
+  let payfastServerValidationPassed: boolean | null = null;
 
-    if (body.merchant_id !== payfastConfig.merchantId) {
+  try {
+    if (!merchantIdMatched) {
+      logItnDiagnostics(body, {
+        merchantIdMatched,
+        signaturePassed,
+        calculatedSignature,
+        payfastServerValidationPassed,
+        rejectionReason: "Invalid merchant",
+      });
       return res.status(400).send("Invalid merchant");
     }
 
-    if (!verifySignature(body)) {
+    if (!signaturePassed) {
+      logItnDiagnostics(body, {
+        merchantIdMatched,
+        signaturePassed,
+        calculatedSignature,
+        payfastServerValidationPassed,
+        rejectionReason: "Invalid signature",
+      });
       return res.status(400).send("Invalid signature");
     }
 
-    if (!(await validateWithPayfast(body))) {
+    payfastServerValidationPassed = await validateWithPayfast(body);
+    if (!payfastServerValidationPassed) {
+      logItnDiagnostics(body, {
+        merchantIdMatched,
+        signaturePassed,
+        calculatedSignature,
+        payfastServerValidationPassed,
+        rejectionReason: "Invalid PayFast validation",
+      });
       return res.status(400).send("Invalid PayFast validation");
     }
 
@@ -139,8 +190,16 @@ export async function handlePayfastItn(req: Request, res: Response) {
 
     return res.status(200).send("OK");
   } catch (error) {
+    const rejectionReason = error instanceof Error ? error.message : String(error);
+    logItnDiagnostics(body, {
+      merchantIdMatched,
+      signaturePassed,
+      calculatedSignature,
+      payfastServerValidationPassed,
+      rejectionReason,
+    });
     console.error("[api/payments/payfast/itn] failed to process notification", {
-      message: error instanceof Error ? error.message : String(error),
+      message: rejectionReason,
     });
     return res.status(400).send("Bad Request");
   }
