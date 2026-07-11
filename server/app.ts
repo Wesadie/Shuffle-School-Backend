@@ -2,9 +2,11 @@ import express, { type Request, Response, NextFunction } from "express";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import { buildPayfastSandboxRedirectUrl } from "./payfast/initiate";
+import { handlePayfastItn } from "./payfast/itn";
 import { z } from "zod";
 
 const app = express();
+
 const httpServer = createServer(app);
 
 declare module "http" {
@@ -51,6 +53,8 @@ app.post("/api/payments/payfast/initiate", (req, res) => {
     res.status(400).json({ error: error instanceof Error ? error.message : "Unable to initiate payment" });
   }
 });
+
+app.post("/api/payments/payfast/itn", handlePayfastItn);
 
 app.use((req, res, next) => {
   const origin = req.headers.origin;
