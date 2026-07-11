@@ -32,6 +32,8 @@ import SettingsPage from "@/pages/settings";
 import HelpPage from "@/pages/help";
 import TutorialsPage from "@/pages/tutorials";
 import AuthHandoffPage from "@/pages/auth-handoff";
+import PayfastReturnPage from "@/pages/payfast-return";
+import PayfastCancelPage from "@/pages/payfast-cancel";
 
 import type { Student, Placement, ClassConfig } from "@shared/schema";
 
@@ -62,7 +64,10 @@ function AuthenticatedRouter() {
       <Route path="/settings" component={SettingsPage} />
       <Route path="/tutorials" component={TutorialsPage} />
       <Route path="/help" component={HelpPage} />
+      <Route path="/payments/success" component={PayfastReturnPage} />
+      <Route path="/payments/cancel" component={PayfastCancelPage} />
       <Route component={NotFound} />
+
     </Switch>
   );
 }
