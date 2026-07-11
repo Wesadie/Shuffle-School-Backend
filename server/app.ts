@@ -42,23 +42,34 @@ function isCorsAllowedOrigin(origin: string): boolean {
   }
 }
 
-app.post("/api/payments/payfast/initiate", authenticateSupabaseJwt, attachAccountContext, (req, res) => {
-  try {
-    const body = z.object({
-      planType: z.enum(["teacher", "school"]),
-      transactionType: z.enum(["initial", "topup", "renewal"]).default("initial"),
-      learnerCount: z.coerce.number().int().positive(),
-    }).parse(req.body);
+app.post(
+  "/api/payments/payfast/initiate",
+  authenticateSupabaseJwt,
+  (req, res, next) => {
+    if (!req.supabaseUser) {
+      return res.status(401).json({ error: "Authentication is required to initiate payment" });
+    }
+    return next();
+  },
+  attachAccountContext,
+  (req, res) => {
+    try {
+      const body = z.object({
+        planType: z.enum(["teacher", "school"]),
+        transactionType: z.enum(["initial", "topup", "renewal"]).default("initial"),
+        learnerCount: z.coerce.number().int().positive(),
+      }).parse(req.body);
 
-    const { amount, merchantPaymentId, redirectUrl } = buildPayfastSandboxRedirectUrl({
-      ...body,
-      accountId: getAccountContext(req).accountId,
-    });
-    res.json({ amount, merchantPaymentId, redirectUrl });
-  } catch (error) {
-    res.status(400).json({ error: error instanceof Error ? error.message : "Unable to initiate payment" });
-  }
-});
+      const { amount, merchantPaymentId, redirectUrl } = buildPayfastSandboxRedirectUrl({
+        ...body,
+        accountId: getAccountContext(req).accountId,
+      });
+      res.json({ amount, merchantPaymentId, redirectUrl });
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : "Unable to initiate payment" });
+    }
+  },
+);
 
 app.post("/api/payments/payfast/itn", handlePayfastItn);
 
