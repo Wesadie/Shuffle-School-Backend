@@ -1,6 +1,8 @@
 import express, { type Request, Response, NextFunction } from "express";
 import { serveStatic } from "./static";
 import { createServer } from "http";
+import { attachAccountContext, getAccountContext } from "./accountContext";
+import { authenticateSupabaseJwt } from "./supabaseAuth";
 import { buildPayfastSandboxRedirectUrl } from "./payfast/initiate";
 import { handlePayfastItn } from "./payfast/itn";
 import { z } from "zod";
@@ -40,14 +42,18 @@ function isCorsAllowedOrigin(origin: string): boolean {
   }
 }
 
-app.post("/api/payments/payfast/initiate", (req, res) => {
+app.post("/api/payments/payfast/initiate", authenticateSupabaseJwt, attachAccountContext, (req, res) => {
   try {
     const body = z.object({
       planType: z.enum(["teacher", "school"]),
+      transactionType: z.enum(["initial", "topup", "renewal"]).default("initial"),
       learnerCount: z.coerce.number().int().positive(),
     }).parse(req.body);
 
-    const { amount, merchantPaymentId, redirectUrl } = buildPayfastSandboxRedirectUrl(body);
+    const { amount, merchantPaymentId, redirectUrl } = buildPayfastSandboxRedirectUrl({
+      ...body,
+      accountId: getAccountContext(req).accountId,
+    });
     res.json({ amount, merchantPaymentId, redirectUrl });
   } catch (error) {
     res.status(400).json({ error: error instanceof Error ? error.message : "Unable to initiate payment" });

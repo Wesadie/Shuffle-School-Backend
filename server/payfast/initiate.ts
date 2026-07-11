@@ -3,10 +3,12 @@ import { payfastConfig } from "./config";
 
 export interface PayfastInitiationInput {
   planType: "teacher" | "school";
+  transactionType: "initial" | "topup" | "renewal";
+  accountId: string;
   learnerCount: number;
 }
 
-export function buildPayfastSandboxRedirectUrl({ planType, learnerCount }: PayfastInitiationInput) {
+export function buildPayfastSandboxRedirectUrl({ planType, transactionType, accountId, learnerCount }: PayfastInitiationInput) {
   if (!payfastConfig.sandbox) {
     throw new Error("PayFast sandbox mode is not enabled");
   }
@@ -15,11 +17,20 @@ export function buildPayfastSandboxRedirectUrl({ planType, learnerCount }: Payfa
     throw new Error("planType must be teacher or school");
   }
 
+  if (transactionType !== "initial" && transactionType !== "topup" && transactionType !== "renewal") {
+    throw new Error("transactionType must be initial, topup, or renewal");
+  }
+
+  if (!accountId.trim()) {
+    throw new Error("accountId is required");
+  }
+
   if (!Number.isInteger(learnerCount) || learnerCount <= 0) {
     throw new Error("learnerCount must be a positive integer");
   }
 
   const amount = learnerCount * 25;
+
   const merchantPaymentId = `SSF-${randomUUID()}`;
   const itemName = `${planType === "teacher" ? "Teacher" : "School"} licence for ${learnerCount} learner${learnerCount === 1 ? "" : "s"}`;
   const publicBaseUrl = getPublicBaseUrl();
@@ -35,10 +46,13 @@ export function buildPayfastSandboxRedirectUrl({ planType, learnerCount }: Payfa
     item_name: itemName,
     item_description: itemName,
     custom_str1: planType,
+    custom_str2: transactionType,
+    custom_str3: accountId,
     custom_int1: String(learnerCount),
   });
 
   return {
+
     amount,
     merchantPaymentId,
     redirectUrl: `${getPayfastBaseUrl()}/eng/process?${params.toString()}`,
