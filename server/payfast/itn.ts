@@ -123,7 +123,11 @@ export async function handlePayfastItn(req: Request, res: Response) {
       return res.status(400).send("Invalid signature");
     }
 
-    if (!(await validateWithPayfast(body))) {
+    const validationResult = await validateWithPayfast(body);
+    console.log("[ITN Validation]", {
+      payfastValidationPassed: validationResult,
+    });
+    if (!validationResult) {
       return res.status(400).send("Invalid PayFast validation");
     }
 
@@ -141,11 +145,19 @@ export async function handlePayfastItn(req: Request, res: Response) {
     const learnerCount = requirePositiveInteger(body.custom_int1, "learner count");
     const amountCents = getAmountCents(body);
     const expectedAmountCents = learnerCount * 25 * 100;
+    console.log("[ITN Amount Check]", {
+      learnerCount,
+      amountGross: body.amount_gross,
+      parsedAmountCents: amountCents,
+      expectedAmountCents,
+      paymentReference,
+    });
     if (amountCents !== expectedAmountCents) {
       throw new Error("Payment amount mismatch");
     }
 
     const transactionType = getTransactionType(body.custom_str2);
+
     if (transactionType === "topup") {
       console.log("[api/payments/payfast/itn] selected licence function", { functionName: "addLearnerCapacity", accountId });
       console.log("[api/payments/payfast/itn] entering addLearnerCapacity", { accountId });
