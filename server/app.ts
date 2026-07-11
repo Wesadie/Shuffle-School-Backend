@@ -1,6 +1,8 @@
 import express, { type Request, Response, NextFunction } from "express";
 import { serveStatic } from "./static";
 import { createServer } from "http";
+import { buildPayfastSandboxRedirectUrl } from "./payfast/initiate";
+import { z } from "zod";
 
 const app = express();
 const httpServer = createServer(app);
@@ -36,8 +38,23 @@ function isCorsAllowedOrigin(origin: string): boolean {
   }
 }
 
+app.post("/api/payments/payfast/initiate", (req, res) => {
+  try {
+    const body = z.object({
+      planType: z.enum(["teacher", "school"]),
+      learnerCount: z.coerce.number().int().positive(),
+    }).parse(req.body);
+
+    const { amount, merchantPaymentId, redirectUrl } = buildPayfastSandboxRedirectUrl(body);
+    res.json({ amount, merchantPaymentId, redirectUrl });
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : "Unable to initiate payment" });
+  }
+});
+
 app.use((req, res, next) => {
   const origin = req.headers.origin;
+
   if (origin && isCorsAllowedOrigin(origin)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Vary", "Origin");
