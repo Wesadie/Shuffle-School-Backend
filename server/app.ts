@@ -71,10 +71,19 @@ app.post(
         ...body,
         accountId,
       });
+      const payfastUrl = new URL(redirectUrl);
+      console.log("[api/payments/payfast/initiate] temporary PayFast redirect metadata log", {
+        redirectUrl,
+        custom_str1: payfastUrl.searchParams.get("custom_str1"),
+        custom_str2: payfastUrl.searchParams.get("custom_str2"),
+        custom_str3: payfastUrl.searchParams.get("custom_str3"),
+        custom_int1: payfastUrl.searchParams.get("custom_int1"),
+      });
       console.log("[api/payments/payfast/initiate] Redirecting to PayFast Sandbox");
       res.json({ amount, merchantPaymentId, redirectUrl });
 
     } catch (error) {
+
       res.status(400).json({ error: error instanceof Error ? error.message : "Unable to initiate payment" });
     }
   },
