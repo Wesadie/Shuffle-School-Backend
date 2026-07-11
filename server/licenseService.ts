@@ -3,6 +3,8 @@ import { pool } from "./db";
 
 export type LicensePlanType = "teacher" | "school";
 
+export type PaymentTransactionType = "initial" | "topup" | "renewal";
+
 export interface LicenseOperationResult {
   accountId: string;
   subscriptionStatus: string;
@@ -31,6 +33,12 @@ function assertValidAmount(amountCents: number) {
 function assertPaymentReference(paymentReference: string) {
   if (!paymentReference.trim()) {
     throw new Error("paymentReference is required");
+  }
+}
+
+export function assertLicensePlanType(planType: string): asserts planType is LicensePlanType {
+  if (planType !== "teacher" && planType !== "school") {
+    throw new Error("planType must be teacher or school");
   }
 }
 

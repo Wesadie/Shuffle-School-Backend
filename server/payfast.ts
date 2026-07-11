@@ -20,14 +20,17 @@ function assertPositiveInteger(value: number, name: string) {
   }
 }
 
-function buildSignature(fields: Record<string, string>) {
-  const entries = Object.entries(fields)
+function buildQueryString(fields: Record<string, string>) {
+  return Object.entries(fields)
     .filter(([, value]) => value !== "")
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([key, value]) => `${key}=${encodeURIComponent(value).replace(/%20/g, "+")}`)
     .join("&");
+}
 
-  const signed = PAYFAST_PASSPHRASE ? `${entries}&passphrase=${encodeURIComponent(PAYFAST_PASSPHRASE).replace(/%20/g, "+")}` : entries;
+function buildSignature(fields: Record<string, string>) {
+  const queryString = buildQueryString(fields);
+  const signed = PAYFAST_PASSPHRASE ? `${queryString}&passphrase=${encodeURIComponent(PAYFAST_PASSPHRASE).replace(/%20/g, "+")}` : queryString;
   return crypto.createHash("md5").update(signed).digest("hex");
 }
 
@@ -38,7 +41,6 @@ export function buildPayfastInitiationUrl(planType: string, learnerCount: number
   const amount = learnerCount * 25;
   const amountFormatted = amount.toFixed(2);
   const paymentReference = `SSF-${nanoid(12).toUpperCase()}`;
-  const merchantName = "ShuffleSchool";
   const description = `${planType === "teacher" ? "Teacher" : "School"} licence for ${learnerCount} learner${learnerCount === 1 ? "" : "s"}`;
 
   const fields = {
@@ -46,8 +48,8 @@ export function buildPayfastInitiationUrl(planType: string, learnerCount: number
     merchant_key: PAYFAST_MERCHANT_KEY,
     return_url: `${APP_BASE_URL}/payments/success`,
     cancel_url: `${APP_BASE_URL}/payments/cancel`,
-    notify_url: `${APP_BASE_URL}/api/payments/payfast/notify`,
-    name_first: merchantName,
+    notify_url: `${APP_BASE_URL}/api/payments/payfast/itn`,
+    name_first: "ShuffleSchool",
     name_last: "",
     email_address: "",
     m_payment_id: paymentReference,
@@ -73,4 +75,16 @@ export function buildPayfastInitiationUrl(planType: string, learnerCount: number
     amountFormatted,
     redirectUrl: url.toString(),
   };
+}
+
+export function verifyPayfastNotification(body: Record<string, string>) {
+  if (body.payment_status !== "COMPLETE") {
+    return false;
+  }
+
+  const receivedSignature = body.signature ?? "";
+  const fields = { ...body };
+  delete fields.signature;
+  const expectedSignature = buildSignature(fields);
+  return receivedSignature.toLowerCase() === expectedSignature.toLowerCase();
 }
