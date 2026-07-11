@@ -15,6 +15,7 @@ import {
   wouldExceedLearnerCapacity,
   learnerCapacityExceededResponse,
 } from "./accessControl";
+import { buildPayfastInitiationUrl } from "./payfast";
 import {
   insertStudentSchema,
   insertRuleSchema,
@@ -60,6 +61,28 @@ export async function registerRoutes(
   app.post("/api/onboarding/supabase", requireSupabaseUser, onboardSupabaseUser);
   app.post("/api/auth/handoff", requireSupabaseUser, createAuthHandoff);
   app.post("/api/auth/exchange", exchangeAuthHandoff);
+  app.post("/api/payments/payfast/initiate", async (req, res) => {
+    try {
+      const body = z.object({
+        planType: z.enum(["teacher", "school"]),
+        learnerCount: z.coerce.number().int().positive(),
+      }).parse(req.body);
+
+      const { paymentReference, amount, redirectUrl } = buildPayfastInitiationUrl(body.planType, body.learnerCount);
+      console.log("[api/payments/payfast/initiate] created payment initiation", {
+        paymentReference,
+        planType: body.planType,
+        learnerCount: body.learnerCount,
+        amount,
+      });
+      res.redirect(302, redirectUrl);
+    } catch (error) {
+      console.error("[api/payments/payfast/initiate] failed to create payment initiation", {
+        message: error instanceof Error ? error.message : String(error),
+      });
+      res.status(400).json({ error: error instanceof Error ? error.message : "Unable to initiate payment" });
+    }
+  });
   app.use("/api", authenticateSupabaseJwt, isAuthenticated, attachAccountContext);
 
   // Auth routes
