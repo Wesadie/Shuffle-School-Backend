@@ -154,9 +154,16 @@ export async function activateInitialLicense(
     );
 
     await client.query("COMMIT");
+    const subscriptionRow = await client.query("SELECT * FROM account_subscriptions WHERE account_id = $1", [accountId]);
+    console.log("[licenseService] activateInitialLicense database update succeeded", { accountId, subscription: subscriptionRow.rows[0] ?? null });
     return toResult(result.rows[0], false);
   } catch (error) {
     await client.query("ROLLBACK");
+    console.error("[licenseService] activateInitialLicense failed", {
+      error,
+      message: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
     throw error;
   } finally {
     client.release();
@@ -164,6 +171,7 @@ export async function activateInitialLicense(
 }
 
 export async function addLearnerCapacity(
+
   accountId: string,
   additionalLearners: number,
   amountCents: number,
@@ -227,9 +235,16 @@ export async function addLearnerCapacity(
     }
 
     await client.query("COMMIT");
+    const subscriptionRow = await client.query("SELECT * FROM account_subscriptions WHERE account_id = $1", [accountId]);
+    console.log("[licenseService] addLearnerCapacity database update succeeded", { accountId, subscription: subscriptionRow.rows[0] ?? null });
     return toResult(result.rows[0], false);
   } catch (error) {
     await client.query("ROLLBACK");
+    console.error("[licenseService] addLearnerCapacity failed", {
+      error,
+      message: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
     throw error;
   } finally {
     client.release();
@@ -237,6 +252,7 @@ export async function addLearnerCapacity(
 }
 
 export async function renewLicense(
+
   accountId: string,
   amountCents: number,
   paymentReference: string,
@@ -301,9 +317,16 @@ export async function renewLicense(
     }
 
     await client.query("COMMIT");
+    const subscriptionRow = await client.query("SELECT * FROM account_subscriptions WHERE account_id = $1", [accountId]);
+    console.log("[licenseService] renewLicense database update succeeded", { accountId, subscription: subscriptionRow.rows[0] ?? null });
     return toResult(result.rows[0], false);
   } catch (error) {
     await client.query("ROLLBACK");
+    console.error("[licenseService] renewLicense failed", {
+      error,
+      message: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
     throw error;
   } finally {
     client.release();

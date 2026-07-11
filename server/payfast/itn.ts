@@ -132,6 +132,7 @@ export async function handlePayfastItn(req: Request, res: Response) {
     }
 
     const accountId = body.custom_str3;
+    console.log("[api/payments/payfast/itn] temporary custom_str3 log", { custom_str3: accountId });
     const paymentReference = body.m_payment_id;
     if (!accountId) throw new Error("Missing account identifier");
     if (!paymentReference) throw new Error("Missing payment reference");
@@ -146,17 +147,25 @@ export async function handlePayfastItn(req: Request, res: Response) {
 
     const transactionType = getTransactionType(body.custom_str2);
     if (transactionType === "topup") {
+      console.log("[api/payments/payfast/itn] selected licence function", { functionName: "addLearnerCapacity", accountId });
+      console.log("[api/payments/payfast/itn] entering addLearnerCapacity", { accountId });
       await addLearnerCapacity(accountId, learnerCount, amountCents, paymentReference);
     } else if (transactionType === "renewal") {
+      console.log("[api/payments/payfast/itn] selected licence function", { functionName: "renewLicense", accountId });
+      console.log("[api/payments/payfast/itn] entering renewLicense", { accountId });
       await renewLicense(accountId, amountCents, paymentReference);
     } else {
+      console.log("[api/payments/payfast/itn] selected licence function", { functionName: "activateInitialLicense", accountId });
+      console.log("[api/payments/payfast/itn] entering activateInitialLicense", { accountId });
       await activateInitialLicense(accountId, planType, learnerCount, amountCents, paymentReference);
     }
 
     return res.status(200).send("OK");
   } catch (error) {
     console.error("[api/payments/payfast/itn] failed to process notification", {
+      error,
       message: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
     });
     return res.status(400).send("Bad Request");
   }
