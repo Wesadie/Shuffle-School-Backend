@@ -22,12 +22,13 @@ export function buildPayfastSandboxRedirectUrl({ planType, learnerCount }: Payfa
   const amount = learnerCount * 25;
   const merchantPaymentId = `SSF-${randomUUID()}`;
   const itemName = `${planType === "teacher" ? "Teacher" : "School"} licence for ${learnerCount} learner${learnerCount === 1 ? "" : "s"}`;
+  const publicBaseUrl = getPublicBaseUrl();
   const params = new URLSearchParams({
     merchant_id: payfastConfig.merchantId,
     merchant_key: payfastConfig.merchantKey,
-    return_url: `${windowOrigin()}/payments/success`,
-    cancel_url: `${windowOrigin()}/payments/cancel`,
-    notify_url: `${windowOrigin()}/api/payments/payfast/itn`,
+    return_url: `${publicBaseUrl}/payments/success`,
+    cancel_url: `${publicBaseUrl}/payments/cancel`,
+    notify_url: `${publicBaseUrl}/api/payments/payfast/itn`,
     name_first: "ShuffleSchool",
     m_payment_id: merchantPaymentId,
     amount: amount.toFixed(2),
@@ -48,6 +49,11 @@ function getPayfastBaseUrl() {
   return payfastConfig.sandbox ? "https://sandbox.payfast.co.za" : "https://www.payfast.co.za";
 }
 
-function windowOrigin() {
-  return process.env.APP_BASE_URL ?? "";
+function getPublicBaseUrl() {
+  const publicBaseUrl = (process.env.APP_BASE_URL ?? "https://shuffle-school.onrender.com").trim().replace(/\/$/, "");
+  const url = new URL(publicBaseUrl);
+  if (url.protocol !== "https:") {
+    throw new Error("APP_BASE_URL must be an absolute HTTPS URL for PayFast callbacks");
+  }
+  return url.origin;
 }
