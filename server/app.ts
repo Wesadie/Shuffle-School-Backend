@@ -59,12 +59,21 @@ app.post(
         transactionType: z.enum(["initial", "topup", "renewal"]).default("initial"),
         learnerCount: z.coerce.number().int().positive(),
       }).parse(req.body);
+      const accountId = getAccountContext(req).accountId;
+      console.log("[api/payments/payfast/initiate] temporary payment initiation log", {
+        accountId,
+        learnerCount: body.learnerCount,
+        planType: body.planType,
+        transactionType: body.transactionType,
+      });
 
       const { amount, merchantPaymentId, redirectUrl } = buildPayfastSandboxRedirectUrl({
         ...body,
-        accountId: getAccountContext(req).accountId,
+        accountId,
       });
+      console.log("[api/payments/payfast/initiate] Redirecting to PayFast Sandbox");
       res.json({ amount, merchantPaymentId, redirectUrl });
+
     } catch (error) {
       res.status(400).json({ error: error instanceof Error ? error.message : "Unable to initiate payment" });
     }
