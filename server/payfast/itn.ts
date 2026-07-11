@@ -26,7 +26,9 @@ function normalizeBody(body: unknown): PayfastItnBody {
 }
 
 function encodePayfastValue(value: string) {
-  return encodeURIComponent(value.trim()).replace(/%20/g, "+");
+  return encodeURIComponent(value.trim())
+    .replace(/%20/g, "+")
+    .replace(/[!'()*]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
 }
 
 function buildSignaturePayload(body: PayfastItnBody) {
@@ -47,8 +49,7 @@ function verifySignature(body: PayfastItnBody) {
   const receivedSignature = body.signature;
   if (!receivedSignature) return false;
 
-  const expectedSignature = calculateSignature(body);
-  return expectedSignature.toLowerCase() === receivedSignature.toLowerCase();
+  return calculateSignature(body).toLowerCase() === receivedSignature.toLowerCase();
 }
 
 async function validateWithPayfast(body: PayfastItnBody) {
@@ -69,27 +70,6 @@ async function validateWithPayfast(body: PayfastItnBody) {
 
   const text = (await response.text()).trim();
   return response.ok && text === "VALID";
-}
-
-function logItnDiagnostics(
-  body: PayfastItnBody,
-  diagnostics: {
-    merchantIdMatched: boolean;
-    signaturePassed: boolean;
-    calculatedSignature: string;
-    payfastServerValidationPassed: boolean | null;
-    rejectionReason: string;
-  },
-) {
-  console.warn("[api/payments/payfast/itn] temporary diagnostic rejection log", {
-    paymentStatus: body.payment_status,
-    merchantIdMatched: diagnostics.merchantIdMatched,
-    signaturePassed: diagnostics.signaturePassed,
-    receivedSignature: body.signature,
-    calculatedSignature: diagnostics.calculatedSignature,
-    payfastServerValidationPassed: diagnostics.payfastServerValidationPassed,
-    rejectionReason: diagnostics.rejectionReason,
-  });
 }
 
 function requirePlanType(value: string | undefined): LicensePlanType {
@@ -121,44 +101,18 @@ function getAmountCents(body: PayfastItnBody) {
 }
 
 export async function handlePayfastItn(req: Request, res: Response) {
-  const body = normalizeBody(req.body);
-  const merchantIdMatched = body.merchant_id === payfastConfig.merchantId;
-  const calculatedSignature = calculateSignature(body);
-  const signaturePassed = verifySignature(body);
-  let payfastServerValidationPassed: boolean | null = null;
-
   try {
-    if (!merchantIdMatched) {
-      logItnDiagnostics(body, {
-        merchantIdMatched,
-        signaturePassed,
-        calculatedSignature,
-        payfastServerValidationPassed,
-        rejectionReason: "Invalid merchant",
-      });
+    const body = normalizeBody(req.body);
+
+    if (body.merchant_id !== payfastConfig.merchantId) {
       return res.status(400).send("Invalid merchant");
     }
 
-    if (!signaturePassed) {
-      logItnDiagnostics(body, {
-        merchantIdMatched,
-        signaturePassed,
-        calculatedSignature,
-        payfastServerValidationPassed,
-        rejectionReason: "Invalid signature",
-      });
+    if (!verifySignature(body)) {
       return res.status(400).send("Invalid signature");
     }
 
-    payfastServerValidationPassed = await validateWithPayfast(body);
-    if (!payfastServerValidationPassed) {
-      logItnDiagnostics(body, {
-        merchantIdMatched,
-        signaturePassed,
-        calculatedSignature,
-        payfastServerValidationPassed,
-        rejectionReason: "Invalid PayFast validation",
-      });
+    if (!(await validateWithPayfast(body))) {
       return res.status(400).send("Invalid PayFast validation");
     }
 
@@ -190,16 +144,8 @@ export async function handlePayfastItn(req: Request, res: Response) {
 
     return res.status(200).send("OK");
   } catch (error) {
-    const rejectionReason = error instanceof Error ? error.message : String(error);
-    logItnDiagnostics(body, {
-      merchantIdMatched,
-      signaturePassed,
-      calculatedSignature,
-      payfastServerValidationPassed,
-      rejectionReason,
-    });
     console.error("[api/payments/payfast/itn] failed to process notification", {
-      message: rejectionReason,
+      message: error instanceof Error ? error.message : String(error),
     });
     return res.status(400).send("Bad Request");
   }
