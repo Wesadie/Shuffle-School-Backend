@@ -14,7 +14,7 @@ import { Button } from "@/components/ui/button";
 import { BookOpen, HelpCircle, LayoutDashboard, LogOut, Settings } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { supabase } from "@/integrations/supabase/client";
-import logoImage from "@assets/ChatGPT_Image_Dec_8,_2025,_01_03_50_PM_1765191843507.png";
+import logoImage from "@assets/shuffle-school-logo.png";
 
 import NotFound from "@/pages/not-found";
 import DashboardPage from "@/pages/dashboard";

@@ -3,7 +3,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Users, Shuffle, BarChart3, Settings, HelpCircle } from "lucide-react";
 import { Link } from "wouter";
-import logoImage from "@assets/ChatGPT_Image_Dec_8,_2025,_01_03_50_PM_1765191843507.png";
+import logoImage from "@assets/shuffle-school-logo.png";
 
 export default function LandingPage() {
   const marketingUrl = import.meta.env.VITE_MARKETING_URL || "";

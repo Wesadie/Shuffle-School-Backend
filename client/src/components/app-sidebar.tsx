@@ -1,6 +1,6 @@
 import { useLocation, Link } from "wouter";
 import { Users, Link2, Sliders, Sparkles, ClipboardList, Download, Upload, ClipboardCheck, Network, Layers, GraduationCap } from "lucide-react";
-import logoImage from "@assets/ChatGPT_Image_Dec_8,_2025,_01_03_50_PM_1765191843507.png";
+import logoImage from "@assets/shuffle-school-logo.png";
 import {
   Sidebar,
   SidebarContent,

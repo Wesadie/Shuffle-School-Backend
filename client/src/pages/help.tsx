@@ -2,7 +2,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Settings, HelpCircle, Users, Link2, Sliders, Sparkles, ClipboardList } from "lucide-react";
 import { Link } from "wouter";
-import logoImage from "@assets/ChatGPT_Image_Dec_8,_2025,_01_03_50_PM_1765191843507.png";
+import logoImage from "@assets/shuffle-school-logo.png";
 
 export default function HelpPage() {
   return (
