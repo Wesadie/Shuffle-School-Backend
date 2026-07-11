@@ -13,6 +13,7 @@ export interface AccountContext {
   licensedLearnerCount: number | null;
   trialEndsAt: string | null;
   trialExpired: boolean;
+  licenseEndsAt: string | null;
   successfulSolverGenerations: number;
 }
 
@@ -38,6 +39,7 @@ export async function resolveAccountContext(): Promise<AccountContext> {
     licensedLearnerCount: null,
     trialEndsAt: null,
     trialExpired: false,
+    licenseEndsAt: null,
     successfulSolverGenerations: 0,
   };
 }

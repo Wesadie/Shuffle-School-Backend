@@ -29,11 +29,13 @@ import ScenariosPage from "@/pages/scenarios";
 import TeachersPage from "@/pages/teachers";
 import LandingPage from "@/pages/landing";
 import SettingsPage from "@/pages/settings";
+import LicenceBillingPage from "@/pages/licence-billing";
 import HelpPage from "@/pages/help";
 import TutorialsPage from "@/pages/tutorials";
 import AuthHandoffPage from "@/pages/auth-handoff";
 import PayfastReturnPage from "@/pages/payfast-return";
 import PayfastCancelPage from "@/pages/payfast-cancel";
+import PayfastTestPage from "@/pages/payfast-test";
 
 import type { Student, Placement, ClassConfig } from "@shared/schema";
 
@@ -62,8 +64,10 @@ function AuthenticatedRouter() {
       <Route path="/sociogram" component={SociogramPage} />
       <Route path="/scenarios" component={ScenariosPage} />
       <Route path="/settings" component={SettingsPage} />
+      <Route path="/settings/billing" component={LicenceBillingPage} />
       <Route path="/tutorials" component={TutorialsPage} />
       <Route path="/help" component={HelpPage} />
+
       <Route path="/payments/success" component={PayfastReturnPage} />
       <Route path="/payments/cancel" component={PayfastCancelPage} />
       <Route component={NotFound} />
@@ -98,6 +102,7 @@ function TopNavigation() {
 
   const rightNavItems = [
     { label: "Settings", href: "/settings", icon: Settings },
+    { label: "Licence & Billing", href: "/settings/billing", icon: Settings },
     { label: "Tutorials", href: "/tutorials", icon: BookOpen },
     { label: "Help", href: "/help", icon: HelpCircle },
   ];
@@ -201,7 +206,12 @@ function AppContent() {
     return <AuthHandoffPage />;
   }
 
+  if (location === "/payfast-test") {
+    return <PayfastTestPage />;
+  }
+
   const { data: students = [] } = useQuery<Student[]>({
+
     queryKey: ["/api/students"],
     enabled: isAuthenticated,
   });

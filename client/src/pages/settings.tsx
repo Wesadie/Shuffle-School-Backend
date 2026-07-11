@@ -2,7 +2,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { ThemeToggle } from "@/components/theme-toggle";
-import { Settings, HelpCircle, Loader2, AlertCircle } from "lucide-react";
+import { CreditCard, Settings, HelpCircle, Loader2, AlertCircle } from "lucide-react";
+
 import { Link } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
@@ -74,7 +75,14 @@ export default function SettingsPage() {
               Settings
             </span>
           </Link>
+          <Link href="/settings/billing">
+            <span className="px-3 py-1.5 text-sm font-medium rounded-md cursor-pointer text-muted-foreground hover-elevate flex items-center gap-1.5" data-testid="nav-billing">
+              <CreditCard className="h-4 w-4" />
+              Licence & Billing
+            </span>
+          </Link>
           <Link href="/help">
+
             <span className="px-3 py-1.5 text-sm font-medium rounded-md cursor-pointer text-muted-foreground hover-elevate flex items-center gap-1.5" data-testid="nav-help">
               <HelpCircle className="h-4 w-4" />
               Help

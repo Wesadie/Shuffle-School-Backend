@@ -70,14 +70,18 @@ async function resolveSupabaseAccountContext(userId: string): Promise<AccountCon
     licensedLearnerCount: number | null;
     trialEndsAt: Date | null;
     trialExpired: boolean;
+    licenseEndsAt: Date | null;
     successfulSolverGenerations: number;
   }>(
+
     `SELECT a.id AS "accountId", a.status AS "accountStatus", a.workspace_mode AS "workspaceMode",
             COALESCE(s.status, 'trialing') AS "subscriptionStatus",
             s.licensed_learner_count AS "licensedLearnerCount",
             s.trial_ends_at AS "trialEndsAt",
             COALESCE(s.status, 'trialing') <> 'active' AND s.trial_ends_at IS NOT NULL AND s.trial_ends_at <= NOW() AS "trialExpired",
+            s.license_ends_at AS "licenseEndsAt",
             COALESCE(u.successful_solver_generations, 0)::int AS "successfulSolverGenerations"
+
      FROM account_memberships am
      JOIN accounts a ON a.id = am.account_id
      LEFT JOIN account_subscriptions s ON s.account_id = a.id
@@ -99,6 +103,7 @@ async function resolveSupabaseAccountContext(userId: string): Promise<AccountCon
     licensedLearnerCount: membership.licensedLearnerCount,
     trialEndsAt: membership.trialEndsAt ? membership.trialEndsAt.toISOString() : null,
     trialExpired: membership.subscriptionStatus === "active" ? false : membership.trialExpired,
+    licenseEndsAt: membership.licenseEndsAt ? membership.licenseEndsAt.toISOString() : null,
     successfulSolverGenerations: membership.successfulSolverGenerations,
   };
 }

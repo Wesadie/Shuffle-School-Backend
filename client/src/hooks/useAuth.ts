@@ -13,8 +13,10 @@ type AuthUser = Partial<User> & {
     accountStatus: string;
     workspaceMode: "demo" | "live";
     subscriptionStatus: string;
+    licensedLearnerCount: number | null;
     trialEndsAt: string | null;
     trialExpired: boolean;
+    licenseEndsAt?: string | null;
     successfulSolverGenerations: number;
   };
 };
