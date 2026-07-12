@@ -30,16 +30,23 @@ export default function PayfastReturnPage() {
 
     const poll = async () => {
       pollCount.current += 1;
-      const data = await checkLicense();
+
+      try {
+        const data = await checkLicense();
+
+        if (!active) return;
+
+        const isActive = data?.accountContext?.subscriptionStatus === "active";
+        if (isActive) {
+          setStatus("active");
+          reactQueryClient.invalidateQueries();
+          return;
+        }
+      } catch (error) {
+        console.warn("[PayFast Return] licence check failed", error);
+      }
 
       if (!active) return;
-
-      const isActive = data?.accountContext?.subscriptionStatus === "active";
-      if (isActive) {
-        setStatus("active");
-        reactQueryClient.invalidateQueries();
-        return;
-      }
 
       if (pollCount.current >= MAX_POLLS) {
         setStatus("pending");
@@ -50,10 +57,15 @@ export default function PayfastReturnPage() {
       setTimeout(poll, POLL_INTERVAL_MS);
     };
 
+    const fallback = setTimeout(() => {
+      if (active) setStatus("pending");
+    }, MAX_POLLS * POLL_INTERVAL_MS + 1000);
+
     poll();
 
     return () => {
       active = false;
+      clearTimeout(fallback);
     };
   }, [reactQueryClient]);
 
