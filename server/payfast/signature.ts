@@ -94,9 +94,12 @@ export function verifySignature(
 ): boolean {
   if (!receivedSignature) return false;
 
-  const expectedReceivedOrder = generateSignature(fields, passphrase);
-  if (safelyCompareSignatures(expectedReceivedOrder, receivedSignature)) return true;
+  const variants = [
+    generateSignature(fields, passphrase),
+    generateSignature(fields, passphrase, { sort: true }),
+    generateSignature(fields, ""),
+    generateSignature(fields, "", { sort: true }),
+  ];
 
-  const expectedSortedOrder = generateSignature(fields, passphrase, { sort: true });
-  return safelyCompareSignatures(expectedSortedOrder, receivedSignature);
+  return variants.some((expected) => safelyCompareSignatures(expected, receivedSignature));
 }
