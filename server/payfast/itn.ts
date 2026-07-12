@@ -128,14 +128,26 @@ async function applyLicenseOperation(
 export async function handlePayfastItn(req: Request, res: Response): Promise<void> {
   const body = normalizeBody(req.body);
 
+  console.log("[PayFast ITN Received]", {
+    paymentReference: body.m_payment_id,
+    paymentStatus: body.payment_status,
+    merchantId: body.merchant_id,
+    amountGross: body.amount_gross,
+    accountId: body.custom_str3,
+    transactionType: body.custom_str2,
+    learnerCount: body.custom_int1,
+  });
+
   // --- Check 1: merchant identity ---
   if (body.merchant_id !== payfastConfig.merchantId) {
+    console.warn("[PayFast ITN Rejected] invalid merchant", { paymentReference: body.m_payment_id });
     res.status(400).send("Invalid merchant");
     return;
   }
 
   // --- Check 2: signature ---
   if (!verifySignature(body, payfastConfig.passphrase, body.signature ?? "")) {
+    console.warn("[PayFast ITN Rejected] invalid signature", { paymentReference: body.m_payment_id });
     res.status(400).send("Invalid signature");
     return;
   }
@@ -143,12 +155,17 @@ export async function handlePayfastItn(req: Request, res: Response): Promise<voi
   // --- Check 3: server-side validation ---
   const isValid = await validateWithPayfastServer(body);
   if (!isValid) {
+    console.warn("[PayFast ITN Rejected] server validation failed", { paymentReference: body.m_payment_id });
     res.status(400).send("PayFast validation failed");
     return;
   }
 
   // Non-complete payments are acknowledged but not processed.
   if (body.payment_status !== "COMPLETE") {
+    console.log("[PayFast ITN Ignored] payment not complete", {
+      paymentReference: body.m_payment_id,
+      paymentStatus: body.payment_status,
+    });
     res.status(200).send("OK");
     return;
   }
@@ -163,6 +180,14 @@ export async function handlePayfastItn(req: Request, res: Response): Promise<voi
     const amountCents = validateAmount(body, learnerCount);
 
     await applyLicenseOperation(body, accountId, planType, transactionType, learnerCount, amountCents);
+
+    console.log("[PayFast ITN Processed] licence updated", {
+      paymentReference: body.m_payment_id,
+      accountId,
+      transactionType,
+      learnerCount,
+      amountCents,
+    });
 
     res.status(200).send("OK");
   } catch (error) {
