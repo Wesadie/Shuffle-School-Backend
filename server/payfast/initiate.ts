@@ -9,6 +9,11 @@
  *   2. Generate the MD5 security signature.
  *   3. Return a redirect URL that the browser navigates to.
  *   4. PayFast hosts the payment page and sends the ITN to our notify_url.
+ *
+ * CRITICAL: The query-string values in the redirect URL are encoded with the
+ * exact same payfastUrlEncode function used to compute the signature. This
+ * ensures PayFast's server — which decodes the URL then re-encodes with PHP
+ * urlencode() — reconstructs the identical parameter string we hashed.
  */
 
 import { randomUUID } from "crypto";
@@ -18,7 +23,10 @@ import {
   getPublicBaseUrl,
   PRICE_PER_LEARNER_CENTS,
 } from "./config";
-import { generateSignature } from "./signature";
+import {
+  generateSignature,
+  buildEncodedParamString,
+} from "./signature";
 
 export interface PayfastInitiationInput {
   planType: "teacher" | "school";
@@ -54,7 +62,7 @@ export function buildPayfastPaymentUrl(input: PayfastInitiationInput): PayfastIn
   const amount = (amountCents / 100).toFixed(2);
   const paymentId = `SSF-${randomUUID()}`;
   const baseUrl = getPublicBaseUrl();
-  const itemName = `${planType === "teacher" ? "Teacher" : "School"} licence – ${learnerCount} learner${learnerCount === 1 ? "" : "s"}`;
+  const itemName = `${planType === "teacher" ? "Teacher" : "School"} licence - ${learnerCount} learner${learnerCount === 1 ? "" : "s"}`;
 
   const fields: Record<string, string> = {
     merchant_id: payfastConfig.merchantId,
@@ -73,15 +81,10 @@ export function buildPayfastPaymentUrl(input: PayfastInitiationInput): PayfastIn
 
   const signature = generateSignature(fields, payfastConfig.passphrase);
 
-  const params = new URLSearchParams();
-  for (const [key, value] of Object.entries(fields)) {
-    params.set(key, value);
-  }
-  params.set("signature", signature);
+  // Build the URL query string with the SAME encoding used for the signature.
+  // This guarantees the values PayFast receives match exactly what we hashed.
+  const queryString = buildEncodedParamString(fields);
+  const redirectUrl = `${PAYFAST_PROCESS_URL}?${queryString}&signature=${signature}`;
 
-  return {
-    paymentId,
-    amountCents,
-    redirectUrl: `${PAYFAST_PROCESS_URL}?${params.toString()}`,
-  };
+  return { paymentId, amountCents, redirectUrl };
 }
