@@ -133,15 +133,18 @@ export async function handlePayfastItn(req: Request, res: Response) {
         body: redactSensitiveItnFields(body),
         headers: req.headers,
       });
+      console.log("[ITN STEP 1]");
 
     if (body.merchant_id !== payfastConfig.merchantId) {
 
       return res.status(400).send("Invalid merchant");
     }
+    console.log("[ITN STEP 2]");
 
     if (!verifySignature(body)) {
       return res.status(400).send("Invalid signature");
     }
+    console.log("[ITN STEP 3]");
 
     const validationResult = payfastConfig.sandbox
       ? true
@@ -152,12 +155,15 @@ export async function handlePayfastItn(req: Request, res: Response) {
     if (!validationResult) {
       return res.status(400).send("Invalid PayFast validation");
     }
+    console.log("[ITN STEP 4]");
 
     if (body.payment_status !== "COMPLETE") {
       return res.status(200).send("OK");
     }
+    console.log("[ITN STEP 5]");
 
     const accountId = body.custom_str3;
+
     console.log("[api/payments/payfast/itn] temporary custom_str3 log", { custom_str3: accountId });
     const paymentReference = body.m_payment_id;
     if (!accountId) throw new Error("Missing account identifier");
