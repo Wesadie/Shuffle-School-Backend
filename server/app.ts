@@ -61,12 +61,32 @@ app.post(
       }).parse(req.body);
       const accountId = getAccountContext(req).accountId;
 
+      console.log("[PayFast Route Entered]", {
+        accountId,
+        planType: body.planType,
+        transactionType: body.transactionType,
+        learnerCount: body.learnerCount,
+      });
+
       const { paymentId, amountCents, redirectUrl } = buildPayfastPaymentUrl({
         ...body,
         accountId,
       });
+      const payfastUrl = new URL(redirectUrl);
 
-      res.json({ paymentId, amountCents, redirectUrl });
+      console.log("[PayFast Redirect Built]", {
+        paymentId,
+        amountCents,
+        firstParam: Array.from(payfastUrl.searchParams.keys())[0],
+        paramOrder: Array.from(payfastUrl.searchParams.keys()),
+      });
+
+      res.json({
+        paymentId,
+        amountCents,
+        redirectUrl,
+        debugFirstPayfastParam: Array.from(payfastUrl.searchParams.keys())[0],
+      });
     } catch (error) {
       res.status(400).json({ error: error instanceof Error ? error.message : "Unable to initiate payment" });
     }

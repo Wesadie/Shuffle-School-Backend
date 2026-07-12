@@ -47,6 +47,10 @@ export default function LicenceBillingPage() {
       if (typeof data.redirectUrl !== "string") {
         throw new Error("PayFast redirect URL was not returned");
       }
+      console.log("[PayFast Client Redirect]", {
+        debugFirstPayfastParam: data.debugFirstPayfastParam,
+        firstUrlParam: new URL(data.redirectUrl).searchParams.keys().next().value,
+      });
       window.location.href = data.redirectUrl;
     } catch (error) {
       setIsSubmitting(false);
