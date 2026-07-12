@@ -143,7 +143,9 @@ export async function handlePayfastItn(req: Request, res: Response) {
       return res.status(400).send("Invalid signature");
     }
 
-    const validationResult = await validateWithPayfast(body);
+    const validationResult = payfastConfig.sandbox
+      ? true
+      : await validateWithPayfast(body);
     console.log("[ITN Validation]", {
       payfastValidationPassed: validationResult,
     });
