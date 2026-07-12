@@ -10,6 +10,7 @@ interface OnboardingAccount {
   licensedLearnerCount: number | null;
   trialEndsAt: string | null;
   trialExpired: boolean;
+  licenseEndsAt: string | null;
   successfulSolverGenerations: number;
   isNewAccount: boolean;
 }
@@ -18,10 +19,11 @@ function profileNameFromMetadata(metadata: Record<string, unknown> | undefined) 
   const firstName = typeof metadata?.first_name === "string" ? metadata.first_name : typeof metadata?.firstName === "string" ? metadata.firstName : null;
   const lastName = typeof metadata?.last_name === "string" ? metadata.last_name : typeof metadata?.lastName === "string" ? metadata.lastName : null;
   const avatarUrl = typeof metadata?.avatar_url === "string" ? metadata.avatar_url : typeof metadata?.avatarUrl === "string" ? metadata.avatarUrl : null;
+
   return { firstName, lastName, avatarUrl };
 }
 
-async function ensureOnboardingAccount(user: NonNullable<Express.Request["supabaseUser"]>): Promise<OnboardingAccount> {
+export async function ensureOnboardingAccount(user: NonNullable<Express.Request["supabaseUser"]>): Promise<OnboardingAccount> {
   const client = await pool.connect();
 
   try {
@@ -47,12 +49,14 @@ async function ensureOnboardingAccount(user: NonNullable<Express.Request["supaba
               s.licensed_learner_count AS "licensedLearnerCount",
               s.trial_ends_at AS "trialEndsAt",
               COALESCE(s.status, 'trialing') <> 'active' AND s.trial_ends_at IS NOT NULL AND s.trial_ends_at <= NOW() AS "trialExpired",
+              s.license_ends_at AS "licenseEndsAt",
               COALESCE(u.successful_solver_generations, 0) AS "successfulSolverGenerations",
               FALSE AS "isNewAccount"
        FROM account_memberships am
        JOIN accounts a ON a.id = am.account_id
        LEFT JOIN account_subscriptions s ON s.account_id = a.id
        LEFT JOIN account_usage u ON u.account_id = a.id
+
        WHERE am.user_id = $1 AND am.status = 'active'
        ORDER BY am.created_at ASC
        LIMIT 1`,
@@ -72,6 +76,7 @@ async function ensureOnboardingAccount(user: NonNullable<Express.Request["supaba
         ...account,
         licensedLearnerCount: account.licensedLearnerCount === null ? null : Number(account.licensedLearnerCount),
         trialEndsAt: account.trialEndsAt ? new Date(account.trialEndsAt).toISOString() : null,
+        licenseEndsAt: account.licenseEndsAt ? new Date(account.licenseEndsAt).toISOString() : null,
         successfulSolverGenerations: Number(account.successfulSolverGenerations || 0),
         isNewAccount: false,
       };
@@ -80,6 +85,7 @@ async function ensureOnboardingAccount(user: NonNullable<Express.Request["supaba
     const accountName = firstName ? `${firstName}'s ShuffleSchool Demo` : "ShuffleSchool Demo Account";
     const account = await client.query<OnboardingAccount>(
       `INSERT INTO accounts (name, slug, type, status, workspace_mode, created_by)
+
        VALUES ($1, NULL, 'school', 'trialing', 'demo', $2)
        RETURNING id AS "accountId", status AS "accountStatus", workspace_mode AS "workspaceMode"`,
       [accountName, user.id],
@@ -117,6 +123,7 @@ async function ensureOnboardingAccount(user: NonNullable<Express.Request["supaba
       licensedLearnerCount: null,
       trialEndsAt: trialEndsAt.toISOString(),
       trialExpired: false,
+      licenseEndsAt: null,
       successfulSolverGenerations: 0,
       isNewAccount: true,
     };
@@ -124,6 +131,7 @@ async function ensureOnboardingAccount(user: NonNullable<Express.Request["supaba
     await client.query("ROLLBACK");
     throw error;
   } finally {
+
     client.release();
   }
 }

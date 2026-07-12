@@ -1,16 +1,19 @@
 import type { RequestHandler } from "express";
 import { randomUUID } from "crypto";
 import { pool } from "./db";
+import { seedDemoData } from "./demoSeed";
+import { ensureOnboardingAccount } from "./onboarding";
 
 const HANDOFF_TTL_SECONDS = 120;
 
 /**
  * Creates a short-lived, single-use handoff code.
- * Called by the Lovable marketing site AFTER successful onboarding.
+ * Called by the Lovable marketing site after registration or sign-in.
  * The Lovable frontend sends its Supabase refresh_token in the body so the
  * Render app can establish a browser session on its own domain via setSession().
  *
  * Security:
+
  * - Requires a valid Supabase access token (requireSupabaseUser middleware).
  * - Code is a cryptographically random UUID (122 bits of entropy).
  * - Expires in 120 seconds.
@@ -38,6 +41,25 @@ export const createAuthHandoff: RequestHandler = async (req, res) => {
     return res.status(400).json({ message: "Access token and refresh token are required" });
   }
 
+  try {
+    const account = await ensureOnboardingAccount(req.supabaseUser);
+    if (account.isNewAccount) {
+      await seedDemoData(account.accountId);
+    }
+    console.log("[authHandoff] onboarding ensured", {
+      userId: req.supabaseUser.id,
+      accountId: account.accountId,
+      isNewAccount: account.isNewAccount,
+      subscriptionStatus: account.subscriptionStatus,
+    });
+  } catch (error) {
+    console.error("[authHandoff] failed to ensure onboarding", {
+      userId: req.supabaseUser.id,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return res.status(500).json({ message: "Failed to start trial workspace" });
+  }
+
   const code = randomUUID();
   const expiresAt = new Date(Date.now() + HANDOFF_TTL_SECONDS * 1000);
 
@@ -47,6 +69,7 @@ export const createAuthHandoff: RequestHandler = async (req, res) => {
     await client.query("DELETE FROM auth_handoffs WHERE expires_at < NOW()");
 
     await client.query(
+
       `INSERT INTO auth_handoffs (code, user_id, access_token, refresh_token, expires_at)
        VALUES ($1, $2, $3, $4, $5)`,
       [code, req.supabaseUser.id, accessToken, refreshToken, expiresAt],
