@@ -133,6 +133,7 @@ async function applyLicenseOperation(
 
 export async function handlePayfastItn(req: Request, res: Response): Promise<void> {
   const body = normalizeBody(req.body);
+  const rawBody = Buffer.isBuffer(req.rawBody) ? req.rawBody.toString("utf8") : undefined;
 
   console.log("[PayFast ITN Received]", {
     paymentReference: body.m_payment_id,
@@ -152,7 +153,7 @@ export async function handlePayfastItn(req: Request, res: Response): Promise<voi
   }
 
   // --- Check 2: signature ---
-  if (!verifySignature(body, payfastConfig.passphrase, body.signature ?? "")) {
+  if (!verifySignature(body, payfastConfig.passphrase, body.signature ?? "", rawBody)) {
     console.warn("[PayFast ITN Rejected] invalid signature", { paymentReference: body.m_payment_id });
     res.status(400).send("Invalid signature");
     return;

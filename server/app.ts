@@ -38,7 +38,14 @@ app.use(
   }),
 );
 
-app.use(express.urlencoded({ extended: false }));
+app.use(
+  express.urlencoded({
+    extended: false,
+    verify: (req, _res, buf) => {
+      req.rawBody = buf;
+    },
+  }),
+);
 
 // CORS: allow Lovable preview/published origins and configurable extra origins
 const corsAllowedOrigins = (process.env.CORS_ALLOWED_ORIGINS ?? "")

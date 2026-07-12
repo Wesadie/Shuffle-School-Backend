@@ -80,26 +80,48 @@ function safelyCompareSignatures(expected: string, received: string): boolean {
   }
 }
 
+function md5(value: string): string {
+  return crypto.createHash("md5").update(value).digest("hex");
+}
+
+function stripSignatureFromRawForm(rawBody: string): string | null {
+  const parts = rawBody.split("&");
+  const signatureIndex = parts.findIndex((part) => part.split("=", 1)[0] === "signature");
+  if (signatureIndex === -1) return null;
+
+  parts.splice(signatureIndex, 1);
+  return parts.filter(Boolean).join("&");
+}
+
 /**
  * Verify that a received signature matches the expected signature.
  *
  * Initiation signatures in this app intentionally preserve PayFast's sample field
- * order, but ITN payloads are verified using both received order and the official
- * alphabetical canonical order because PayFast's callback order can differ.
+ * order, but ITN payloads are verified using the raw received form payload first
+ * because PayFast signs the exact ordered urlencoded data it posts to us.
  */
 export function verifySignature(
   fields: Record<string, string>,
   passphrase: string,
   receivedSignature: string,
+  rawBody?: string,
 ): boolean {
   if (!receivedSignature) return false;
 
-  const variants = [
+  const variants: string[] = [];
+  const rawWithoutSignature = rawBody ? stripSignatureFromRawForm(rawBody) : null;
+
+  if (rawWithoutSignature) {
+    variants.push(md5(`${rawWithoutSignature}&passphrase=${payfastUrlEncode(passphrase)}`));
+    variants.push(md5(rawWithoutSignature));
+  }
+
+  variants.push(
     generateSignature(fields, passphrase),
     generateSignature(fields, passphrase, { sort: true }),
     generateSignature(fields, ""),
     generateSignature(fields, "", { sort: true }),
-  ];
+  );
 
   return variants.some((expected) => safelyCompareSignatures(expected, receivedSignature));
 }
