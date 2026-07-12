@@ -108,11 +108,12 @@ function redactSensitiveItnFields(body: PayfastItnBody) {
 
 export async function handlePayfastItn(req: Request, res: Response) {
   try {
-    const body = normalizeBody(req.body);
-    console.log("[api/payments/payfast/itn] ITN received", {
-      body: redactSensitiveItnFields(body),
-      headers: req.headers,
-    });
+    try {
+      const body = normalizeBody(req.body);
+      console.log("[api/payments/payfast/itn] ITN received", {
+        body: redactSensitiveItnFields(body),
+        headers: req.headers,
+      });
 
     if (body.merchant_id !== payfastConfig.merchantId) {
 
@@ -172,13 +173,20 @@ export async function handlePayfastItn(req: Request, res: Response) {
       await activateInitialLicense(accountId, planType, learnerCount, amountCents, paymentReference);
     }
 
-    return res.status(200).send("OK");
+      return res.status(200).send("OK");
+    } catch (error) {
+      console.error("[api/payments/payfast/itn] failed to process notification", {
+        error,
+        message: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      });
+      return res.status(400).send("Bad Request");
+    }
   } catch (error) {
-    console.error("[api/payments/payfast/itn] failed to process notification", {
-      error,
+    console.error("[ITN FATAL ERROR]", {
       message: error instanceof Error ? error.message : String(error),
-      stack: error instanceof Error ? error.stack : undefined,
+      stack: error instanceof Error ? error.stack : undefined
     });
-    return res.status(400).send("Bad Request");
+    return res.status(500).send("Internal Server Error");
   }
 }
