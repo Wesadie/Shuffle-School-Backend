@@ -44,9 +44,16 @@ export function payfastUrlEncode(value: string): string {
  */
 export function buildEncodedParamString(
   fields: Record<string, string>,
+  options: { sort?: boolean } = {},
 ): string {
-  return Object.entries(fields)
-    .filter(([key, value]) => key !== "signature" && value !== "")
+  const entries = Object.entries(fields)
+    .filter(([key, value]) => key !== "signature" && value !== "");
+
+  if (options.sort) {
+    entries.sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
+  }
+
+  return entries
     .map(([key, value]) => `${key}=${payfastUrlEncode(value)}`)
     .join("&");
 }
@@ -55,18 +62,30 @@ export function buildEncodedParamString(
 export function generateSignature(
   fields: Record<string, string>,
   passphrase: string,
+  options: { sort?: boolean } = {},
 ): string {
-  let paramStr = buildEncodedParamString(fields);
+  let paramStr = buildEncodedParamString(fields, options);
   if (passphrase) {
     paramStr += `${paramStr ? "&" : ""}passphrase=${payfastUrlEncode(passphrase)}`;
   }
   return crypto.createHash("md5").update(paramStr).digest("hex");
 }
 
+function safelyCompareSignatures(expected: string, received: string): boolean {
+  if (expected.length !== received.length) return false;
+  try {
+    return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(received));
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Verify that a received signature matches the expected signature.
  *
- * Uses `timingSafeEqual` to guard against timing-based attacks.
+ * Initiation signatures in this app intentionally preserve PayFast's sample field
+ * order, but ITN payloads are verified using both received order and the official
+ * alphabetical canonical order because PayFast's callback order can differ.
  */
 export function verifySignature(
   fields: Record<string, string>,
@@ -74,11 +93,10 @@ export function verifySignature(
   receivedSignature: string,
 ): boolean {
   if (!receivedSignature) return false;
-  const expected = generateSignature(fields, passphrase);
-  if (expected.length !== receivedSignature.length) return false;
-  try {
-    return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(receivedSignature));
-  } catch {
-    return false;
-  }
+
+  const expectedReceivedOrder = generateSignature(fields, passphrase);
+  if (safelyCompareSignatures(expectedReceivedOrder, receivedSignature)) return true;
+
+  const expectedSortedOrder = generateSignature(fields, passphrase, { sort: true });
+  return safelyCompareSignatures(expectedSortedOrder, receivedSignature);
 }
