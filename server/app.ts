@@ -79,17 +79,35 @@ app.post(
         transactionType: z.enum(["initial", "topup", "renewal"]).default("initial"),
         learnerCount: z.coerce.number().int().positive(),
       }).parse(req.body);
-      const accountId = getAccountContext(req).accountId;
+      const accountContext = getAccountContext(req);
+      const accountId = accountContext.accountId;
+      const currentLearnerCount = accountContext.licensedLearnerCount ?? 0;
+      const payfastLearnerCount = body.transactionType === "topup"
+        ? body.learnerCount - currentLearnerCount
+        : body.transactionType === "renewal"
+          ? currentLearnerCount
+          : body.learnerCount;
+
+      if (body.transactionType === "topup" && payfastLearnerCount <= 0) {
+        throw new Error("Top-up learner count must be greater than the current licensed learner count");
+      }
+      if (body.transactionType === "renewal" && payfastLearnerCount <= 0) {
+        throw new Error("An existing licensed learner count is required before renewal");
+      }
 
       console.log("[PayFast Route Entered]", {
         accountId,
         planType: body.planType,
         transactionType: body.transactionType,
         learnerCount: body.learnerCount,
+
+        currentLearnerCount,
+        billableLearnerCount: payfastLearnerCount,
       });
 
       const { paymentId, amountCents, redirectUrl } = buildPayfastPaymentUrl({
         ...body,
+        learnerCount: payfastLearnerCount,
         accountId,
       });
       const payfastUrl = new URL(redirectUrl);
