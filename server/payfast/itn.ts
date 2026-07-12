@@ -62,6 +62,12 @@ async function validateWithPayfastServer(body: ItnBody): Promise<boolean> {
   });
 
   const text = (await response.text()).trim();
+  console.log("[PayFast ITN Validation Response]", {
+    paymentReference: body.m_payment_id,
+    status: response.status,
+    ok: response.ok,
+    body: text,
+  });
   return response.ok && text === "VALID";
 }
 
@@ -179,6 +185,16 @@ export async function handlePayfastItn(req: Request, res: Response): Promise<voi
     const transactionType = parseTransactionType(body);
     const amountCents = validateAmount(body, learnerCount);
 
+    console.log("[PayFast ITN Parsed]", {
+      paymentReference: body.m_payment_id,
+      accountId,
+      planType,
+      transactionType,
+      learnerCount,
+      amountCents,
+      amountGross: body.amount_gross,
+    });
+
     await applyLicenseOperation(body, accountId, planType, transactionType, learnerCount, amountCents);
 
     console.log("[PayFast ITN Processed] licence updated", {
@@ -191,9 +207,15 @@ export async function handlePayfastItn(req: Request, res: Response): Promise<voi
 
     res.status(200).send("OK");
   } catch (error) {
-    console.error("[payfast/itn] failed to process payment", {
+    console.error("[PayFast ITN Failed]", {
       message: error instanceof Error ? error.message : String(error),
       paymentReference: body.m_payment_id,
+      receivedKeys: Object.keys(body),
+      paymentStatus: body.payment_status,
+      amountGross: body.amount_gross,
+      accountId: body.custom_str3,
+      transactionType: body.custom_str2,
+      learnerCount: body.custom_int1,
     });
     // Return 400 so PayFast retries the ITN.
     res.status(400).send("Bad Request");

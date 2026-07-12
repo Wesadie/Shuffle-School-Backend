@@ -17,6 +17,17 @@ declare module "http" {
   }
 }
 
+app.use((req, _res, next) => {
+  if (req.path === "/api/payments/payfast/itn") {
+    console.log("[PayFast ITN Request]", {
+      method: req.method,
+      contentType: req.headers["content-type"],
+      userAgent: req.headers["user-agent"],
+    });
+  }
+  next();
+});
+
 app.use(
   express.json({
     verify: (req, _res, buf) => {
