@@ -86,5 +86,15 @@ export function buildPayfastPaymentUrl(input: PayfastInitiationInput): PayfastIn
   const queryString = buildEncodedParamString(fields);
   const redirectUrl = `${PAYFAST_PROCESS_URL}?${queryString}&signature=${signature}`;
 
+  console.log("[PayFast Initiation Fields]", {
+    order: Object.keys(fields),
+    processUrl: PAYFAST_PROCESS_URL,
+    merchantId: payfastConfig.merchantId,
+    hasMerchantKey: Boolean(payfastConfig.merchantKey),
+    hasPassphrase: Boolean(payfastConfig.passphrase),
+    amount,
+    paymentId,
+  });
+
   return { paymentId, amountCents, redirectUrl };
 }
