@@ -53,23 +53,42 @@ function verifySignature(body: PayfastItnBody) {
 }
 
 async function validateWithPayfast(body: PayfastItnBody) {
-  const validationUrl = payfastConfig.sandbox
-    ? "https://sandbox.payfast.co.za/eng/query/validate"
-    : "https://www.payfast.co.za/eng/query/validate";
+  try {
+    const validationUrl = payfastConfig.sandbox
+      ? "https://sandbox.payfast.co.za/eng/query/validate"
+      : "https://www.payfast.co.za/eng/query/validate";
 
-  const payload = new URLSearchParams();
-  for (const [key, value] of Object.entries(body)) {
-    payload.append(key, value);
+    const payload = new URLSearchParams();
+    for (const [key, value] of Object.entries(body)) {
+      payload.append(key, value);
+    }
+
+    console.log("[PayFast Validation] Sending validation request", {
+      url: validationUrl,
+      payload: payload.toString(),
+    });
+
+    const response = await fetch(validationUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: payload.toString(),
+    });
+
+    console.log("[PayFast Validation] HTTP response", {
+      status: response.status,
+      ok: response.ok,
+    });
+
+    const text = (await response.text()).trim();
+    console.log("[PayFast Validation] Response body", text);
+    return response.ok && text === "VALID";
+  } catch (error) {
+    console.error("[PayFast Validation] Exception", {
+      message: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
+    throw error;
   }
-
-  const response = await fetch(validationUrl, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: payload.toString(),
-  });
-
-  const text = (await response.text()).trim();
-  return response.ok && text === "VALID";
 }
 
 function requirePlanType(value: string | undefined): LicensePlanType {
