@@ -3,7 +3,7 @@ import { serveStatic } from "./static";
 import { createServer } from "http";
 import { attachAccountContext, getAccountContext } from "./accountContext";
 import { authenticateSupabaseJwt } from "./supabaseAuth";
-import { buildPayfastSandboxRedirectUrl } from "./payfast/initiate";
+import { buildPayfastPaymentUrl } from "./payfast/initiate";
 import { handlePayfastItn } from "./payfast/itn";
 import { z } from "zod";
 
@@ -60,30 +60,14 @@ app.post(
         learnerCount: z.coerce.number().int().positive(),
       }).parse(req.body);
       const accountId = getAccountContext(req).accountId;
-      console.log("[api/payments/payfast/initiate] temporary payment initiation log", {
-        accountId,
-        learnerCount: body.learnerCount,
-        planType: body.planType,
-        transactionType: body.transactionType,
-      });
 
-      const { amount, merchantPaymentId, redirectUrl } = buildPayfastSandboxRedirectUrl({
+      const { paymentId, amountCents, redirectUrl } = buildPayfastPaymentUrl({
         ...body,
         accountId,
       });
-      const payfastUrl = new URL(redirectUrl);
-      console.log("[api/payments/payfast/initiate] temporary PayFast redirect metadata log", {
-        redirectUrl,
-        custom_str1: payfastUrl.searchParams.get("custom_str1"),
-        custom_str2: payfastUrl.searchParams.get("custom_str2"),
-        custom_str3: payfastUrl.searchParams.get("custom_str3"),
-        custom_int1: payfastUrl.searchParams.get("custom_int1"),
-      });
-      console.log("[api/payments/payfast/initiate] Redirecting to PayFast Sandbox");
-      res.json({ amount, merchantPaymentId, redirectUrl });
 
+      res.json({ paymentId, amountCents, redirectUrl });
     } catch (error) {
-
       res.status(400).json({ error: error instanceof Error ? error.message : "Unable to initiate payment" });
     }
   },

@@ -15,7 +15,6 @@ import {
   wouldExceedLearnerCapacity,
   learnerCapacityExceededResponse,
 } from "./accessControl";
-import { buildPayfastInitiationUrl, verifyPayfastNotification } from "./payfast";
 
 import {
   insertStudentSchema,
@@ -62,88 +61,6 @@ export async function registerRoutes(
   app.post("/api/onboarding/supabase", requireSupabaseUser, onboardSupabaseUser);
   app.post("/api/auth/handoff", requireSupabaseUser, createAuthHandoff);
   app.post("/api/auth/exchange", exchangeAuthHandoff);
-  app.post("/api/payments/payfast/initiate", async (req, res) => {
-    try {
-      const body = z.object({
-        planType: z.enum(["teacher", "school"]),
-        learnerCount: z.coerce.number().int().positive(),
-      }).parse(req.body);
-
-      const { paymentReference, amount, redirectUrl } = buildPayfastInitiationUrl(body.planType, body.learnerCount);
-      console.log("[api/payments/payfast/initiate] created payment initiation", {
-        paymentReference,
-        planType: body.planType,
-        learnerCount: body.learnerCount,
-        amount,
-      });
-      res.redirect(302, redirectUrl);
-    } catch (error) {
-      console.error("[api/payments/payfast/initiate] failed to create payment initiation", {
-        message: error instanceof Error ? error.message : String(error),
-      });
-      res.status(400).json({ error: error instanceof Error ? error.message : "Unable to initiate payment" });
-    }
-  });
-  app.post("/api/payments/payfast/itn", async (req, res) => {
-    try {
-      const body = z.record(z.string()).parse(req.body);
-      if (!verifyPayfastNotification(body)) {
-        console.warn("[api/payments/payfast/itn] invalid notification signature or status", {
-          paymentReference: body.m_payment_id,
-        });
-        return res.status(400).send("Invalid notification");
-      }
-
-      const planType = body.custom_str1;
-      const learnerCount = Number.parseInt(body.custom_int1 ?? "", 10);
-      const amountPaidCents = Math.round(Number.parseFloat(body.amount) * 100);
-      const paymentReference = body.m_payment_id;
-      const transactionType = body.custom_str2;
-      const accountId = body.custom_str3;
-
-      if (planType !== "teacher" && planType !== "school") {
-        return res.status(400).send("Invalid plan type");
-      }
-
-      if (!Number.isInteger(learnerCount) || learnerCount <= 0) {
-        return res.status(400).send("Invalid learner count");
-      }
-
-      const amountCents = learnerCount * 25 * 100;
-      if (amountPaidCents !== amountCents) {
-        return res.status(400).send("Amount mismatch");
-      }
-
-      if (!accountId) {
-        return res.status(400).send("Missing account identifier");
-      }
-
-      if (body.payment_status !== "COMPLETE") {
-        return res.status(200).send("OK");
-      }
-
-      if (transactionType === "topup") {
-        await import("./licenseService").then(({ addLearnerCapacity }) => addLearnerCapacity(accountId, learnerCount, amountCents, paymentReference));
-      } else if (transactionType === "renewal") {
-        await import("./licenseService").then(({ renewLicense }) => renewLicense(accountId, amountCents, paymentReference));
-      } else {
-        await import("./licenseService").then(({ activateInitialLicense }) => activateInitialLicense(accountId, planType, learnerCount, amountCents, paymentReference));
-      }
-
-      console.log("[api/payments/payfast/itn] processed successful payment", {
-        paymentReference,
-        planType,
-        learnerCount,
-        amountCents,
-      });
-      return res.status(200).send("OK");
-    } catch (error) {
-      console.error("[api/payments/payfast/itn] failed to process notification", {
-        message: error instanceof Error ? error.message : String(error),
-      });
-      return res.status(400).send("Bad Request");
-    }
-  });
 
   app.use("/api", authenticateSupabaseJwt, isAuthenticated, attachAccountContext);
 

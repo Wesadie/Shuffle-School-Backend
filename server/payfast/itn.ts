@@ -1,6 +1,24 @@
-import crypto from "crypto";
+/**
+ * PayFast Instant Transaction Notification (ITN) handler.
+ *
+ * Official spec — "Instant Transaction Notifications (ITN)":
+ *   https://developers.payfast.co.za/api#instant-transactions-notifications-itn
+ *
+ * Security checks performed (per official spec):
+ *   1. Confirm merchant_id matches our configuration.
+ *   2. Verify the MD5 signature against the received fields.
+ *   3. Validate with PayFast server (POST to the validate endpoint).
+ *   4. Confirm the payment amount matches the expected price.
+ *
+ * After validation, the appropriate licenceService function is called:
+ *   initial  → activateInitialLicense
+ *   topup    → addLearnerCapacity
+ *   renewal  → renewLicense
+ */
+
 import type { Request, Response } from "express";
-import { payfastConfig } from "./config";
+import { payfastConfig, PAYFAST_VALIDATE_URL, PRICE_PER_LEARNER_CENTS } from "./config";
+import { verifySignature } from "./signature";
 import {
   activateInitialLicense,
   addLearnerCapacity,
@@ -9,211 +27,150 @@ import {
   type PaymentTransactionType,
 } from "../licenseService";
 
-type PayfastItnBody = Record<string, string>;
+type ItnBody = Record<string, string>;
 
-function normalizeBody(body: unknown): PayfastItnBody {
+/** Coerce a raw POST body into a flat string map. */
+function normalizeBody(body: unknown): ItnBody {
   if (!body || typeof body !== "object") return {};
-
-  const normalized: PayfastItnBody = {};
-  for (const [key, value] of Object.entries(body)) {
+  const result: ItnBody = {};
+  for (const [key, value] of Object.entries(body as Record<string, unknown>)) {
     if (typeof value === "string") {
-      normalized[key] = value;
+      result[key] = value;
     } else if (value != null) {
-      normalized[key] = String(value);
+      result[key] = String(value);
     }
   }
-  return normalized;
+  return result;
 }
 
-function encodePayfastValue(value: string) {
-  return encodeURIComponent(value.trim())
-    .replace(/%20/g, "+")
-    .replace(/[!'()*]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
-}
-
-function buildSignaturePayload(body: PayfastItnBody) {
-  const payload = Object.entries(body)
-    .filter(([key, value]) => key !== "signature" && value !== "")
-    .map(([key, value]) => `${key}=${encodePayfastValue(value)}`)
-    .join("&");
-
-  if (!payfastConfig.passphrase) return payload;
-  return `${payload}&passphrase=${encodePayfastValue(payfastConfig.passphrase)}`;
-}
-
-function calculateSignature(body: PayfastItnBody) {
-  return crypto.createHash("md5").update(buildSignaturePayload(body)).digest("hex");
-}
-
-function verifySignature(body: PayfastItnBody) {
-  const receivedSignature = body.signature;
-  if (!receivedSignature) return false;
-
-  return calculateSignature(body).toLowerCase() === receivedSignature.toLowerCase();
-}
-
-async function validateWithPayfast(body: PayfastItnBody) {
-  try {
-    const validationUrl = payfastConfig.sandbox
-      ? "https://sandbox.payfast.co.za/eng/query/validate"
-      : "https://www.payfast.co.za/eng/query/validate";
-
-    const payload = new URLSearchParams();
-    for (const [key, value] of Object.entries(body)) {
-      payload.append(key, value);
-    }
-
-    console.log("[PayFast Validation] Sending validation request", {
-      url: validationUrl,
-      payload: payload.toString(),
-    });
-
-    const response = await fetch(validationUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: payload.toString(),
-    });
-
-    console.log("[PayFast Validation] HTTP response", {
-      status: response.status,
-      ok: response.ok,
-    });
-
-    const text = (await response.text()).trim();
-    console.log("[PayFast Validation] Response body", text);
-    return response.ok && text === "VALID";
-  } catch (error) {
-    console.error("[PayFast Validation] Exception", {
-      message: error instanceof Error ? error.message : String(error),
-      stack: error instanceof Error ? error.stack : undefined,
-    });
-    throw error;
+/**
+ * Confirm the notification with PayFast by POSTing the received fields
+ * to the server-side validation endpoint.
+ *
+ * PayFast responds with the plain-text body "VALID" or "INVALID".
+ */
+async function validateWithPayfastServer(body: ItnBody): Promise<boolean> {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(body)) {
+    params.append(key, value);
   }
+
+  const response = await fetch(PAYFAST_VALIDATE_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: params.toString(),
+  });
+
+  const text = (await response.text()).trim();
+  return response.ok && text === "VALID";
 }
 
-function requirePlanType(value: string | undefined): LicensePlanType {
-  if (value !== "teacher" && value !== "school") {
-    throw new Error("Invalid plan type");
-  }
-  return value;
-}
-
-function getTransactionType(value: string | undefined): PaymentTransactionType {
-  if (value === "topup" || value === "renewal") return value;
-  return "initial";
-}
-
-function requirePositiveInteger(value: string | undefined, name: string) {
-  const parsed = Number.parseInt(value ?? "", 10);
+function parseLearnerCount(body: ItnBody): number {
+  const parsed = Number.parseInt(body.custom_int1 ?? "", 10);
   if (!Number.isInteger(parsed) || parsed <= 0) {
-    throw new Error(`Invalid ${name}`);
+    throw new Error("Invalid learner count in ITN");
   }
   return parsed;
 }
 
-function getAmountCents(body: PayfastItnBody) {
-  const amount = Number.parseFloat(body.amount_gross ?? body.amount ?? "");
-  if (!Number.isFinite(amount) || amount < 0) {
-    throw new Error("Invalid payment amount");
+function parsePlanType(body: ItnBody): LicensePlanType {
+  const value = body.custom_str1;
+  if (value !== "teacher" && value !== "school") {
+    throw new Error("Invalid plan type in ITN");
   }
-  return Math.round(amount * 100);
+  return value;
 }
 
-function redactSensitiveItnFields(body: PayfastItnBody) {
-  const redacted = { ...body };
-  delete redacted.merchant_key;
-  return redacted;
+function parseTransactionType(body: ItnBody): PaymentTransactionType {
+  const value = body.custom_str2;
+  if (value === "topup" || value === "renewal") return value;
+  return "initial";
 }
 
-export async function handlePayfastItn(req: Request, res: Response) {
+/** Validate the gross amount against the expected learner × price calculation. */
+function validateAmount(body: ItnBody, learnerCount: number): number {
+  const gross = Number.parseFloat(body.amount_gross ?? body.amount ?? "");
+  if (!Number.isFinite(gross) || gross < 0) {
+    throw new Error("Invalid payment amount in ITN");
+  }
+  const amountCents = Math.round(gross * 100);
+  const expectedCents = learnerCount * PRICE_PER_LEARNER_CENTS;
+  if (amountCents !== expectedCents) {
+    throw new Error("Payment amount mismatch in ITN");
+  }
+  return amountCents;
+}
+
+/**
+ * Apply the licence operation for the given transaction type.
+ * All functions are idempotent (guarded by an advisory lock keyed on payment reference).
+ */
+async function applyLicenseOperation(
+  body: ItnBody,
+  accountId: string,
+  planType: LicensePlanType,
+  transactionType: PaymentTransactionType,
+  learnerCount: number,
+  amountCents: number,
+): Promise<void> {
+  const paymentReference = body.m_payment_id;
+  if (!paymentReference) throw new Error("Missing payment reference");
+
+  if (transactionType === "topup") {
+    await addLearnerCapacity(accountId, learnerCount, amountCents, paymentReference);
+  } else if (transactionType === "renewal") {
+    await renewLicense(accountId, amountCents, paymentReference);
+  } else {
+    await activateInitialLicense(accountId, planType, learnerCount, amountCents, paymentReference);
+  }
+}
+
+export async function handlePayfastItn(req: Request, res: Response): Promise<void> {
+  const body = normalizeBody(req.body);
+
+  // --- Check 1: merchant identity ---
+  if (body.merchant_id !== payfastConfig.merchantId) {
+    res.status(400).send("Invalid merchant");
+    return;
+  }
+
+  // --- Check 2: signature ---
+  if (!verifySignature(body, payfastConfig.passphrase, body.signature ?? "")) {
+    res.status(400).send("Invalid signature");
+    return;
+  }
+
+  // --- Check 3: server-side validation ---
+  const isValid = await validateWithPayfastServer(body);
+  if (!isValid) {
+    res.status(400).send("PayFast validation failed");
+    return;
+  }
+
+  // Non-complete payments are acknowledged but not processed.
+  if (body.payment_status !== "COMPLETE") {
+    res.status(200).send("OK");
+    return;
+  }
+
   try {
-    try {
-      const body = normalizeBody(req.body);
-      console.log("[api/payments/payfast/itn] ITN received", {
-        body: redactSensitiveItnFields(body),
-        headers: req.headers,
-      });
-      console.log("[ITN STEP 1]");
-
-    if (body.merchant_id !== payfastConfig.merchantId) {
-
-      return res.status(400).send("Invalid merchant");
-    }
-    console.log("[ITN STEP 2]");
-
-    if (!verifySignature(body)) {
-      return res.status(400).send("Invalid signature");
-    }
-    console.log("[ITN STEP 3]");
-
-    const validationResult = payfastConfig.sandbox
-      ? true
-      : await validateWithPayfast(body);
-    console.log("[ITN Validation]", {
-      payfastValidationPassed: validationResult,
-    });
-    if (!validationResult) {
-      return res.status(400).send("Invalid PayFast validation");
-    }
-    console.log("[ITN STEP 4]");
-
-    if (body.payment_status !== "COMPLETE") {
-      return res.status(200).send("OK");
-    }
-    console.log("[ITN STEP 5]");
-
     const accountId = body.custom_str3;
-
-    console.log("[api/payments/payfast/itn] temporary custom_str3 log", { custom_str3: accountId });
-    const paymentReference = body.m_payment_id;
     if (!accountId) throw new Error("Missing account identifier");
-    if (!paymentReference) throw new Error("Missing payment reference");
 
-    const planType = requirePlanType(body.custom_str1);
-    const learnerCount = requirePositiveInteger(body.custom_int1, "learner count");
-    const amountCents = getAmountCents(body);
-    const expectedAmountCents = learnerCount * 25 * 100;
-    console.log("[ITN Amount Check]", {
-      learnerCount,
-      amountGross: body.amount_gross,
-      parsedAmountCents: amountCents,
-      expectedAmountCents,
-      paymentReference,
-    });
-    if (amountCents !== expectedAmountCents) {
-      throw new Error("Payment amount mismatch");
-    }
+    const learnerCount = parseLearnerCount(body);
+    const planType = parsePlanType(body);
+    const transactionType = parseTransactionType(body);
+    const amountCents = validateAmount(body, learnerCount);
 
-    const transactionType = getTransactionType(body.custom_str2);
+    await applyLicenseOperation(body, accountId, planType, transactionType, learnerCount, amountCents);
 
-    if (transactionType === "topup") {
-      console.log("[api/payments/payfast/itn] selected licence function", { functionName: "addLearnerCapacity", accountId });
-      console.log("[api/payments/payfast/itn] entering addLearnerCapacity", { accountId });
-      await addLearnerCapacity(accountId, learnerCount, amountCents, paymentReference);
-    } else if (transactionType === "renewal") {
-      console.log("[api/payments/payfast/itn] selected licence function", { functionName: "renewLicense", accountId });
-      console.log("[api/payments/payfast/itn] entering renewLicense", { accountId });
-      await renewLicense(accountId, amountCents, paymentReference);
-    } else {
-      console.log("[api/payments/payfast/itn] selected licence function", { functionName: "activateInitialLicense", accountId });
-      console.log("[api/payments/payfast/itn] entering activateInitialLicense", { accountId });
-      await activateInitialLicense(accountId, planType, learnerCount, amountCents, paymentReference);
-    }
-
-      return res.status(200).send("OK");
-    } catch (error) {
-      console.error("[api/payments/payfast/itn] failed to process notification", {
-        error,
-        message: error instanceof Error ? error.message : String(error),
-        stack: error instanceof Error ? error.stack : undefined,
-      });
-      return res.status(400).send("Bad Request");
-    }
+    res.status(200).send("OK");
   } catch (error) {
-    console.error("[ITN FATAL ERROR]", {
+    console.error("[payfast/itn] failed to process payment", {
       message: error instanceof Error ? error.message : String(error),
-      stack: error instanceof Error ? error.stack : undefined
+      paymentReference: body.m_payment_id,
     });
-    return res.status(500).send("Internal Server Error");
+    // Return 400 so PayFast retries the ITN.
+    res.status(400).send("Bad Request");
   }
 }

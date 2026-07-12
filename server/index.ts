@@ -1,7 +1,7 @@
 import { loadEnv } from "./loadEnv";
-import { validatePayfastConfig } from "./payfast/config";
+import { warnOnMissingConfig as warnOnMissingPayfastConfig } from "./payfast/config";
 
 loadEnv();
-validatePayfastConfig();
+warnOnMissingPayfastConfig();
 
 void import("./app");

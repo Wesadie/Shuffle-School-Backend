@@ -35,7 +35,6 @@ import TutorialsPage from "@/pages/tutorials";
 import AuthHandoffPage from "@/pages/auth-handoff";
 import PayfastReturnPage from "@/pages/payfast-return";
 import PayfastCancelPage from "@/pages/payfast-cancel";
-import PayfastTestPage from "@/pages/payfast-test";
 
 import type { Student, Placement, ClassConfig } from "@shared/schema";
 
@@ -204,10 +203,6 @@ function AppContent() {
   // users arriving from Lovable can establish a session.
   if (location.startsWith("/auth/handoff")) {
     return <AuthHandoffPage />;
-  }
-
-  if (location === "/payfast-test") {
-    return <PayfastTestPage />;
   }
 
   const { data: students = [] } = useQuery<Student[]>({
