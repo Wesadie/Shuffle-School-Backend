@@ -47,7 +47,6 @@ export function buildEncodedParamString(
 ): string {
   return Object.entries(fields)
     .filter(([key, value]) => key !== "signature" && value !== "")
-    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
     .map(([key, value]) => `${key}=${payfastUrlEncode(value)}`)
     .join("&");
 }
@@ -61,7 +60,6 @@ export function generateSignature(
   if (passphrase) {
     paramStr += `${paramStr ? "&" : ""}passphrase=${payfastUrlEncode(passphrase)}`;
   }
-  console.log("[PayFast Signature String]", paramStr);
   return crypto.createHash("md5").update(paramStr).digest("hex");
 }
 
