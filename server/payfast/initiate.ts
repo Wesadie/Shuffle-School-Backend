@@ -73,10 +73,10 @@ export function buildPayfastPaymentUrl(input: PayfastInitiationInput): PayfastIn
     m_payment_id: paymentId,
     amount,
     item_name: itemName,
+    custom_int1: String(learnerCount),
     custom_str1: planType,
     custom_str2: transactionType,
     custom_str3: accountId,
-    custom_int1: String(learnerCount),
   };
 
   const signature = generateSignature(fields, payfastConfig.passphrase);
