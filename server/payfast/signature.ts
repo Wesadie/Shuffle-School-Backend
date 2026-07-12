@@ -31,7 +31,7 @@ import crypto from "crypto";
  * percent-encode those to bridge the gap.
  */
 export function payfastUrlEncode(value: string): string {
-  return encodeURIComponent(value)
+  return encodeURIComponent(value.trim())
     .replace(/%20/g, "+")
     .replace(/[!'()*~]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
 }
