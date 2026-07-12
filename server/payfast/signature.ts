@@ -61,6 +61,7 @@ export function generateSignature(
   if (passphrase) {
     paramStr += `${paramStr ? "&" : ""}passphrase=${payfastUrlEncode(passphrase)}`;
   }
+  console.log("[PayFast Signature String]", paramStr);
   return crypto.createHash("md5").update(paramStr).digest("hex");
 }
 
