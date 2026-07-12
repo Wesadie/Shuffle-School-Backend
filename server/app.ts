@@ -1,4 +1,5 @@
 import express, { type Request, Response, NextFunction } from "express";
+import multer from "multer";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import { attachAccountContext, getAccountContext } from "./accountContext";
@@ -8,6 +9,7 @@ import { handlePayfastItn } from "./payfast/itn";
 import { z } from "zod";
 
 const app = express();
+const payfastItnMultipartParser = multer().none();
 
 const httpServer = createServer(app);
 
@@ -104,7 +106,7 @@ app.post(
   },
 );
 
-app.post("/api/payments/payfast/itn", handlePayfastItn);
+app.post("/api/payments/payfast/itn", payfastItnMultipartParser, handlePayfastItn);
 
 app.use((req, res, next) => {
   const origin = req.headers.origin;
