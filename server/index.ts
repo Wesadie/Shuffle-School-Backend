@@ -6,4 +6,4 @@ const { warnOnMissingConfig: warnOnMissingPayfastConfig } = await import("./payf
 const { startServer } = await import("./app");
 
 warnOnMissingPayfastConfig();
-startServer();
+await startServer();

@@ -207,7 +207,9 @@ export const appReady = (async () => {
   }
 })();
 
-export function startServer() {
+export async function startServer() {
+  await appReady;
+
   const portArgIndex = process.argv.indexOf("--port");
   const cliPort =
     portArgIndex >= 0 ? Number.parseInt(process.argv[portArgIndex + 1] ?? "", 10) : undefined;
