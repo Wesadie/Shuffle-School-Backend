@@ -1,8 +1,9 @@
 import { loadEnv } from "./loadEnv";
-import { startServer } from "./app";
-import { warnOnMissingConfig as warnOnMissingPayfastConfig } from "./payfast/config";
 
 loadEnv();
-warnOnMissingPayfastConfig();
 
+const { warnOnMissingConfig: warnOnMissingPayfastConfig } = await import("./payfast/config");
+const { startServer } = await import("./app");
+
+warnOnMissingPayfastConfig();
 startServer();
