@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from "react";
+import { apiUrl } from "@/lib/apiUrl";
 import { supabase } from "@/integrations/supabase/client";
 import logoImage from "@assets/shuffle-school-icon.png";
 
 /**
+
  * Cross-domain auth handoff page.
  *
  * Lovable redirects here with ?code=<single-use-code>.
@@ -27,13 +29,14 @@ export default function AuthHandoffPage() {
 
     (async () => {
       try {
-        const res = await fetch("/api/auth/exchange", {
+        const res = await fetch(apiUrl("/api/auth/exchange"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ code }),
         });
 
         if (!res.ok) {
+
           setError("This sign-in link has expired or already been used. Please return to the sign-up page and try again.");
           return;
         }

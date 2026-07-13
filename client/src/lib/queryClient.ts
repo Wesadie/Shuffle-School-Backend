@@ -1,7 +1,9 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
+import { apiUrl } from "@/lib/apiUrl";
 import { getSupabaseAccessToken } from "@/lib/supabaseSession";
 
 async function authHeaders(data?: unknown): Promise<HeadersInit> {
+
   const headers: Record<string, string> = data ? { "Content-Type": "application/json" } : {};
   const accessToken = await getSupabaseAccessToken();
   if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
@@ -24,7 +26,7 @@ export async function apiRequest(
   url: string,
   data?: unknown | undefined,
 ): Promise<Response> {
-  const res = await fetch(url, {
+  const res = await fetch(apiUrl(url), {
     method,
     headers: await authHeaders(data),
     body: data ? JSON.stringify(data) : undefined,
@@ -36,17 +38,19 @@ export async function apiRequest(
 }
 
 type UnauthorizedBehavior = "returnNull" | "throw";
+
 export const getQueryFn: <T>(options: {
   on401: UnauthorizedBehavior;
 }) => QueryFunction<T> =
   ({ on401: unauthorizedBehavior }) =>
   async ({ queryKey }) => {
-    const res = await fetch(queryKey.join("/") as string, {
+    const res = await fetch(apiUrl(queryKey.join("/") as string), {
       headers: await authHeaders(),
       credentials: "include",
     });
 
     if (unauthorizedBehavior === "returnNull" && res.status === 401) {
+
       return null;
     }
 

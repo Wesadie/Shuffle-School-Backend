@@ -31,6 +31,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
+import { apiUrl } from "@/lib/apiUrl";
 import { queryClient, apiRequest, getAuthHeaders } from "@/lib/queryClient";
 import type { Teacher, InsertTeacher } from "@shared/schema";
 
@@ -222,11 +223,12 @@ export default function TeachersPage() {
     }
 
     try {
-      const res = await fetch("/api/exports/teachers.csv", {
+      const res = await fetch(apiUrl("/api/exports/teachers.csv"), {
         credentials: "include",
         headers: await getAuthHeaders(),
       });
       if (!res.ok) {
+
         const body = await res.json().catch(() => null);
         toast({
           title: body?.code === "TRIAL_EXPORT_RESTRICTED" ? "Upgrade required" : "Export failed",

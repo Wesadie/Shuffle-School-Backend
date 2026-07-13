@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { Switch, Route, Link, useLocation } from "wouter";
 import { getAuthHeaders, queryClient } from "./lib/queryClient";
+import { apiUrl } from "@/lib/apiUrl";
 import { QueryClientProvider, useQuery } from "@tanstack/react-query";
+
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ThemeProvider } from "@/components/theme-provider";
@@ -232,11 +234,12 @@ function AppContent() {
     }
 
     try {
-      const res = await fetch("/api/exports/class-placements.csv", {
+      const res = await fetch(apiUrl("/api/exports/class-placements.csv"), {
         credentials: "include",
         headers: await getAuthHeaders(),
       });
       if (!res.ok) {
+
         const body = await res.json().catch(() => null);
         toast({
           title: body?.code === "TRIAL_EXPORT_RESTRICTED" ? "Upgrade required" : "Export failed",
