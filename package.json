@@ -45,6 +45,7 @@
     "@types/memoizee": "^0.4.12",
     "@types/multer": "^2.2.0",
     "@types/pg": "^8.20.0",
+    "@vercel/node": "^5.8.23",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",

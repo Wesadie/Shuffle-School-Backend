@@ -8,10 +8,10 @@ import { buildPayfastPaymentUrl } from "./payfast/initiate";
 import { handlePayfastItn } from "./payfast/itn";
 import { z } from "zod";
 
-const app = express();
+export const app = express();
 const payfastItnMultipartParser = multer().none();
 
-const httpServer = createServer(app);
+export const httpServer = createServer(app);
 
 declare module "http" {
   interface IncomingMessage {
@@ -186,51 +186,44 @@ app.use((req, res, next) => {
   next();
 });
 
-const portArgIndex = process.argv.indexOf("--port");
-const cliPort =
-  portArgIndex >= 0 ? Number.parseInt(process.argv[portArgIndex + 1] ?? "", 10) : undefined;
-const envPort = process.env.PORT ? Number.parseInt(process.env.PORT, 10) : undefined;
-const port = Number.isFinite(cliPort) ? cliPort : Number.isFinite(envPort) ? envPort : 5000;
+export const appReady = (async () => {
+  const { registerRoutes } = await import("./routes");
+  await registerRoutes(httpServer, app);
 
-process.env.PORT = String(port);
+  app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
+    const status = err.status || err.statusCode || 500;
+    const message = err.message || "Internal Server Error";
 
-httpServer.listen(
-  {
-    port,
-    host: "0.0.0.0",
-  },
-  () => {
-    log(`serving on port ${port}`);
-    console.log(`Local: http://localhost:${port}/`);
-  },
-);
+    res.status(status).json({ message });
+    throw err;
+  });
 
-(async () => {
-  try {
-    const { registerRoutes } = await import("./routes");
-    await registerRoutes(httpServer, app);
-
-    app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
-      const status = err.status || err.statusCode || 500;
-      const message = err.message || "Internal Server Error";
-
-      res.status(status).json({ message });
-      throw err;
-    });
-
-    // importantly only setup vite in development and after
-    // setting up all the other routes so the catch-all route
-    // doesn't interfere with the other routes
-    if (process.env.NODE_ENV === "production") {
-      serveStatic(app);
-    } else {
-      const { setupVite } = await import("./vite");
-      await setupVite(httpServer, app);
-    }
-  } catch (error) {
-    console.error("[startup] failed to finish application setup", {
-      message: error instanceof Error ? error.message : String(error),
-    });
-    process.exitCode = 1;
+  // Vercel serves the frontend build separately; the API function only needs API routes.
+  if (process.env.NODE_ENV === "production" && !process.env.VERCEL) {
+    serveStatic(app);
+  } else if (process.env.NODE_ENV !== "production") {
+    const { setupVite } = await import("./vite");
+    await setupVite(httpServer, app);
   }
 })();
+
+export function startServer() {
+  const portArgIndex = process.argv.indexOf("--port");
+  const cliPort =
+    portArgIndex >= 0 ? Number.parseInt(process.argv[portArgIndex + 1] ?? "", 10) : undefined;
+  const envPort = process.env.PORT ? Number.parseInt(process.env.PORT, 10) : undefined;
+  const port = Number.isFinite(cliPort) ? cliPort : Number.isFinite(envPort) ? envPort : 5000;
+
+  process.env.PORT = String(port);
+
+  httpServer.listen(
+    {
+      port,
+      host: "0.0.0.0",
+    },
+    () => {
+      log(`serving on port ${port}`);
+      console.log(`Local: http://localhost:${port}/`);
+    },
+  );
+}
