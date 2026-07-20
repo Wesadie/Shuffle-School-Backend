@@ -30,6 +30,40 @@ app.use((req, _res, next) => {
   next();
 });
 
+// CORS: allow Lovable preview/published origins and configurable extra origins
+const corsAllowedOrigins = (process.env.CORS_ALLOWED_ORIGINS ?? "")
+  .split(",")
+  .map((o) => o.trim())
+  .filter(Boolean);
+
+function isCorsAllowedOrigin(origin: string): boolean {
+  if (corsAllowedOrigins.includes(origin)) return true;
+  try {
+    const hostname = new URL(origin).hostname;
+    return hostname.endsWith(".lovable.app") || hostname.endsWith("shuffleschool.co.za");
+  } catch {
+    return false;
+  }
+}
+
+// CORS middleware MUST run before body parsers so that error responses
+// (e.g. malformed JSON from express.json) still include CORS headers.
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+
+  if (origin && isCorsAllowedOrigin(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Vary", "Origin");
+    res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, PUT, DELETE, OPTIONS");
+    res.setHeader("Access-Control-Allow-Credentials", "true");
+  }
+  if (req.method === "OPTIONS") {
+    return res.status(204).end();
+  }
+  next();
+});
+
 app.use(
   express.json({
     verify: (req, _res, buf) => {
@@ -46,21 +80,6 @@ app.use(
     },
   }),
 );
-
-// CORS: allow Lovable preview/published origins and configurable extra origins
-const corsAllowedOrigins = (process.env.CORS_ALLOWED_ORIGINS ?? "")
-  .split(",")
-  .map((o) => o.trim())
-  .filter(Boolean);
-
-function isCorsAllowedOrigin(origin: string): boolean {
-  if (corsAllowedOrigins.includes(origin)) return true;
-  try {
-    return new URL(origin).hostname.endsWith(".lovable.app");
-  } catch {
-    return false;
-  }
-}
 
 app.post(
   "/api/payments/payfast/initiate",
@@ -133,22 +152,6 @@ app.post(
 
 app.post("/api/payments/payfast/itn", payfastItnMultipartParser, handlePayfastItn);
 
-app.use((req, res, next) => {
-  const origin = req.headers.origin;
-
-  if (origin && isCorsAllowedOrigin(origin)) {
-    res.setHeader("Access-Control-Allow-Origin", origin);
-    res.setHeader("Vary", "Origin");
-    res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type");
-    res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, PUT, DELETE, OPTIONS");
-    res.setHeader("Access-Control-Allow-Credentials", "true");
-  }
-  if (req.method === "OPTIONS") {
-    return res.status(204).end();
-  }
-  next();
-});
-
 export function log(message: string, source = "express") {
   const formattedTime = new Date().toLocaleTimeString("en-US", {
     hour: "numeric",
@@ -194,8 +197,16 @@ export const appReady = (async () => {
     const status = err.status || err.statusCode || 500;
     const message = err.message || "Internal Server Error";
 
-    res.status(status).json({ message });
-    throw err;
+    console.error("[express] unhandled error:", {
+      status,
+      message,
+      stack: err.stack,
+    });
+
+    // Only send if headers haven't been sent yet (prevents double-response crash)
+    if (!res.headersSent) {
+      res.status(status).json({ message });
+    }
   });
 
   // Vercel serves the frontend build separately; the API function only needs API routes.

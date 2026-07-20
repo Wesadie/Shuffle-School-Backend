@@ -63,7 +63,16 @@ export const createAuthHandoff: RequestHandler = async (req, res) => {
   const code = randomUUID();
   const expiresAt = new Date(Date.now() + HANDOFF_TTL_SECONDS * 1000);
 
-  const client = await pool.connect();
+  let client;
+  try {
+    client = await pool.connect();
+  } catch (error) {
+    console.error("[authHandoff] failed to acquire DB connection", {
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return res.status(500).json({ message: "Failed to create auth handoff" });
+  }
+
   try {
     // Clean up expired handoffs opportunistically
     await client.query("DELETE FROM auth_handoffs WHERE expires_at < NOW()");
@@ -107,7 +116,13 @@ export const exchangeAuthHandoff: RequestHandler = async (req, res) => {
     return res.status(400).json({ message: "Handoff code is required" });
   }
 
-  const client = await pool.connect();
+  let client;
+  try {
+    client = await pool.connect();
+  } catch {
+    return res.status(500).json({ message: "Failed to exchange handoff code" });
+  }
+
   try {
     // Atomically claim the row: only succeed if not used and not expired.
     const result = await client.query(
