@@ -333,7 +333,14 @@ async function runFromCli(): Promise<void> {
   console.log("[demo-seed] seeded fictional demo data", result);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Only run as a standalone CLI script in development. In a bundled production
+// build, import.meta.url resolves to the bundle URL for every module, so the
+// equality check alone would incorrectly trigger during server startup.
+if (
+  process.env.NODE_ENV !== "production" &&
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(process.argv[1]).href
+) {
   runFromCli().catch((error) => {
     console.error("[demo-seed] failed to seed fictional demo data", error);
     process.exit(1);
