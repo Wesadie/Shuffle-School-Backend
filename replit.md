@@ -109,7 +109,7 @@ Preferred communication style: Simple, everyday language.
 **Production Build:**
 - Custom build script (`script/build.ts`)
 - Vite builds client to `dist/public`
-- esbuild bundles server to single `dist/index.cjs` file
+- esbuild bundles server to single `dist/index.mjs` file
 - Selective bundling: frequently-used dependencies bundled, others externalized
 - Build optimization reduces cold start times by minimizing file I/O
 
