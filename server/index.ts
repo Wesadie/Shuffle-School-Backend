@@ -1,14 +1,9 @@
 import { loadEnv } from "./loadEnv";
 
 /**
- * Top-level startup wrapper.
- *
- * Every step that runs before the HTTP server starts listening is wrapped here
- * so that a failure in any module import or async init produces a readable
- * error with the full cause chain — instead of a bare minified stack pointing
- * at dist/index.mjs.
+ * Process-level error handlers — catch anything that escapes the try/catch
+ * below, including unhandled promise rejections from fire-and-forget IIFEs.
  */
-
 function logFullError(error: unknown, depth = 0): void {
   const indent = "  ".repeat(depth);
   const prefix = depth === 0 ? "[startup] FATAL" : "[startup] └─ caused by";
@@ -44,6 +39,18 @@ function logFullError(error: unknown, depth = 0): void {
     }
   }
 }
+
+process.on("unhandledRejection", (reason) => {
+  console.error("[FATAL] Unhandled Promise Rejection:");
+  logFullError(reason);
+  process.exit(1);
+});
+
+process.on("uncaughtException", (error) => {
+  console.error("[FATAL] Uncaught Exception:");
+  logFullError(error);
+  process.exit(1);
+});
 
 try {
   loadEnv();

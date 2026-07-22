@@ -28,6 +28,7 @@ export function getSession() {
 
   let store: session.Store;
   if (hasDatabaseUrl) {
+    console.log("[auth] session store: connect-pg-simple (DATABASE_URL present)");
     const pgStore = connectPg(session);
     store = new pgStore({
       conString: process.env.DATABASE_URL,
@@ -35,7 +36,9 @@ export function getSession() {
       ttl: sessionTtl,
       tableName: "sessions",
     });
+    console.log("[auth] session store: pg store created");
   } else {
+    console.log("[auth] session store: memorystore (no DATABASE_URL)");
     type SessionStoreConstructor = new (options: { checkPeriod: number }) => session.Store;
     const MemoryStore = (memorystore as unknown as (s: typeof session) => SessionStoreConstructor)(session);
     store = new MemoryStore({ checkPeriod: sessionTtl });
@@ -83,8 +86,15 @@ const devIsAuthenticated: RequestHandler = (_req, _res, next) => {
 export async function setupAuth(app: Express) {
   app.set("trust proxy", 1);
 
+  console.log("[auth] setupAuth entered", {
+    hasReplitAuthConfig,
+    isProduction,
+    REPL_ID: process.env.REPL_ID ? "(set)" : "(not set)",
+  });
+
   // If REPL_ID is missing outside production, enable no-auth mode so the app can boot in development.
   if (!hasReplitAuthConfig) {
+    console.log("[auth] no REPL_ID — setting up session-only auth");
     app.use(getSession());
 
     if (!isProduction) {
@@ -104,15 +114,19 @@ export async function setupAuth(app: Express) {
       app.get("/api/logout", (_req, res) => res.redirect("/"));
     }
 
+    console.log("[auth] session-only auth setup complete");
     return; // Skip real OIDC setup
   }
 
   // Real Replit OIDC auth setup
+  console.log("[auth] REPL_ID present — setting up full OIDC auth");
   app.use(getSession());
   app.use(passport.initialize());
   app.use(passport.session());
 
+  console.log("[auth] discovering OIDC config...");
   const config = await getOidcConfig();
+  console.log("[auth] OIDC config discovered");
 
   const verify: VerifyFunction = async (
     tokens: client.TokenEndpointResponse & client.TokenEndpointResponseHelpers,

@@ -212,9 +212,15 @@ app.use((req, res, next) => {
 });
 
 export const appReady = (async () => {
+  console.log("[appReady] step 1/4: importing routes module...");
   const { registerRoutes } = await import("./routes");
-  await registerRoutes(httpServer, app);
+  console.log("[appReady] step 1/4 done: routes imported");
 
+  console.log("[appReady] step 2/4: calling registerRoutes (setupAuth + handlers)...");
+  await registerRoutes(httpServer, app);
+  console.log("[appReady] step 2/4 done: routes registered");
+
+  console.log("[appReady] step 3/4: adding Express error handler...");
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
     const message = err.message || "Internal Server Error";
@@ -230,14 +236,20 @@ export const appReady = (async () => {
       res.status(status).json({ message });
     }
   });
+  console.log("[appReady] step 3/4 done: error handler added");
 
+  console.log("[appReady] step 4/4: static/vite setup...");
   // Vercel serves the frontend build separately; the API function only needs API routes.
   if (process.env.NODE_ENV === "production" && !process.env.VERCEL) {
+    console.log("[appReady] step 4/4: NODE_ENV=production, calling serveStatic...");
     serveStatic(app);
+    console.log("[appReady] step 4/4 done: serveStatic complete");
   } else if (process.env.NODE_ENV !== "production") {
     const { setupVite } = await import("./vite");
     await setupVite(httpServer, app);
+    console.log("[appReady] step 4/4 done: vite setup complete");
   }
+  console.log("[appReady] all steps complete");
 })();
 
 export async function startServer() {
