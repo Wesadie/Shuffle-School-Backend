@@ -3,7 +3,9 @@ import { build as viteBuild } from "vite";
 import { rm, readFile } from "fs/promises";
 
 // server deps to bundle to reduce openat(2) syscalls
-// which helps cold start times
+// which helps cold start times.
+// NOTE: multer (and its busboy dep) are intentionally NOT bundled so that
+// stack traces point to real source files instead of bundled code.
 const allowlist = [
   "@google/generative-ai",
   "axios",
@@ -17,7 +19,6 @@ const allowlist = [
   "express-session",
   "jsonwebtoken",
   "memorystore",
-  "multer",
   "nanoid",
   "nodemailer",
   "openai",
@@ -58,7 +59,10 @@ async function buildAll() {
     define: {
       "process.env.NODE_ENV": '"production"',
     },
-    minify: true,
+    // DEBUGGING: minification disabled and source maps enabled so stack
+    // traces point to original TypeScript source files, not bundled line numbers.
+    minify: false,
+    sourcemap: true,
     external: externals,
     logLevel: "info",
   });
