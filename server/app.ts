@@ -36,6 +36,9 @@ const corsAllowedOrigins = (process.env.CORS_ALLOWED_ORIGINS ?? "")
   .map((o) => o.trim())
   .filter(Boolean);
 
+console.log("[CORS] init — env CORS_ALLOWED_ORIGINS:", JSON.stringify(corsAllowedOrigins));
+console.log("[CORS] init — hostname suffixes: .lovable.app, shuffleschool.co.za");
+
 function isCorsAllowedOrigin(origin: string): boolean {
   if (corsAllowedOrigins.includes(origin)) return true;
   try {
@@ -50,14 +53,32 @@ function isCorsAllowedOrigin(origin: string): boolean {
 // (e.g. malformed JSON from express.json) still include CORS headers.
 app.use((req, res, next) => {
   const origin = req.headers.origin;
+  const allowed = origin ? isCorsAllowedOrigin(origin) : false;
 
-  if (origin && isCorsAllowedOrigin(origin)) {
+  // TEMPORARY DIAGNOSTIC LOGGING — logs every CORS-relevant request so we can
+  // see the actual Origin header and the accept/reject decision in Render logs.
+  if (req.method === "OPTIONS" || req.path.startsWith("/api/auth")) {
+    console.log("[CORS]", {
+      method: req.method,
+      path: req.path,
+      origin: origin ?? "(none)",
+      originType: typeof origin,
+      originLength: origin?.length,
+      allowed,
+      corsAllowedOrigins,
+    });
+  }
+
+  if (origin && allowed) {
     res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Vary", "Origin");
     res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type");
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, PUT, DELETE, OPTIONS");
     res.setHeader("Access-Control-Allow-Credentials", "true");
     res.setHeader("Access-Control-Max-Age", "86400");
+  } else if (req.method === "OPTIONS") {
+    // Log rejections explicitly so they stand out in Render logs.
+    console.warn("[CORS] OPTIONS preflight REJECTED — no CORS headers will be set");
   }
   if (req.method === "OPTIONS") {
     return res.status(204).end();
