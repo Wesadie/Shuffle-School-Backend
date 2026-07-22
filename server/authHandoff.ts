@@ -5,19 +5,23 @@ import { seedDemoData } from "./demoSeed";
 import { ensureOnboardingAccount } from "./onboarding";
 
 const HANDOFF_TTL_SECONDS = 120;
-export const FRONTEND_ORIGIN = (process.env.FRONTEND_URL ?? "https://shuffleschool.co.za").replace(/\/$/, "");
+const APP_ORIGIN = (
+  process.env.RENDER_EXTERNAL_URL ??
+  process.env.APP_BASE_URL ??
+  "https://shuffle-school.onrender.com"
+).replace(/\/$/, "");
 
 export function authHandoffRedirectUrl(code: string): string {
-  const url = new URL("/auth/handoff", FRONTEND_ORIGIN);
+  const url = new URL("/auth/handoff", APP_ORIGIN);
   url.searchParams.set("code", code);
   return url.toString();
 }
 
 /**
  * Creates a short-lived, single-use handoff code.
- * Called by the Lovable frontend after registration or sign-in.
- * The frontend sends its Supabase refresh_token in the body and receives the
- * canonical Lovable handoff URL in the response.
+ * Called by the Lovable landing page after registration or sign-in.
+ * The landing page sends its Supabase refresh_token in the body and receives
+ * the Render-hosted application handoff URL in the response.
  *
  * Security:
 
@@ -113,7 +117,7 @@ export const createAuthHandoff: RequestHandler = async (req, res) => {
 
 /**
  * Exchanges a handoff code for the Supabase tokens needed to call setSession().
- * Called by the Lovable frontend's /auth/handoff page.
+ * Called by the Render-hosted application's /auth/handoff page.
  *
  * The code is single-use: once consumed the row is deleted.
  * Tokens are returned in the HTTPS response body (never in a URL).

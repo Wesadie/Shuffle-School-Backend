@@ -1,6 +1,7 @@
 import express, { type Request, Response, NextFunction } from "express";
 import multer from "multer";
 import { createServer } from "http";
+import { serveStatic } from "./static";
 import { attachAccountContext, getAccountContext } from "./accountContext";
 import { authenticateSupabaseJwt } from "./supabaseAuth";
 import { buildPayfastPaymentUrl } from "./payfast/initiate";
@@ -238,12 +239,13 @@ export const appReady = (async () => {
   console.log("[appReady] step 3/4 done: error handler added");
 
   console.log("[appReady] step 4/4: static/vite setup...");
-  if (process.env.NODE_ENV !== "production") {
+  if (process.env.NODE_ENV === "production") {
+    serveStatic(app);
+    console.log("[appReady] step 4/4 done: production frontend configured");
+  } else {
     const { setupVite } = await import("./vite");
     await setupVite(httpServer, app);
     console.log("[appReady] step 4/4 done: vite setup complete");
-  } else {
-    console.log("[appReady] step 4/4: production API-only mode — skipping static file serving");
   }
   console.log("[appReady] all steps complete");
 })();
