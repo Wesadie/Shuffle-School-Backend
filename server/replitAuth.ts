@@ -7,6 +7,7 @@ import type { Express, RequestHandler } from "express";
 import memoize from "memoizee";
 import connectPg from "connect-pg-simple";
 import { storage } from "./storage";
+import { FRONTEND_ORIGIN } from "./authHandoff";
 import memorystore from "memorystore";
 
 const hasReplitAuthConfig = !!process.env.REPL_ID;
@@ -171,7 +172,7 @@ export async function setupAuth(app: Express) {
   app.get("/api/callback", (req, res, next) => {
     ensureStrategy(req.hostname);
     passport.authenticate(`replitauth:${req.hostname}`, {
-      successReturnToOrRedirect: "/",
+      successRedirect: FRONTEND_ORIGIN,
       failureRedirect: "/api/login",
     })(req, res, next);
   });
@@ -181,7 +182,7 @@ export async function setupAuth(app: Express) {
       res.redirect(
         client.buildEndSessionUrl(config, {
           client_id: process.env.REPL_ID!,
-          post_logout_redirect_uri: `${req.protocol}://${req.hostname}`,
+          post_logout_redirect_uri: FRONTEND_ORIGIN,
         }).href
       );
     });

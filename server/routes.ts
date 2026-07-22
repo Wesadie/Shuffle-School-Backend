@@ -5,7 +5,7 @@ import { setupAuth, isAuthenticated } from "./replitAuth";
 import { attachAccountContext, getAccountContext } from "./accountContext";
 import { authenticateSupabaseJwt, requireSupabaseUser } from "./supabaseAuth";
 import { onboardSupabaseUser } from "./onboarding";
-import { createAuthHandoff, exchangeAuthHandoff } from "./authHandoff";
+import { authHandoffRedirectUrl, createAuthHandoff, exchangeAuthHandoff } from "./authHandoff";
 import {
   requireWritableWorkspace,
   requireFinalExportAccess,
@@ -61,6 +61,14 @@ export async function registerRoutes(
   app.post("/api/onboarding/supabase", requireSupabaseUser, onboardSupabaseUser);
   app.post("/api/auth/handoff", requireSupabaseUser, createAuthHandoff);
   app.post("/api/auth/exchange", exchangeAuthHandoff);
+
+  // Compatibility for clients that previously built the handoff page URL with
+  // the Render API origin. The UI route belongs to the Lovable frontend.
+  app.get("/auth/handoff", (req, res) => {
+    const code = typeof req.query.code === "string" ? req.query.code.trim() : "";
+    if (!code) return res.status(400).json({ message: "Handoff code is required" });
+    return res.redirect(302, authHandoffRedirectUrl(code));
+  });
 
   app.use("/api", authenticateSupabaseJwt, isAuthenticated, attachAccountContext);
 
