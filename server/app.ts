@@ -1,6 +1,5 @@
 import express, { type Request, Response, NextFunction } from "express";
 import multer from "multer";
-import { serveStatic } from "./static";
 import { createServer } from "http";
 import { attachAccountContext, getAccountContext } from "./accountContext";
 import { authenticateSupabaseJwt } from "./supabaseAuth";
@@ -239,15 +238,12 @@ export const appReady = (async () => {
   console.log("[appReady] step 3/4 done: error handler added");
 
   console.log("[appReady] step 4/4: static/vite setup...");
-  // Vercel serves the frontend build separately; the API function only needs API routes.
-  if (process.env.NODE_ENV === "production" && !process.env.VERCEL) {
-    console.log("[appReady] step 4/4: NODE_ENV=production, calling serveStatic...");
-    serveStatic(app);
-    console.log("[appReady] step 4/4 done: serveStatic complete");
-  } else if (process.env.NODE_ENV !== "production") {
+  if (process.env.NODE_ENV !== "production") {
     const { setupVite } = await import("./vite");
     await setupVite(httpServer, app);
     console.log("[appReady] step 4/4 done: vite setup complete");
+  } else {
+    console.log("[appReady] step 4/4: production API-only mode — skipping static file serving");
   }
   console.log("[appReady] all steps complete");
 })();
