@@ -22,12 +22,12 @@ interface CSVImportDialogProps {
 }
 
 interface ParsedStudent {
+  studentId?: string;
   firstName: string;
   lastName: string;
   grade: string;
   currentClass?: string;
   gender?: string;
-  notes?: string;
   [key: string]: string | undefined;
 }
 
@@ -40,13 +40,13 @@ export function CSVImportDialog({ open, onOpenChange }: CSVImportDialogProps) {
   const [isDragging, setIsDragging] = useState(false);
 
   const importMutation = useMutation({
-    mutationFn: (students: ParsedStudent[]) => 
+    mutationFn: (students: ParsedStudent[]) =>
       apiRequest("POST", "/api/students/bulk-import", { students }),
     onSuccess: (data: any) => {
       queryClient.invalidateQueries({ queryKey: ["/api/students"] });
-      toast({ 
-        title: "Import successful", 
-        description: `${data.count || parsedData.length} students imported` 
+      toast({
+        title: "Import successful",
+        description: `${data.count || parsedData.length} students imported`,
       });
       handleClose();
     },
@@ -57,28 +57,21 @@ export function CSVImportDialog({ open, onOpenChange }: CSVImportDialogProps) {
 
   const parseCSV = (text: string): { headers: string[]; data: ParsedStudent[] } => {
     const lines = text.trim().split(/\r?\n/);
-    if (lines.length < 2) {
-      throw new Error("CSV must have a header row and at least one data row");
+    if (lines.length < 1) {
+      throw new Error("CSV must have a header row");
     }
 
     const headerLine = lines[0];
-    const headers = headerLine.split(",").map((h) => h.trim().replace(/^"|"$/g, ""));
+    const headers = headerLine.split(";").map((h) => h.trim().replace(/^\"|\"$/g, ""));
 
-    const requiredHeaders = ["firstName", "lastName", "grade"];
+    const requiredHeaders = ["Student ID", "First Name", "Last Name", "Gender", "Current Grade", "Current Class"];
     const altHeaders: Record<string, string[]> = {
-      firstName: ["first_name", "first name", "firstname", "first"],
-      lastName: ["last_name", "last name", "lastname", "last"],
-      grade: ["grade", "grade_level", "gradelevel", "year", "current grade", "current_grade"],
-      currentClass: ["current_class", "current class", "class"],
-      gender: ["gender", "sex"],
-      race: ["race"],
-      aggregate: ["aggregate %", "aggregate", "aggregate%"],
-      maths: ["maths %", "maths", "math %", "math", "maths%"],
-      english: ["english %", "english", "english%"],
-      afrikaans: ["afrikaans/isizulu %", "afrikaans", "isizulu", "afrikaans%"],
-      medication: ["medication", "meds"],
-      learnerSupport: ["learner support", "learner_support", "support"],
-      notes: ["notes", "note"],
+      "Student ID": ["student id", "student_id", "id"],
+      "First Name": ["first_name", "first name", "firstname", "first"],
+      "Last Name": ["last_name", "last name", "lastname", "last"],
+      Gender: ["gender", "sex"],
+      "Current Grade": ["current grade", "current_grade", "grade", "grade_level", "gradelevel", "year"],
+      "Current Class": ["current class", "current_class", "class"],
     };
 
     const headerMap: Record<string, string> = {};
@@ -94,13 +87,11 @@ export function CSVImportDialog({ open, onOpenChange }: CSVImportDialogProps) {
       }
     });
 
-    const missingRequired = requiredHeaders.filter(
-      (req) => !Object.values(headerMap).includes(req)
-    );
+    const missingRequired = requiredHeaders.filter((req) => !Object.values(headerMap).includes(req));
     if (missingRequired.length > 0) {
       throw new Error(
         `Missing required columns: ${missingRequired.join(", ")}. ` +
-        `Found columns: ${headers.join(", ")}`
+          `Found columns: ${headers.join(", ")}`,
       );
     }
 
@@ -109,47 +100,30 @@ export function CSVImportDialog({ open, onOpenChange }: CSVImportDialogProps) {
       const line = lines[i].trim();
       if (!line) continue;
 
-      const values: string[] = [];
-      let current = "";
-      let inQuotes = false;
-      
-      for (const char of line) {
-        if (char === '"') {
-          inQuotes = !inQuotes;
-        } else if (char === "," && !inQuotes) {
-          values.push(current.trim());
-          current = "";
-        } else {
-          current += char;
-        }
-      }
-      values.push(current.trim());
-
+      const values = line.split(";").map((value) => value.trim().replace(/^\"|\"$/g, ""));
       const row: Record<string, string> = {};
       headers.forEach((header, idx) => {
         const standardKey = headerMap[header];
-        row[standardKey] = values[idx]?.replace(/^"|"$/g, "") || "";
+        row[standardKey] = values[idx] || "";
       });
 
-      if (row.firstName && row.lastName && row.grade) {
+      if (
+        row["Student ID"] &&
+        row["First Name"] &&
+        row["Last Name"] &&
+        row["Gender"] &&
+        row["Current Grade"] &&
+        row["Current Class"]
+      ) {
         data.push({
-          firstName: row.firstName,
-          lastName: row.lastName,
-          grade: row.grade,
-          currentClass: row.currentClass,
-          gender: row.gender,
-          notes: row.notes,
           studentId: row["Student ID"],
-          ...(row.race ? { Race: row.race } : {}),
-          ...(row.aggregate ? { "Aggregate %": row.aggregate } : {}),
-          ...(row.maths ? { "Maths %": row.maths } : {}),
-          ...(row.english ? { "English %": row.english } : {}),
-          ...(row.afrikaans ? { "Afrikaans/Isizulu %": row.afrikaans } : {}),
-          ...(row.medication ? { Medication: row.medication } : {}),
-          ...(row.learnerSupport ? { "Learner Support": row.learnerSupport } : {}),
+          firstName: row["First Name"],
+          lastName: row["Last Name"],
+          gender: row["Gender"],
+          grade: row["Current Grade"],
+          currentClass: row["Current Class"],
         });
       }
-
     }
 
     return { headers: Object.values(headerMap), data };
@@ -219,9 +193,7 @@ export function CSVImportDialog({ open, onOpenChange }: CSVImportDialogProps) {
   };
 
   const handleDownloadTemplate = () => {
-    const headers = ["firstName", "lastName", "grade", "currentClass", "gender", "Race", "Aggregate %", "Maths %", "English %", "Afrikaans/Isizulu %", "Medication", "Learner Support", "notes"];
-    const csvContent = headers.join(",") + "\n";
-    
+    const csvContent = "Student ID;First Name;Last Name;Gender;Current Grade;Current Class\r\n";
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -239,7 +211,7 @@ export function CSVImportDialog({ open, onOpenChange }: CSVImportDialogProps) {
         <DialogHeader>
           <DialogTitle>Import Students from CSV</DialogTitle>
           <DialogDescription>
-            Upload a CSV file with student data. Required columns: Student ID, First Name, Last Name, Gender, Current Grade, Current Class.
+            Upload a CSV file with student data. Required columns: Student ID; First Name; Last Name; Gender; Current Grade; Current Class.
           </DialogDescription>
         </DialogHeader>
 
@@ -330,7 +302,14 @@ export function CSVImportDialog({ open, onOpenChange }: CSVImportDialogProps) {
                     {headers.map((h) => (
                       <Badge
                         key={h}
-                        variant={["firstName", "lastName", "grade"].includes(h) ? "default" : "secondary"}
+                        variant={[
+                          "Student ID",
+                          "First Name",
+                          "Last Name",
+                          "Gender",
+                          "Current Grade",
+                          "Current Class",
+                        ].includes(h) ? "default" : "secondary"}
                       >
                         {h}
                       </Badge>
@@ -347,19 +326,23 @@ export function CSVImportDialog({ open, onOpenChange }: CSVImportDialogProps) {
                       <table className="w-full text-sm">
                         <thead className="bg-muted">
                           <tr>
+                            <th className="px-3 py-2 text-left font-medium">Student ID</th>
                             <th className="px-3 py-2 text-left font-medium">First Name</th>
                             <th className="px-3 py-2 text-left font-medium">Last Name</th>
-                            <th className="px-3 py-2 text-left font-medium">Grade</th>
                             <th className="px-3 py-2 text-left font-medium">Gender</th>
+                            <th className="px-3 py-2 text-left font-medium">Current Grade</th>
+                            <th className="px-3 py-2 text-left font-medium">Current Class</th>
                           </tr>
                         </thead>
                         <tbody>
                           {parsedData.slice(0, 5).map((student, i) => (
                             <tr key={i} className="border-t">
+                              <td className="px-3 py-2">{student.studentId || "—"}</td>
                               <td className="px-3 py-2">{student.firstName}</td>
                               <td className="px-3 py-2">{student.lastName}</td>
-                              <td className="px-3 py-2">{student.grade}</td>
                               <td className="px-3 py-2">{student.gender || "—"}</td>
+                              <td className="px-3 py-2">{student.grade}</td>
+                              <td className="px-3 py-2">{student.currentClass || "—"}</td>
                             </tr>
                           ))}
                         </tbody>
