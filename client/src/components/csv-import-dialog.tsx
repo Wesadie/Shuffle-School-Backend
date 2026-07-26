@@ -72,6 +72,8 @@ export function CSVImportDialog({ open, onOpenChange }: CSVImportDialogProps) {
       Gender: ["gender", "sex"],
       "Current Grade": ["current grade", "current_grade", "grade", "grade_level", "gradelevel", "year"],
       "Current Class": ["current class", "current_class", "class"],
+      notes: ["notes", "note"],
+
     };
 
     const headerMap: Record<string, string> = {};
@@ -126,15 +128,16 @@ export function CSVImportDialog({ open, onOpenChange }: CSVImportDialogProps) {
 
       if (row["Student ID"] && row["First Name"] && row["Last Name"] && row["Gender"] && row["Current Grade"] && row["Current Class"]) {
         data.push({
+          studentId: row["Student ID"],
           firstName: row["First Name"],
           lastName: row["Last Name"],
+          gender: row["Gender"],
           grade: row["Current Grade"],
           currentClass: row["Current Class"],
-          gender: row["Gender"],
-          studentId: row["Student ID"],
           notes: row.notes,
         });
       }
+
     }
 
     return { headers: Object.values(headerMap), data };
