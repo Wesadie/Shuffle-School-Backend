@@ -85,7 +85,8 @@ export class DatabaseStorage {
   async createStudent(accountId: string, insertStudent: InsertStudent): Promise<Student> {
     accountId = requireAccountId(accountId);
     const [student] = await db.insert(students).values({
-      id: randomUUID(), accountId, firstName: insertStudent.firstName, lastName: insertStudent.lastName, grade: insertStudent.grade,
+      id: randomUUID(), accountId, studentId: insertStudent.studentId ?? null,
+      firstName: insertStudent.firstName, lastName: insertStudent.lastName, grade: insertStudent.grade,
       currentClass: insertStudent.currentClass ?? null, gender: insertStudent.gender ?? null,
       characteristics: insertStudent.characteristics ?? {}, notes: insertStudent.notes ?? null,
       parentRequests: insertStudent.parentRequests ?? null, parentNotes: insertStudent.parentNotes ?? null,

@@ -40,22 +40,35 @@ export function CSVImportDialog({ open, onOpenChange }: CSVImportDialogProps) {
   const [isDragging, setIsDragging] = useState(false);
 
   const importMutation = useMutation({
-    mutationFn: (students: ParsedStudent[]) =>
-      apiRequest("POST", "/api/students/bulk-import", { students }),
-    onSuccess: (data: any) => {
+    mutationFn: async (students: ParsedStudent[]) => {
+      const response = await apiRequest("POST", "/api/students/bulk-import", { students });
+      return await response.json() as { count: number };
+    },
+    onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["/api/students"] });
       toast({
         title: "Import successful",
-        description: `${data.count || parsedData.length} students imported`,
+        description: `${data.count} students imported`,
       });
       handleClose();
     },
-    onError: () => {
-      toast({ title: "Failed to import students", variant: "destructive" });
+    onError: (error: Error) => {
+      let description = error.message;
+      const jsonStart = description.indexOf("{");
+      if (jsonStart >= 0) {
+        try {
+          const body = JSON.parse(description.slice(jsonStart)) as { error?: string; message?: string };
+          description = body.error || body.message || description;
+        } catch {
+          // Keep the response text when the backend did not return JSON.
+        }
+      }
+      toast({ title: "Failed to import students", description, variant: "destructive" });
     },
   });
 
   const parseCSV = (text: string): { headers: string[]; data: ParsedStudent[] } => {
+
     const lines = text.trim().split(/\r?\n/);
     if (lines.length < 1) {
       throw new Error("CSV must have a header row");

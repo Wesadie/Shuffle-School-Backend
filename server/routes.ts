@@ -179,7 +179,6 @@ export async function registerRoutes(
   });
 
   app.post("/api/students/bulk-import", isAuthenticated, requireWritableWorkspace, async (req, res) => {
-    if (blockDemoWorkspace(req, res, "Student import")) return;
     try {
       const { students } = req.body;
       if (!Array.isArray(students)) {
@@ -187,16 +186,17 @@ export async function registerRoutes(
       }
 
       const context = getAccountContext(req);
+
       const currentStudentCount = (await storage.getStudents(accountIdFor(req))).length;
       if (wouldExceedLearnerCapacity(context, currentStudentCount, students.length)) {
         return res.status(403).json(learnerCapacityExceededResponse(context));
       }
       
-      const standardFields = ["firstName", "lastName", "grade", "currentClass", "gender", "notes", "parentRequests", "parentNotes"];
+      const standardFields = ["studentId", "firstName", "lastName", "grade", "currentClass", "gender", "notes", "parentRequests", "parentNotes"];
       const existingCharacteristics = await storage.getCharacteristics(accountIdFor(req));
       const characteristicByName = new Map(existingCharacteristics.map((char) => [char.name, char]));
       const importedValuesByCharacteristic = new Map<string, Set<string>>();
-      
+
       for (const student of students) {
         for (const [key, value] of Object.entries(student)) {
           if (!standardFields.includes(key) && value !== undefined && value !== null && value !== "") {
@@ -267,22 +267,30 @@ export async function registerRoutes(
             characteristics[key] = String(value);
           }
         }
-        return {
+        return insertStudentSchema.parse({
+          studentId: student.studentId,
           firstName: student.firstName,
           lastName: student.lastName,
           grade: student.grade,
           currentClass: student.currentClass,
           gender: student.gender,
           notes: student.notes,
-          characteristics
-        };
+          characteristics,
+        });
       });
       
       const result = await storage.bulkImportStudents(accountIdFor(req), processedStudents);
       res.status(201).json(result);
     } catch (error) {
-      res.status(400).json({ error: "Failed to import students" });
+      if (error instanceof z.ZodError) {
+        const issue = error.issues[0];
+        const field = issue.path.length > 0 ? issue.path.join(".") : "student";
+        return res.status(400).json({ error: `Invalid ${field}: ${issue.message}` });
+      }
+      const message = error instanceof Error ? error.message : "Failed to import students";
+      res.status(400).json({ error: message });
     }
+
   });
 
   app.delete("/api/students", isAuthenticated, requireWritableWorkspace, async (req, res) => {
