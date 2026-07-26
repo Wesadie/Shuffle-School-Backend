@@ -64,23 +64,14 @@ export function CSVImportDialog({ open, onOpenChange }: CSVImportDialogProps) {
     const headerLine = lines[0];
     const headers = headerLine.split(",").map((h) => h.trim().replace(/^"|"$/g, ""));
 
-    const requiredHeaders = ["firstName", "lastName", "grade"];
+    const requiredHeaders = ["Student ID", "First Name", "Last Name", "Gender", "Current Grade", "Current Class"];
     const altHeaders: Record<string, string[]> = {
-      firstName: ["first_name", "first name", "firstname", "first"],
-      lastName: ["last_name", "last name", "lastname", "last"],
-      grade: ["grade", "grade_level", "gradelevel", "year"],
-      currentClass: ["current_class", "current class", "class"],
-      gender: ["gender", "sex"],
-      Race: ["race"],
-      "Aggregate %": ["aggregate %", "aggregate", "aggregate%"],
-      "Maths %": ["maths %", "maths", "math %", "math", "maths%"],
-      "English %": ["english %", "english", "english%"],
-      "Afrikaans/Isizulu %": ["afrikaans/isizulu %", "afrikaans", "isizulu", "afrikaans%"],
-      Medication: ["medication", "meds"],
-      "Learner Support": ["learner support", "learner_support", "support"],
-      notes: ["notes", "note"],
-      parentRequests: ["parent requests", "parent_requests", "parentrequests"],
-      parentNotes: ["parent notes", "parent_notes", "parentnotes"],
+      "Student ID": ["student id", "student_id", "id"],
+      "First Name": ["first_name", "first name", "firstname", "first"],
+      "Last Name": ["last_name", "last name", "lastname", "last"],
+      Gender: ["gender", "sex"],
+      "Current Grade": ["current grade", "current_grade", "grade", "grade_level", "gradelevel", "year"],
+      "Current Class": ["current class", "current_class", "class"],
     };
 
     const headerMap: Record<string, string> = {};
@@ -133,8 +124,16 @@ export function CSVImportDialog({ open, onOpenChange }: CSVImportDialogProps) {
         row[standardKey] = values[idx]?.replace(/^"|"$/g, "") || "";
       });
 
-      if (row.firstName && row.lastName && row.grade) {
-        data.push(row as ParsedStudent);
+      if (row["Student ID"] && row["First Name"] && row["Last Name"] && row["Gender"] && row["Current Grade"] && row["Current Class"]) {
+        data.push({
+          firstName: row["First Name"],
+          lastName: row["Last Name"],
+          grade: row["Current Grade"],
+          currentClass: row["Current Class"],
+          gender: row["Gender"],
+          studentId: row["Student ID"],
+          notes: row.notes,
+        });
       }
     }
 
@@ -205,8 +204,8 @@ export function CSVImportDialog({ open, onOpenChange }: CSVImportDialogProps) {
   };
 
   const handleDownloadTemplate = () => {
-    const headers = ["firstName", "lastName", "grade", "currentClass", "gender", "Race", "Aggregate %", "Maths %", "English %", "Afrikaans/Isizulu %", "Medication", "Learner Support", "Notes", "Parent Requests", "Parent Notes"];
-    const exampleRow = ["John", "Smith", "4", "4A", "Male", "White", "75", "80", "72", "68", "", "", "", "", ""];
+    const headers = ["Student ID", "First Name", "Last Name", "Gender", "Current Grade", "Current Class"];
+    const exampleRow = ["STU-001", "John", "Smith", "Male", "4", "4A"];
     const csvContent = [headers.join(","), exampleRow.join(",")].join("\n");
     
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
@@ -226,7 +225,7 @@ export function CSVImportDialog({ open, onOpenChange }: CSVImportDialogProps) {
         <DialogHeader>
           <DialogTitle>Import Students from CSV</DialogTitle>
           <DialogDescription>
-            Upload a CSV file with student data. Required columns: firstName, lastName, grade.
+            Upload a CSV file with student data. Required columns: Student ID, First Name, Last Name, Gender, Current Grade, Current Class.
           </DialogDescription>
         </DialogHeader>
 
