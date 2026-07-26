@@ -562,23 +562,8 @@ export default function StudentsPage() {
   };
 
   const handleDownloadTemplate = () => {
-    const headers = [
-      "firstName",
-      "lastName",
-      "grade",
-      "currentClass",
-      "gender",
-      "Race",
-      "Aggregate %",
-      "Maths %",
-      "English %",
-      "Afrikaans/Isizulu %",
-      "Medication",
-      "Learner Support",
-      "notes",
-    ];
-    const csvContent = headers.join(",") + "\n";
-    const blob = new Blob([csvContent], { type: "text/csv" });
+    const csvContent = "Student ID;First Name;Last Name;Gender;Current Grade;Current Class\r\n";
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
