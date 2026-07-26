@@ -64,16 +64,21 @@ export function CSVImportDialog({ open, onOpenChange }: CSVImportDialogProps) {
     const headerLine = lines[0];
     const headers = headerLine.split(",").map((h) => h.trim().replace(/^"|"$/g, ""));
 
-    const requiredHeaders = ["Student ID", "First Name", "Last Name", "Gender", "Current Grade", "Current Class"];
+    const requiredHeaders = ["firstName", "lastName", "grade"];
     const altHeaders: Record<string, string[]> = {
-      "Student ID": ["student id", "student_id", "id"],
-      "First Name": ["first_name", "first name", "firstname", "first"],
-      "Last Name": ["last_name", "last name", "lastname", "last"],
-      Gender: ["gender", "sex"],
-      "Current Grade": ["current grade", "current_grade", "grade", "grade_level", "gradelevel", "year"],
-      "Current Class": ["current class", "current_class", "class"],
+      firstName: ["first_name", "first name", "firstname", "first"],
+      lastName: ["last_name", "last name", "lastname", "last"],
+      grade: ["grade", "grade_level", "gradelevel", "year", "current grade", "current_grade"],
+      currentClass: ["current_class", "current class", "class"],
+      gender: ["gender", "sex"],
+      race: ["race"],
+      aggregate: ["aggregate %", "aggregate", "aggregate%"],
+      maths: ["maths %", "maths", "math %", "math", "maths%"],
+      english: ["english %", "english", "english%"],
+      afrikaans: ["afrikaans/isizulu %", "afrikaans", "isizulu", "afrikaans%"],
+      medication: ["medication", "meds"],
+      learnerSupport: ["learner support", "learner_support", "support"],
       notes: ["notes", "note"],
-
     };
 
     const headerMap: Record<string, string> = {};
@@ -126,15 +131,22 @@ export function CSVImportDialog({ open, onOpenChange }: CSVImportDialogProps) {
         row[standardKey] = values[idx]?.replace(/^"|"$/g, "") || "";
       });
 
-      if (row["Student ID"] && row["First Name"] && row["Last Name"] && row["Gender"] && row["Current Grade"] && row["Current Class"]) {
+      if (row.firstName && row.lastName && row.grade) {
         data.push({
-          studentId: row["Student ID"],
-          firstName: row["First Name"],
-          lastName: row["Last Name"],
-          gender: row["Gender"],
-          grade: row["Current Grade"],
-          currentClass: row["Current Class"],
+          firstName: row.firstName,
+          lastName: row.lastName,
+          grade: row.grade,
+          currentClass: row.currentClass,
+          gender: row.gender,
           notes: row.notes,
+          studentId: row["Student ID"],
+          ...(row.race ? { Race: row.race } : {}),
+          ...(row.aggregate ? { "Aggregate %": row.aggregate } : {}),
+          ...(row.maths ? { "Maths %": row.maths } : {}),
+          ...(row.english ? { "English %": row.english } : {}),
+          ...(row.afrikaans ? { "Afrikaans/Isizulu %": row.afrikaans } : {}),
+          ...(row.medication ? { Medication: row.medication } : {}),
+          ...(row.learnerSupport ? { "Learner Support": row.learnerSupport } : {}),
         });
       }
 
@@ -207,9 +219,8 @@ export function CSVImportDialog({ open, onOpenChange }: CSVImportDialogProps) {
   };
 
   const handleDownloadTemplate = () => {
-    const headers = ["Student ID", "First Name", "Last Name", "Gender", "Current Grade", "Current Class"];
-    const exampleRow = ["STU-001", "John", "Smith", "Male", "4", "4A"];
-    const csvContent = [headers.join(","), exampleRow.join(",")].join("\n");
+    const headers = ["firstName", "lastName", "grade", "currentClass", "gender", "Race", "Aggregate %", "Maths %", "English %", "Afrikaans/Isizulu %", "Medication", "Learner Support", "notes"];
+    const csvContent = headers.join(",") + "\n";
     
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
