@@ -195,11 +195,17 @@ export default function StudentsPage() {
   const normalizeGrade = (grade?: string | null) =>
     (grade || "").replace(/^grade\s+/i, "").trim();
 
+  const getNextGrade = (currentGrade?: string | null) => {
+    const normalizedGrade = normalizeGrade(currentGrade);
+    if (!/^\d+$/.test(normalizedGrade)) return "";
+    return String(Number(normalizedGrade) + 1);
+  };
+
   const getStudentDisplayId = (student: Student) =>
     student.studentId || formatCharacteristicValue(getCharacteristics(student).studentId) || "—";
 
   const getNewGrade = (student: Student) =>
-    formatCharacteristicValue(getCharacteristics(student).newGrade) || "—";
+    formatCharacteristicValue(getCharacteristics(student).newGrade) || getNextGrade(student.grade) || "—";
 
   const getRawCharacteristicValue = (student: Student, name: string) =>
     getCharacteristics(student)[name];
