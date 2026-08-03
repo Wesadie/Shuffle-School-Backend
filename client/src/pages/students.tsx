@@ -568,7 +568,16 @@ export default function StudentsPage() {
   };
 
   const handleDownloadTemplate = () => {
-    const csvContent = "Student ID;First Name;Last Name;Gender;Current Grade;Current Class\r\n";
+    const csvHeaders = [
+      "Student ID",
+      "First Name",
+      "Last Name",
+      "Gender",
+      "Current Grade",
+      "Current Class",
+      ...formCharacteristicColumns.map((characteristic) => characteristic.name),
+    ];
+    const csvContent = `${csvHeaders.map((header) => `"${header.replace(/"/g, '""')}"`).join(";")}\r\n`;
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -625,7 +634,11 @@ export default function StudentsPage() {
           </button>
         </div>
         
-        <CSVImportDialog open={isImportDialogOpen} onOpenChange={setIsImportDialogOpen} />
+        <CSVImportDialog
+          open={isImportDialogOpen}
+          onOpenChange={setIsImportDialogOpen}
+          characteristics={formCharacteristicColumns}
+        />
       </div>
     );
   }
@@ -1232,7 +1245,11 @@ export default function StudentsPage() {
         </DialogContent>
       </Dialog>
 
-      <CSVImportDialog open={isImportDialogOpen} onOpenChange={setIsImportDialogOpen} />
+      <CSVImportDialog
+        open={isImportDialogOpen}
+        onOpenChange={setIsImportDialogOpen}
+        characteristics={formCharacteristicColumns}
+      />
     </div>
   );
 }

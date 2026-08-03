@@ -15,10 +15,12 @@ import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
+import type { Characteristic } from "@shared/schema";
 
 interface CSVImportDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  characteristics: Pick<Characteristic, "name" | "type">[];
 }
 
 interface ParsedStudent {
@@ -31,7 +33,46 @@ interface ParsedStudent {
   [key: string]: string | undefined;
 }
 
-export function CSVImportDialog({ open, onOpenChange }: CSVImportDialogProps) {
+function parseCsvRows(text: string): string[][] {
+  const firstLine = text.split(/\r?\n/, 1)[0] ?? "";
+  const delimiters = [";", ",", "\t"];
+  const delimiter = delimiters.reduce((best, candidate) =>
+    firstLine.split(candidate).length > firstLine.split(best).length ? candidate : best,
+  );
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let value = "";
+  let inQuotes = false;
+
+  for (let index = 0; index < text.length; index++) {
+    const character = text[index];
+    if (character === '"') {
+      if (inQuotes && text[index + 1] === '"') {
+        value += '"';
+        index++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (character === delimiter && !inQuotes) {
+      row.push(value.trim());
+      value = "";
+    } else if ((character === "\n" || character === "\r") && !inQuotes) {
+      if (character === "\r" && text[index + 1] === "\n") index++;
+      row.push(value.trim());
+      if (row.some((cell) => cell)) rows.push(row);
+      row = [];
+      value = "";
+    } else {
+      value += character;
+    }
+  }
+
+  row.push(value.trim());
+  if (row.some((cell) => cell)) rows.push(row);
+  return rows;
+}
+
+export function CSVImportDialog({ open, onOpenChange, characteristics }: CSVImportDialogProps) {
   const { toast } = useToast();
   const [file, setFile] = useState<File | null>(null);
   const [parsedData, setParsedData] = useState<ParsedStudent[]>([]);
@@ -68,15 +109,12 @@ export function CSVImportDialog({ open, onOpenChange }: CSVImportDialogProps) {
   });
 
   const parseCSV = (text: string): { headers: string[]; data: ParsedStudent[] } => {
-
-    const lines = text.trim().split(/\r?\n/);
-    if (lines.length < 1) {
+    const rows = parseCsvRows(text);
+    if (rows.length === 0) {
       throw new Error("CSV must have a header row");
     }
 
-    const headerLine = lines[0];
-    const headers = headerLine.split(";").map((h) => h.trim().replace(/^\"|\"$/g, ""));
-
+    const headers = rows[0].map((header) => header.replace(/^\uFEFF/, "").trim());
     const requiredHeaders = ["Student ID", "First Name", "Last Name", "Gender", "Current Grade", "Current Class"];
     const altHeaders: Record<string, string[]> = {
       "Student ID": ["student id", "student_id", "id"],
@@ -86,60 +124,60 @@ export function CSVImportDialog({ open, onOpenChange }: CSVImportDialogProps) {
       "Current Grade": ["current grade", "current_grade", "grade", "grade_level", "gradelevel", "year"],
       "Current Class": ["current class", "current_class", "class"],
     };
+    const characteristicByName = new Map(characteristics.map((characteristic) => [characteristic.name.toLowerCase(), characteristic]));
 
-    const headerMap: Record<string, string> = {};
-    headers.forEach((h) => {
-      const lowerH = h.toLowerCase();
+    const mappedHeaders = headers.map((header) => {
+      const lowerHeader = header.toLowerCase();
       for (const [standard, alternatives] of Object.entries(altHeaders)) {
-        if (lowerH === standard.toLowerCase() || alternatives.includes(lowerH)) {
-          headerMap[h] = standard;
-        }
+        if (lowerHeader === standard.toLowerCase() || alternatives.includes(lowerHeader)) return standard;
       }
-      if (!headerMap[h]) {
-        headerMap[h] = h;
-      }
+      return characteristicByName.get(lowerHeader)?.name || header;
     });
 
-    const missingRequired = requiredHeaders.filter((req) => !Object.values(headerMap).includes(req));
+    const missingRequired = requiredHeaders.filter((required) => !mappedHeaders.includes(required));
     if (missingRequired.length > 0) {
       throw new Error(
-        `Missing required columns: ${missingRequired.join(", ")}. ` +
-          `Found columns: ${headers.join(", ")}`,
+        `Missing required columns: ${missingRequired.join(", ")}. Found columns: ${headers.join(", ")}`,
       );
     }
 
     const data: ParsedStudent[] = [];
-    for (let i = 1; i < lines.length; i++) {
-      const line = lines[i].trim();
-      if (!line) continue;
-
-      const values = line.split(";").map((value) => value.trim().replace(/^\"|\"$/g, ""));
+    for (let rowIndex = 1; rowIndex < rows.length; rowIndex++) {
+      const values = rows[rowIndex];
       const row: Record<string, string> = {};
-      headers.forEach((header, idx) => {
-        const standardKey = headerMap[header];
-        row[standardKey] = values[idx] || "";
+      mappedHeaders.forEach((header, index) => {
+        row[header] = values[index]?.trim() || "";
       });
 
-      if (
-        row["Student ID"] &&
-        row["First Name"] &&
-        row["Last Name"] &&
-        row["Gender"] &&
-        row["Current Grade"] &&
-        row["Current Class"]
-      ) {
-        data.push({
-          studentId: row["Student ID"],
-          firstName: row["First Name"],
-          lastName: row["Last Name"],
-          gender: row["Gender"],
-          grade: row["Current Grade"],
-          currentClass: row["Current Class"],
-        });
+      if (!requiredHeaders.every((required) => row[required])) continue;
+
+      for (const characteristic of characteristics) {
+        const value = row[characteristic.name];
+        if (!value || (characteristic.type !== "scale" && characteristic.type !== "percentage")) continue;
+        const numericValue = Number(value);
+        if (!Number.isFinite(numericValue)) {
+          throw new Error(`Row ${rowIndex + 1}: ${characteristic.name} must be a numeric value.`);
+        }
+        if (characteristic.type === "percentage" && (numericValue < 0 || numericValue > 100)) {
+          throw new Error(`Row ${rowIndex + 1}: ${characteristic.name} must be between 0 and 100.`);
+        }
       }
+
+      const extraValues = Object.fromEntries(
+        Object.entries(row).filter(([header, value]) => !requiredHeaders.includes(header) && value !== ""),
+      );
+      data.push({
+        studentId: row["Student ID"],
+        firstName: row["First Name"],
+        lastName: row["Last Name"],
+        gender: row["Gender"],
+        grade: row["Current Grade"],
+        currentClass: row["Current Class"],
+        ...extraValues,
+      });
     }
 
-    return { headers: Object.values(headerMap), data };
+    return { headers: mappedHeaders, data };
   };
 
   const handleFile = useCallback((file: File) => {
@@ -169,7 +207,7 @@ export function CSVImportDialog({ open, onOpenChange }: CSVImportDialogProps) {
       setError("Failed to read file");
     };
     reader.readAsText(file);
-  }, []);
+  }, [characteristics]);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -206,7 +244,16 @@ export function CSVImportDialog({ open, onOpenChange }: CSVImportDialogProps) {
   };
 
   const handleDownloadTemplate = () => {
-    const csvContent = "Student ID;First Name;Last Name;Gender;Current Grade;Current Class\r\n";
+    const templateHeaders = [
+      "Student ID",
+      "First Name",
+      "Last Name",
+      "Gender",
+      "Current Grade",
+      "Current Class",
+      ...characteristics.map((characteristic) => characteristic.name),
+    ];
+    const csvContent = `${templateHeaders.map((header) => `"${header.replace(/"/g, '""')}"`).join(";")}\r\n`;
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -224,7 +271,7 @@ export function CSVImportDialog({ open, onOpenChange }: CSVImportDialogProps) {
         <DialogHeader>
           <DialogTitle>Import Students from CSV</DialogTitle>
           <DialogDescription>
-            Upload a CSV file with student data. Required columns: Student ID; First Name; Last Name; Gender; Current Grade; Current Class.
+            Upload student details and optional characteristic columns. Percentage characteristics accept numeric values from 0 to 100.
           </DialogDescription>
         </DialogHeader>
 

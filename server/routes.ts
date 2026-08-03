@@ -208,6 +208,20 @@ export async function registerRoutes(
         }
       }
 
+      for (const [name, values] of importedValuesByCharacteristic) {
+        const characteristic = characteristicByName.get(name);
+        if (characteristic?.type !== "scale" && characteristic?.type !== "percentage") continue;
+        for (const value of values) {
+          const numericValue = Number(value);
+          if (!Number.isFinite(numericValue)) {
+            return res.status(400).json({ error: `${name} must contain numeric values` });
+          }
+          if (characteristic.type === "percentage" && (numericValue < 0 || numericValue > 100)) {
+            return res.status(400).json({ error: `${name} must contain values between 0 and 100` });
+          }
+        }
+      }
+
       const allCharacteristicNames = new Set([
         ...Array.from(characteristicByName.keys()),
         ...Array.from(importedValuesByCharacteristic.keys()),
