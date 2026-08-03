@@ -38,6 +38,50 @@ import type { Teacher, InsertTeacher } from "@shared/schema";
 type SortField = "firstName" | "lastName" | "email" | "currentClass" | "surveyStatus";
 type SortDirection = "asc" | "desc";
 
+function parseCsv(text: string): string[][] {
+  const firstLine = text.split(/\r?\n/, 1)[0] ?? "";
+  const delimiters = [",", ";", "\t"];
+  const delimiter = delimiters.reduce((best, candidate) =>
+    firstLine.split(candidate).length > firstLine.split(best).length ? candidate : best,
+  );
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let value = "";
+  let inQuotes = false;
+
+  for (let index = 0; index < text.length; index++) {
+    const character = text[index];
+
+    if (character === '"') {
+      if (inQuotes && text[index + 1] === '"') {
+        value += '"';
+        index++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (character === delimiter && !inQuotes) {
+      row.push(value.trim());
+      value = "";
+    } else if ((character === "\n" || character === "\r") && !inQuotes) {
+      if (character === "\r" && text[index + 1] === "\n") index++;
+      row.push(value.trim());
+      if (row.some((cell) => cell.length > 0)) rows.push(row);
+      row = [];
+      value = "";
+    } else {
+      value += character;
+    }
+  }
+
+  row.push(value.trim());
+  if (row.some((cell) => cell.length > 0)) rows.push(row);
+  return rows;
+}
+
+function normalizeCsvHeader(header: string): string {
+  return header.replace(/^\uFEFF/, "").trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
 export default function TeachersPage() {
   const { toast } = useToast();
   const [searchQuery, setSearchQuery] = useState("");
@@ -119,6 +163,7 @@ export default function TeachersPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/teachers"] });
       setIsImportDialogOpen(false);
+      setShowImportView(false);
       toast({ title: "Teachers imported successfully" });
     },
     onError: () => {
@@ -166,35 +211,47 @@ export default function TeachersPage() {
 
     const reader = new FileReader();
     reader.onload = (e) => {
-      const text = e.target?.result as string;
-      const lines = text.split("\n").filter((line) => line.trim());
-      if (lines.length < 2) {
+      const text = typeof e.target?.result === "string" ? e.target.result : "";
+      const rows = parseCsv(text);
+      if (rows.length < 2) {
         toast({ title: "CSV file is empty or invalid", variant: "destructive" });
         return;
       }
 
-      const headers = lines[0].split(",").map((h) => h.trim().toLowerCase().replace(/"/g, ""));
+      const headers = rows[0].map(normalizeCsvHeader);
+      const hasRequiredHeaders =
+        headers.includes("firstname") &&
+        (headers.includes("lastname") || headers.includes("surname")) &&
+        (headers.includes("email") || headers.includes("emailaddress"));
+      if (!hasRequiredHeaders) {
+        toast({
+          title: "CSV headers are not recognised",
+          description: "Please include First Name, Last Name, and Email columns.",
+          variant: "destructive",
+        });
+        return;
+      }
+
       const teachersList: InsertTeacher[] = [];
 
-      for (let i = 1; i < lines.length; i++) {
-        const values = lines[i].split(",").map((v) => v.trim().replace(/"/g, ""));
+      for (const values of rows.slice(1)) {
         const teacher: Partial<InsertTeacher> = {};
 
         headers.forEach((header, index) => {
-          const value = values[index] || "";
-          if (header === "first name" || header === "firstname") {
+          const value = values[index]?.trim() ?? "";
+          if (header === "firstname") {
             teacher.firstName = value;
-          } else if (header === "last name" || header === "lastname" || header === "surname") {
+          } else if (header === "lastname" || header === "surname") {
             teacher.lastName = value;
-          } else if (header === "email") {
+          } else if (header === "email" || header === "emailaddress") {
             teacher.email = value;
-          } else if (header === "current class" || header === "currentclass" || header === "class") {
+          } else if (header === "currentclass" || header === "class") {
             teacher.currentClass = value;
-          } else if (header === "allocated class" || header === "allocatedclass") {
+          } else if (header === "allocatedclass") {
             teacher.allocatedClass = value;
-          } else if (header === "survey status" || header === "surveystatus") {
+          } else if (header === "surveystatus") {
             teacher.surveyStatus = value || "Not Sent";
-          } else if (header === "survey date" || header === "surveydate") {
+          } else if (header === "surveydate") {
             teacher.surveyDate = value;
           }
         });
@@ -205,13 +262,20 @@ export default function TeachersPage() {
       }
 
       if (teachersList.length === 0) {
-        toast({ title: "No valid teachers found in CSV", variant: "destructive" });
+        toast({
+          title: "No valid teachers found in CSV",
+          description: "Each teacher needs a first name, last name, and email address.",
+          variant: "destructive",
+        });
         return;
       }
 
       bulkImportMutation.mutate(teachersList);
     };
 
+    reader.onerror = () => {
+      toast({ title: "Could not read CSV file", variant: "destructive" });
+    };
     reader.readAsText(file);
     event.target.value = "";
   };
@@ -369,10 +433,7 @@ export default function TeachersPage() {
             type="file"
             accept=".csv"
             className="hidden"
-            onChange={(e) => {
-              handleFileUpload(e);
-              setShowImportView(false);
-            }}
+            onChange={handleFileUpload}
           />
           
           <button
