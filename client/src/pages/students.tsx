@@ -791,7 +791,7 @@ export default function StudentsPage() {
                     <TableHead className="whitespace-nowrap">New Grade</TableHead>
                     <TableHead>Notes</TableHead>
                     <TableHead className="whitespace-nowrap">Requests Total</TableHead>
-                    <TableHead className="whitespace-nowrap bg-orange-200/80 text-foreground border-l-2 border-orange-400" colSpan={tableCharacteristicColumns.length}>
+                    <TableHead className="whitespace-nowrap bg-orange-200/80 text-foreground border-l-2 border-orange-400">
                       <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-orange-950">
                         <span>CHARACTERISTICS</span>
                         <Button
@@ -933,8 +933,10 @@ export default function StudentsPage() {
                         )}
                       </TableCell>
                       <TableCell>{getRequestsTotal(student)}</TableCell>
+                      <TableCell />
                       {tableCharacteristicColumns.map((char) => {
                         const responses = responseLookup.get(char.name);
+
                         const options = responses ? Array.from(responses.keys()) : char.options || [];
                         const isNumeric = char.type === "scale" || char.type === "percentage";
                         const isApplicable = isCharacteristicApplicableToGrade(char, student.grade);
