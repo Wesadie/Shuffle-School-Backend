@@ -173,9 +173,6 @@ export default function StudentsPage() {
   const tableCharacteristicColumns = characteristics.filter(
     (char) => !metadataCharacteristicNames.has(char.name),
   );
-  const requestColumns = ["Total"];
-  const characteristicColumns = tableCharacteristicColumns.slice(0, 2);
-  const friendshipColumns = tableCharacteristicColumns.slice(2, 4);
   const formCharacteristicColumns = tableCharacteristicColumns;
 
   const responseLookup = useMemo(() => {
@@ -758,7 +755,7 @@ export default function StudentsPage() {
             <Table className="min-w-max">
                 <TableHeader className="sticky top-0 z-10 bg-background">
                   <TableRow>
-                    <TableHead className="w-12">
+                    <TableHead rowSpan={2} className="w-12 align-middle bg-background">
                       <Checkbox
                         checked={selectedStudents.size === filteredStudents.length && filteredStudents.length > 0}
                         onCheckedChange={toggleSelectAll}
@@ -766,63 +763,73 @@ export default function StudentsPage() {
                       />
                     </TableHead>
                     <TableHead
-                      className="cursor-pointer select-none whitespace-nowrap"
+                      rowSpan={2}
+                      className="cursor-pointer select-none whitespace-nowrap align-middle bg-background"
                       onClick={() => handleSort("firstName")}
                     >
                       First Name <SortIcon field="firstName" />
                     </TableHead>
                     <TableHead
-                      className="cursor-pointer select-none whitespace-nowrap"
+                      rowSpan={2}
+                      className="cursor-pointer select-none whitespace-nowrap align-middle bg-background"
                       onClick={() => handleSort("lastName")}
                     >
                       Last Name <SortIcon field="lastName" />
                     </TableHead>
-                    <TableHead className="whitespace-nowrap">ID</TableHead>
-                    <TableHead>Gender</TableHead>
+                    <TableHead rowSpan={2} className="whitespace-nowrap align-middle bg-background">ID</TableHead>
+                    <TableHead rowSpan={2} className="align-middle bg-background">Gender</TableHead>
                     <TableHead
-                      className="cursor-pointer select-none whitespace-nowrap"
+                      rowSpan={2}
+                      className="cursor-pointer select-none whitespace-nowrap align-middle bg-background"
                       onClick={() => handleSort("grade")}
                     >
                       Current Grade <SortIcon field="grade" />
                     </TableHead>
                     <TableHead
-                      className="cursor-pointer select-none whitespace-nowrap"
+                      rowSpan={2}
+                      className="cursor-pointer select-none whitespace-nowrap align-middle bg-background"
                       onClick={() => handleSort("currentClass")}
                     >
                       Current Class <SortIcon field="currentClass" />
                     </TableHead>
-                    <TableHead className="whitespace-nowrap">New Grade</TableHead>
-                    <TableHead>Notes</TableHead>
-                    <TableHead className="bg-slate-100/80 whitespace-nowrap border-r">
-                      <div className="px-4 py-4 text-xs font-semibold uppercase tracking-wider text-slate-700">
-                        REQUESTS
-                      </div>
+                    <TableHead rowSpan={2} className="whitespace-nowrap align-middle bg-background">New Grade</TableHead>
+                    <TableHead rowSpan={2} className="align-middle bg-background">Notes</TableHead>
+                    <TableHead className="whitespace-nowrap border-r border-orange-500 bg-orange-400 text-orange-950">
+                      <div className="px-2 pt-3 text-xs font-semibold uppercase tracking-wider">REQUESTS</div>
                     </TableHead>
-                    <TableHead className="bg-orange-200/80 whitespace-nowrap border-r border-orange-300" colSpan={characteristicColumns.length}>
-                      <div className="flex items-center justify-between px-4 py-4 text-xs font-semibold uppercase tracking-wider text-orange-950">
-                        <span>CHARACTERISTICS</span>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="h-5 w-5 p-0 text-orange-950 hover:bg-orange-300 hover:text-orange-950"
-                          asChild
-                        >
-                          <a href="/characteristics" aria-label="Open characteristics settings" data-testid="button-open-characteristics">
-                            <Settings className="h-4 w-4" />
-                          </a>
-                        </Button>
-                      </div>
-                    </TableHead>
-                    <TableHead className="bg-teal-200/80 whitespace-nowrap border-r border-teal-300" colSpan={friendshipColumns.length || 1}>
-                      <div className="px-4 py-4 text-xs font-semibold uppercase tracking-wider text-teal-950">
-                        FRIENDSHIPS
-                      </div>
-                    </TableHead>
-                    <TableHead className="w-24 bg-background whitespace-nowrap">Actions</TableHead>
-
+                    {tableCharacteristicColumns.length > 0 && (
+                      <TableHead
+                        className="whitespace-nowrap border-r border-amber-500 bg-amber-300 text-amber-950"
+                        colSpan={tableCharacteristicColumns.length}
+                      >
+                        <div className="flex items-center justify-between px-2 pt-3 text-xs font-semibold uppercase tracking-wider">
+                          <span>CHARACTERISTICS</span>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-5 w-5 p-0 text-amber-950 hover:bg-amber-400 hover:text-amber-950"
+                            asChild
+                          >
+                            <a href="/characteristics" aria-label="Open characteristics settings" data-testid="button-open-characteristics">
+                              <Settings className="h-4 w-4" />
+                            </a>
+                          </Button>
+                        </div>
+                      </TableHead>
+                    )}
+                    <TableHead rowSpan={2} className="w-24 whitespace-nowrap align-middle bg-background">Actions</TableHead>
                   </TableRow>
-
+                  <TableRow>
+                    <TableHead className="whitespace-nowrap border-r border-orange-500 bg-orange-400 text-orange-950">
+                      Total
+                    </TableHead>
+                    {tableCharacteristicColumns.map((char) => (
+                      <TableHead key={char.id} className="whitespace-nowrap bg-amber-300 text-amber-950">
+                        {char.name}
+                      </TableHead>
+                    ))}
+                  </TableRow>
                 </TableHeader>
                 <TableBody>
                   {filteredStudents.map((student) => (
@@ -940,47 +947,7 @@ export default function StudentsPage() {
                         )}
                       </TableCell>
                       <TableCell>{getRequestsTotal(student)}</TableCell>
-                      {characteristicColumns.map((char) => {
-                        const responses = responseLookup.get(char.name);
-                        const options = responses ? Array.from(responses.keys()) : char.options || [];
-                        const isNumeric = char.type === "scale" || char.type === "percentage";
-                        const isApplicable = isCharacteristicApplicableToGrade(char, student.grade);
-                        const rawValue = getRawCharacteristicValue(student, char.name);
-                        return (
-                          <TableCell key={char.id} className="whitespace-nowrap">
-                            {!isApplicable
-                              ? <span className="text-muted-foreground">—</span>
-                              : char.type === "category" && options.length > 0 && char.multiSelect
-                                ? renderMultiSelectCell(
-                                    student,
-                                    `characteristic:${char.name}`,
-                                    rawValue,
-                                    options,
-                                    (value) => updateCharacteristicData(student, char.name, value),
-                                    responses,
-                                  )
-                                : char.type === "category" && options.length > 0
-                                  ? renderSelectCell(
-                                      student,
-                                      `characteristic:${char.name}`,
-                                      getCharacteristicValue(student, char.name),
-                                      options,
-                                      (value) => updateCharacteristicData(student, char.name, value),
-                                      responses,
-                                    )
-                                  : renderTextCell(
-                                      student,
-                                      `characteristic:${char.name}:${char.type}`,
-                                      getCharacteristicValue(student, char.name),
-                                      (value) => updateCharacteristicData(student, char.name, value),
-                                      false,
-                                      "whitespace-nowrap",
-                                      isNumeric ? "number" : "text",
-                                    )}
-                          </TableCell>
-                        );
-                      })}
-                      {friendshipColumns.map((char) => {
+                      {tableCharacteristicColumns.map((char) => {
                         const responses = responseLookup.get(char.name);
                         const options = responses ? Array.from(responses.keys()) : char.options || [];
                         const isNumeric = char.type === "scale" || char.type === "percentage";
@@ -1021,7 +988,6 @@ export default function StudentsPage() {
                         );
                       })}
                       <TableCell>
-
                         <div className="flex items-center gap-1">
                           <Button
                             size="icon"
