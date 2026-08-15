@@ -173,6 +173,9 @@ export default function StudentsPage() {
   const tableCharacteristicColumns = characteristics.filter(
     (char) => !metadataCharacteristicNames.has(char.name),
   );
+  const requestColumns = ["Total"];
+  const characteristicColumns = tableCharacteristicColumns.slice(0, 2);
+  const friendshipColumns = tableCharacteristicColumns.slice(2, 4);
   const formCharacteristicColumns = tableCharacteristicColumns;
 
   const responseLookup = useMemo(() => {
@@ -790,9 +793,13 @@ export default function StudentsPage() {
                     </TableHead>
                     <TableHead className="whitespace-nowrap">New Grade</TableHead>
                     <TableHead>Notes</TableHead>
-                    <TableHead className="whitespace-nowrap">Requests Total</TableHead>
-                    <TableHead className="whitespace-nowrap bg-orange-200/80 text-foreground border-l-2 border-orange-400">
-                      <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-orange-950">
+                    <TableHead className="bg-slate-100/80 whitespace-nowrap border-r">
+                      <div className="px-4 py-4 text-xs font-semibold uppercase tracking-wider text-slate-700">
+                        REQUESTS
+                      </div>
+                    </TableHead>
+                    <TableHead className="bg-orange-200/80 whitespace-nowrap border-r border-orange-300" colSpan={characteristicColumns.length}>
+                      <div className="flex items-center justify-between px-4 py-4 text-xs font-semibold uppercase tracking-wider text-orange-950">
                         <span>CHARACTERISTICS</span>
                         <Button
                           type="button"
@@ -807,12 +814,12 @@ export default function StudentsPage() {
                         </Button>
                       </div>
                     </TableHead>
-                    {tableCharacteristicColumns.map((char) => (
-                      <TableHead key={char.id} className="whitespace-nowrap">
-                        {char.name}
-                      </TableHead>
-                    ))}
-                    <TableHead className="w-24">Actions</TableHead>
+                    <TableHead className="bg-teal-200/80 whitespace-nowrap border-r border-teal-300" colSpan={friendshipColumns.length || 1}>
+                      <div className="px-4 py-4 text-xs font-semibold uppercase tracking-wider text-teal-950">
+                        FRIENDSHIPS
+                      </div>
+                    </TableHead>
+                    <TableHead className="w-24 bg-background whitespace-nowrap">Actions</TableHead>
 
                   </TableRow>
 
@@ -933,10 +940,48 @@ export default function StudentsPage() {
                         )}
                       </TableCell>
                       <TableCell>{getRequestsTotal(student)}</TableCell>
-                      <TableCell />
-                      {tableCharacteristicColumns.map((char) => {
+                      {characteristicColumns.map((char) => {
                         const responses = responseLookup.get(char.name);
-
+                        const options = responses ? Array.from(responses.keys()) : char.options || [];
+                        const isNumeric = char.type === "scale" || char.type === "percentage";
+                        const isApplicable = isCharacteristicApplicableToGrade(char, student.grade);
+                        const rawValue = getRawCharacteristicValue(student, char.name);
+                        return (
+                          <TableCell key={char.id} className="whitespace-nowrap">
+                            {!isApplicable
+                              ? <span className="text-muted-foreground">—</span>
+                              : char.type === "category" && options.length > 0 && char.multiSelect
+                                ? renderMultiSelectCell(
+                                    student,
+                                    `characteristic:${char.name}`,
+                                    rawValue,
+                                    options,
+                                    (value) => updateCharacteristicData(student, char.name, value),
+                                    responses,
+                                  )
+                                : char.type === "category" && options.length > 0
+                                  ? renderSelectCell(
+                                      student,
+                                      `characteristic:${char.name}`,
+                                      getCharacteristicValue(student, char.name),
+                                      options,
+                                      (value) => updateCharacteristicData(student, char.name, value),
+                                      responses,
+                                    )
+                                  : renderTextCell(
+                                      student,
+                                      `characteristic:${char.name}:${char.type}`,
+                                      getCharacteristicValue(student, char.name),
+                                      (value) => updateCharacteristicData(student, char.name, value),
+                                      false,
+                                      "whitespace-nowrap",
+                                      isNumeric ? "number" : "text",
+                                    )}
+                          </TableCell>
+                        );
+                      })}
+                      {friendshipColumns.map((char) => {
+                        const responses = responseLookup.get(char.name);
                         const options = responses ? Array.from(responses.keys()) : char.options || [];
                         const isNumeric = char.type === "scale" || char.type === "percentage";
                         const isApplicable = isCharacteristicApplicableToGrade(char, student.grade);
@@ -976,6 +1021,7 @@ export default function StudentsPage() {
                         );
                       })}
                       <TableCell>
+
                         <div className="flex items-center gap-1">
                           <Button
                             size="icon"
