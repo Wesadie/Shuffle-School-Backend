@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Plus, Trash2, Edit2, Search, Users, ChevronUp, ChevronDown, MessageSquare, Upload, Download } from "lucide-react";
+import { Plus, Trash2, Edit2, Search, Users, ChevronUp, ChevronDown, MessageSquare, Upload, Download, Settings } from "lucide-react";
 import { CSVImportDialog } from "@/components/csv-import-dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
@@ -791,12 +791,24 @@ export default function StudentsPage() {
                     <TableHead className="whitespace-nowrap">New Grade</TableHead>
                     <TableHead>Notes</TableHead>
                     <TableHead className="whitespace-nowrap">Requests Total</TableHead>
-                    {tableCharacteristicColumns.map((char) => (
-                      <TableHead key={char.id} className="whitespace-nowrap">
-                        {char.name}
-                      </TableHead>
-                    ))}
+                    <TableHead className="whitespace-nowrap bg-orange-200/80 text-foreground border-l-2 border-orange-400" colSpan={tableCharacteristicColumns.length}>
+                      <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-orange-950">
+                        <span>CHARACTERISTICS</span>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-5 w-5 p-0 text-orange-950 hover:bg-orange-300 hover:text-orange-950"
+                          asChild
+                        >
+                          <a href="/characteristics" aria-label="Open characteristics settings" data-testid="button-open-characteristics">
+                            <Settings className="h-4 w-4" />
+                          </a>
+                        </Button>
+                      </div>
+                    </TableHead>
                     <TableHead className="w-24">Actions</TableHead>
+
                   </TableRow>
                 </TableHeader>
                 <TableBody>
