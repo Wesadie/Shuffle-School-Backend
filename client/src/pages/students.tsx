@@ -791,25 +791,33 @@ export default function StudentsPage() {
                     <TableHead className="whitespace-nowrap">New Grade</TableHead>
                     <TableHead>Notes</TableHead>
                     <TableHead className="whitespace-nowrap">Requests Total</TableHead>
-                    <TableHead className="whitespace-nowrap bg-orange-200/80 text-foreground border-l-2 border-orange-400" colSpan={tableCharacteristicColumns.length}>
-                      <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-orange-950">
-                        <span>CHARACTERISTICS</span>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="h-5 w-5 p-0 text-orange-950 hover:bg-orange-300 hover:text-orange-950"
-                          asChild
-                        >
-                          <a href="/characteristics" aria-label="Open characteristics settings" data-testid="button-open-characteristics">
-                            <Settings className="h-4 w-4" />
-                          </a>
-                        </Button>
-                      </div>
-                    </TableHead>
+                    {tableCharacteristicColumns.length > 0 && (
+                      <TableHead className="whitespace-nowrap bg-orange-200/80 text-foreground border-l-2 border-orange-400" colSpan={tableCharacteristicColumns.length}>
+                        <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-orange-950">
+                          <span>CHARACTERISTICS</span>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-5 w-5 p-0 text-orange-950 hover:bg-orange-300 hover:text-orange-950"
+                            asChild
+                          >
+                            <a href="/characteristics" aria-label="Open characteristics settings" data-testid="button-open-characteristics">
+                              <Settings className="h-4 w-4" />
+                            </a>
+                          </Button>
+                        </div>
+                      </TableHead>
+                    )}
+                    {tableCharacteristicColumns.map((char) => (
+                      <TableHead key={char.id} className="whitespace-nowrap">
+                        {char.name}
+                      </TableHead>
+                    ))}
                     <TableHead className="w-24">Actions</TableHead>
 
                   </TableRow>
+
                 </TableHeader>
                 <TableBody>
                   {filteredStudents.map((student) => (
