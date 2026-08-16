@@ -1,9 +1,11 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Plus, Trash2, Edit2, Search, GraduationCap, Upload, Download } from "lucide-react";
+import { Plus, Trash2, Edit2, Search, GraduationCap, Upload, Download, Mail, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+
 import {
   Table,
   TableBody,
@@ -33,9 +35,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { apiUrl } from "@/lib/apiUrl";
 import { queryClient, apiRequest, getAuthHeaders } from "@/lib/queryClient";
-import type { Teacher, InsertTeacher } from "@shared/schema";
+import type { Teacher, InsertTeacher, Student } from "@shared/schema";
 
 type SortField = "firstName" | "lastName" | "email" | "currentClass" | "surveyStatus";
+
 type SortDirection = "asc" | "desc";
 
 function parseCsv(text: string): string[][] {
@@ -88,12 +91,18 @@ export default function TeachersPage() {
   const [selectedTeachers, setSelectedTeachers] = useState<Set<string>>(new Set());
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [isImportDialogOpen, setIsImportDialogOpen] = useState(false);
+  const [isInviteDialogOpen, setIsInviteDialogOpen] = useState(false);
   const [showImportView, setShowImportView] = useState(false);
   const [editingTeacher, setEditingTeacher] = useState<Teacher | null>(null);
   const [sortField, setSortField] = useState<SortField>("lastName");
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
+  const [inviteMessage, setInviteMessage] = useState(
+    "Hello,\n\nWe kindly ask you to complete the following survey by clicking the survey link below.",
+  );
+  const [classTeacherAllocations, setClassTeacherAllocations] = useState<Record<string, string>>( {} );
 
   const [formData, setFormData] = useState<Partial<InsertTeacher>>({
+
     firstName: "",
     lastName: "",
     email: "",
@@ -107,7 +116,26 @@ export default function TeachersPage() {
     queryKey: ["/api/teachers"],
   });
 
+  const { data: students = [] } = useQuery<Student[]>({
+    queryKey: ["/api/students"],
+  });
+
+  const surveyClasses = useMemo(() => {
+    const counts = new Map<string, number>();
+    students.forEach((student) => {
+      const className = student.currentClass?.trim();
+      if (className) counts.set(className, (counts.get(className) || 0) + 1);
+    });
+    teachers.forEach((teacher) => {
+      const className = teacher.currentClass?.trim();
+      if (className && !counts.has(className)) counts.set(className, 0);
+    });
+    return Array.from(counts, ([name, studentCount]) => ({ name, studentCount }))
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+  }, [students, teachers]);
+
   const createMutation = useMutation({
+
     mutationFn: (data: InsertTeacher) => apiRequest("POST", "/api/teachers", data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/teachers"] });
@@ -171,7 +199,69 @@ export default function TeachersPage() {
     },
   });
 
+  const inviteMutation = useMutation({
+    mutationFn: (payload: { message: string; allocations: { className: string; teacherId: string }[] }) =>
+      apiRequest("POST", "/api/teachers/invite-to-survey", payload),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["/api/teachers"] });
+      const recipientIds = new Set(Object.values(classTeacherAllocations).filter(Boolean));
+      const recipients = teachers.filter((teacher) => recipientIds.has(teacher.id));
+      const surveyUrl = `${window.location.origin}/surveys`;
+      const body = `${inviteMessage.trim()}\n\nAccess Survey: ${surveyUrl}`;
+      const mailto = `mailto:?bcc=${encodeURIComponent(recipients.map((teacher) => teacher.email).join(","))}&subject=${encodeURIComponent("ShuffleSchool teacher survey")}&body=${encodeURIComponent(body)}`;
+      setIsInviteDialogOpen(false);
+      toast({ title: "Survey invitations prepared", description: `${recipients.length} teacher${recipients.length === 1 ? "" : "s"} marked as sent.` });
+      window.location.href = mailto;
+    },
+    onError: () => {
+      toast({ title: "Failed to prepare survey invitations", variant: "destructive" });
+    },
+  });
+
+  const autoAllocateTeachers = () => {
+    const next: Record<string, string> = {};
+    surveyClasses.forEach(({ name }) => {
+      const matchingTeacher = teachers.find(
+        (teacher) => teacher.currentClass?.trim().toLowerCase() === name.toLowerCase(),
+      );
+      if (matchingTeacher) next[name] = matchingTeacher.id;
+    });
+    setClassTeacherAllocations(next);
+  };
+
+  const openInviteDialog = () => {
+    const next: Record<string, string> = {};
+    surveyClasses.forEach(({ name }) => {
+      const allocatedTeacher = teachers.find(
+        (teacher) => teacher.allocatedClass?.trim().toLowerCase() === name.toLowerCase(),
+      );
+      const currentTeacher = teachers.find(
+        (teacher) => teacher.currentClass?.trim().toLowerCase() === name.toLowerCase(),
+      );
+      const teacher = allocatedTeacher || currentTeacher;
+      if (teacher) next[name] = teacher.id;
+    });
+    setClassTeacherAllocations(next);
+    setIsInviteDialogOpen(true);
+  };
+
+  const sendSurveyInvites = () => {
+    const allocations = Object.entries(classTeacherAllocations)
+      .filter(([, teacherId]) => Boolean(teacherId))
+      .map(([className, teacherId]) => ({ className, teacherId }));
+    if (!inviteMessage.trim()) {
+      toast({ title: "Please enter an invitation message", variant: "destructive" });
+      return;
+    }
+    if (allocations.length === 0) {
+      toast({ title: "Please allocate at least one teacher", variant: "destructive" });
+      return;
+    }
+    inviteMutation.mutate({ message: inviteMessage.trim(), allocations });
+  };
+
   const resetForm = () => {
+
     setFormData({
       firstName: "",
       lastName: "",
@@ -465,9 +555,20 @@ export default function TeachersPage() {
             <Button
               variant="outline"
               size="sm"
+              onClick={openInviteDialog}
+              disabled={teachers.length === 0}
+              data-testid="button-invite-teachers"
+            >
+              <Mail className="h-4 w-4 mr-1" />
+              Invite Teachers to Survey
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
               onClick={() => setShowImportView(true)}
               data-testid="button-import-teachers"
             >
+
               <Upload className="h-4 w-4 mr-1" />
               Import Teachers
             </Button>
@@ -631,8 +732,104 @@ export default function TeachersPage() {
         </CardContent>
       </Card>
 
+      <Dialog open={isInviteDialogOpen} onOpenChange={setIsInviteDialogOpen}>
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Mail className="h-5 w-5 text-primary" />
+              Invite Teachers to Survey
+            </DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-6 py-2">
+            <div className="space-y-2">
+              <Label htmlFor="survey-invite-message">Message</Label>
+              <Textarea
+                id="survey-invite-message"
+                value={inviteMessage}
+                onChange={(event) => setInviteMessage(event.target.value)}
+                rows={5}
+                data-testid="textarea-survey-invite-message"
+              />
+              <p className="text-xs text-muted-foreground">
+                A link to the teacher survey will be added below this message.
+              </p>
+            </div>
+
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h3 className="font-medium">Allocate Teachers</h3>
+                  <p className="text-sm text-muted-foreground">Choose which teacher will complete the survey for each current class.</p>
+                </div>
+                <Button type="button" variant="outline" size="sm" onClick={autoAllocateTeachers}>
+                  <Users className="mr-2 h-4 w-4" />
+                  Auto-allocate from current classes
+                </Button>
+              </div>
+
+              {surveyClasses.length === 0 ? (
+                <div className="rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground">
+                  Add current classes to students or teachers before sending surveys.
+                </div>
+              ) : (
+                <div className="rounded-md border">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Class</TableHead>
+                        <TableHead># of Students</TableHead>
+                        <TableHead>Allocated Teacher</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {surveyClasses.map(({ name, studentCount }) => (
+                        <TableRow key={name}>
+                          <TableCell className="font-medium">{name}</TableCell>
+                          <TableCell>{studentCount} student{studentCount === 1 ? "" : "s"}</TableCell>
+                          <TableCell>
+                            <Select
+                              value={classTeacherAllocations[name] || undefined}
+                              onValueChange={(teacherId) =>
+                                setClassTeacherAllocations((current) => ({ ...current, [name]: teacherId }))
+                              }
+                            >
+                              <SelectTrigger data-testid={`select-survey-teacher-${name}`}>
+                                <SelectValue placeholder="Select teacher" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {teachers.map((teacher) => (
+                                  <SelectItem key={teacher.id} value={teacher.id}>
+                                    {teacher.firstName} {teacher.lastName} · {teacher.email}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsInviteDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={sendSurveyInvites} disabled={inviteMutation.isPending || surveyClasses.length === 0} data-testid="button-send-survey">
+              <Mail className="mr-2 h-4 w-4" />
+              {inviteMutation.isPending ? "Preparing..." : "Send Survey"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
         <DialogContent className="max-w-md">
+
           <DialogHeader>
             <DialogTitle>
               {editingTeacher ? "Edit Teacher" : "Add Teacher"}

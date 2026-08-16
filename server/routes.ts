@@ -1194,6 +1194,44 @@ export async function registerRoutes(
     res.json(teachers);
   });
 
+  app.post("/api/teachers/invite-to-survey", isAuthenticated, requireWritableWorkspace, async (req, res) => {
+    try {
+      const message = typeof req.body?.message === "string" ? req.body.message.trim() : "";
+      const allocations = Array.isArray(req.body?.allocations) ? req.body.allocations : [];
+      if (!message) {
+        return res.status(400).json({ error: "Invitation message is required" });
+      }
+      if (allocations.length === 0) {
+        return res.status(400).json({ error: "At least one teacher allocation is required" });
+      }
+
+      const accountId = accountIdFor(req);
+      const existingTeachers = await storage.getTeachers(accountId);
+      const teacherById = new Map(existingTeachers.map((teacher) => [teacher.id, teacher]));
+      const surveyDate = new Date().toISOString();
+      const recipients: { id: string; email: string; className: string }[] = [];
+
+      for (const allocation of allocations) {
+        const teacherId = typeof allocation?.teacherId === "string" ? allocation.teacherId : "";
+        const className = typeof allocation?.className === "string" ? allocation.className.trim() : "";
+        const teacher = teacherById.get(teacherId);
+        if (!teacher || !className) {
+          return res.status(400).json({ error: "Every allocation must reference a valid teacher and class" });
+        }
+        await storage.updateTeacher(accountId, teacher.id, {
+          allocatedClass: className,
+          surveyStatus: "Sent",
+          surveyDate,
+        });
+        recipients.push({ id: teacher.id, email: teacher.email, className });
+      }
+
+      res.json({ count: recipients.length, recipients, message });
+    } catch (error) {
+      res.status(400).json({ error: "Failed to prepare teacher survey invitations" });
+    }
+  });
+
   app.get("/api/teachers/:id", isAuthenticated, async (req, res) => {
     const teacher = await storage.getTeacher(accountIdFor(req), req.params.id);
     if (!teacher) {
