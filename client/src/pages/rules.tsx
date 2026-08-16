@@ -1,8 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Plus, Trash2, Link2, Unlink, Users, Search } from "lucide-react";
+import { Check, ChevronsUpDown, Plus, Trash2, Link2, Unlink, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import {
   Dialog,
@@ -13,12 +12,14 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
@@ -26,13 +27,78 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
+import { cn } from "@/lib/utils";
 import type { Rule, InsertRule, Student } from "@shared/schema";
+
+function StudentPicker({
+  students,
+  value,
+  excludedId,
+  onChange,
+  testId,
+}: {
+  students: Student[];
+  value?: string;
+  excludedId?: string;
+  onChange: (value: string) => void;
+  testId: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const selectedStudent = students.find((student) => student.id === value);
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          role="combobox"
+          aria-expanded={open}
+          className="w-full justify-between font-normal"
+          data-testid={testId}
+        >
+          {selectedStudent
+            ? `${selectedStudent.firstName} ${selectedStudent.lastName} (Grade ${selectedStudent.grade})`
+            : "Select a student"}
+          <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start">
+        <Command>
+          <CommandInput placeholder="Search students..." />
+          <CommandList>
+            <CommandEmpty>No students found.</CommandEmpty>
+            <CommandGroup>
+              {students
+                .filter((student) => student.id !== excludedId)
+                .map((student) => {
+                  const label = `${student.firstName} ${student.lastName} (Grade ${student.grade})`;
+                  return (
+                    <CommandItem
+                      key={student.id}
+                      value={label}
+                      onSelect={() => {
+                        onChange(student.id);
+                        setOpen(false);
+                      }}
+                    >
+                      <Check className={cn("mr-2 h-4 w-4", value === student.id ? "opacity-100" : "opacity-0")} />
+                      {label}
+                    </CommandItem>
+                  );
+                })}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
+}
 
 export default function RulesPage() {
   const { toast } = useToast();
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<"pair" | "separate">("pair");
-  const [searchQuery, setSearchQuery] = useState("");
 
   const [formData, setFormData] = useState<Partial<InsertRule>>({
     type: "pair",
@@ -104,12 +170,6 @@ export default function RulesPage() {
 
   const pairingRules = rules.filter((r) => r.type === "pair");
   const separationRules = rules.filter((r) => r.type === "separate");
-
-  const filteredStudents = students.filter(
-    (s) =>
-      s.firstName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      s.lastName.toLowerCase().includes(searchQuery.toLowerCase())
-  );
 
   const isLoading = rulesLoading || studentsLoading;
 
@@ -308,56 +368,25 @@ export default function RulesPage() {
           <div className="grid gap-4 py-4">
             <div className="space-y-2">
               <Label htmlFor="student1">First Student</Label>
-              <Select
+              <StudentPicker
+                students={students}
                 value={formData.studentId1}
-                onValueChange={(value) => setFormData({ ...formData, studentId1: value })}
-              >
-                <SelectTrigger data-testid="select-student-1">
-                  <SelectValue placeholder="Select a student" />
-                </SelectTrigger>
-                <SelectContent>
-                  <div className="p-2">
-                    <div className="relative">
-                      <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                      <Input
-                        placeholder="Search students..."
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        className="pl-8"
-                        data-testid="input-search-student-1"
-                      />
-                    </div>
-                  </div>
-                  {filteredStudents
-                    .filter((s) => s.id !== formData.studentId2)
-                    .map((student) => (
-                      <SelectItem key={student.id} value={student.id}>
-                        {student.firstName} {student.lastName} (Grade {student.grade})
-                      </SelectItem>
-                    ))}
-                </SelectContent>
-              </Select>
+                excludedId={formData.studentId2}
+                onChange={(value) => setFormData({ ...formData, studentId1: value })}
+                testId="select-student-1"
+              />
             </div>
             <div className="space-y-2">
               <Label htmlFor="student2">Second Student</Label>
-              <Select
+              <StudentPicker
+                students={students}
                 value={formData.studentId2}
-                onValueChange={(value) => setFormData({ ...formData, studentId2: value })}
-              >
-                <SelectTrigger data-testid="select-student-2">
-                  <SelectValue placeholder="Select a student" />
-                </SelectTrigger>
-                <SelectContent>
-                  {filteredStudents
-                    .filter((s) => s.id !== formData.studentId1)
-                    .map((student) => (
-                      <SelectItem key={student.id} value={student.id}>
-                        {student.firstName} {student.lastName} (Grade {student.grade})
-                      </SelectItem>
-                    ))}
-                </SelectContent>
-              </Select>
+                excludedId={formData.studentId1}
+                onChange={(value) => setFormData({ ...formData, studentId2: value })}
+                testId="select-student-2"
+              />
             </div>
+
             <div className="space-y-2">
               <Label htmlFor="reason">Reason (Optional)</Label>
               <Textarea
