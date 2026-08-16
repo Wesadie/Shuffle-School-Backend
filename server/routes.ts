@@ -1318,11 +1318,13 @@ export async function registerRoutes(
       }
 
       const replyTo = req.supabaseUser?.email || req.user?.claims?.email || req.user?.email;
-      const configuredBaseUrl = (process.env.PUBLIC_APP_URL || process.env.APP_BASE_URL || "").replace(/\/$/, "");
-      const publicBaseUrl = configuredBaseUrl || `${req.protocol}://${req.get("host")}`;
+      const requestOrigin = typeof req.get("origin") === "string" ? req.get("origin").replace(/\/$/, "") : "";
+      const configuredSurveyUrl = (process.env.TEACHER_SURVEY_APP_URL || "").replace(/\/$/, "");
+      const publicBaseUrl = configuredSurveyUrl || requestOrigin || `${req.protocol}://${req.get("host")}`;
       const recipients: { id: string; email: string; className: string }[] = [];
 
       for (const allocation of allocations) {
+
         const teacherId = typeof allocation?.teacherId === "string" ? allocation.teacherId : "";
         const className = typeof allocation?.className === "string" ? allocation.className.trim() : "";
         const teacher = teacherById.get(teacherId);
