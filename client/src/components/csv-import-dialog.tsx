@@ -140,22 +140,21 @@ export function CSVImportDialog({ open, onOpenChange, characteristics, importTyp
     const characteristicByName = new Map(characteristics.map((characteristic) => [characteristic.name.toLowerCase(), characteristic]));
 
     if (importType === "characteristics") {
-      const requiredHeaders = ["Student ID", "Characteristic", "Response"];
-      const altHeaders: Record<string, string[]> = {
-        "Student ID": ["student id", "student_id", "id"],
-        Characteristic: ["characteristic", "characteristics", "field"],
-        Response: ["response", "value", "answer"],
-      };
+      const studentIdAliases = ["student id", "student_id", "id"];
       const mappedHeaders = headers.map((header) => {
         const lowerHeader = header.toLowerCase();
-        for (const [standard, alternatives] of Object.entries(altHeaders)) {
-          if (lowerHeader === standard.toLowerCase() || alternatives.includes(lowerHeader)) return standard;
-        }
-        return header;
+        if (lowerHeader === "student id" || studentIdAliases.includes(lowerHeader)) return "Student ID";
+        return characteristicByName.get(lowerHeader)?.name || header;
       });
-      const missingRequired = requiredHeaders.filter((required) => !mappedHeaders.includes(required));
-      if (missingRequired.length > 0) {
-        throw new Error(`Missing required columns: ${missingRequired.join(", ")}. Found columns: ${headers.join(", ")}`);
+      if (!mappedHeaders.includes("Student ID")) {
+        throw new Error(`Missing required column: Student ID. Found columns: ${headers.join(", ")}`);
+      }
+
+      const characteristicHeaders = mappedHeaders.filter((header) =>
+        characteristicByName.has(header.toLowerCase()),
+      );
+      if (characteristicHeaders.length === 0) {
+        throw new Error("The file must include at least one saved characteristic column.");
       }
 
       const data: ParsedCharacteristicRow[] = [];
@@ -165,11 +164,13 @@ export function CSVImportDialog({ open, onOpenChange, characteristics, importTyp
         mappedHeaders.forEach((header, index) => {
           row[header] = values[index]?.trim() || "";
         });
-        if (!row["Student ID"] || !row["Characteristic"] || !row["Response"]) continue;
-        if (!characteristicByName.has(row["Characteristic"].toLowerCase())) {
-          throw new Error(`Row ${rowIndex + 1}: Unknown characteristic "${row["Characteristic"]}".`);
+        if (!row["Student ID"]) continue;
+
+        for (const characteristic of characteristicHeaders) {
+          const response = row[characteristic];
+          if (!response) continue;
+          data.push({ studentId: row["Student ID"], characteristic, response });
         }
-        data.push({ studentId: row["Student ID"], characteristic: row["Characteristic"], response: row["Response"] });
       }
       return { headers: mappedHeaders, data };
     }
@@ -304,9 +305,10 @@ export function CSVImportDialog({ open, onOpenChange, characteristics, importTyp
   const handleDownloadTemplate = () => {
     const templateHeaders =
       importType === "characteristics"
-        ? ["Student ID", "Characteristic", "Response"]
+        ? ["Student ID", ...characteristics.map((characteristic) => characteristic.name)]
         : ["Student ID", "First Name", "Last Name", "Gender", "Current Grade", "Current Class", ...characteristics.map((characteristic) => characteristic.name)];
     const csvContent = `${templateHeaders.map((header) => `"${header.replace(/"/g, '""')}"`).join(";")}\r\n`;
+
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
