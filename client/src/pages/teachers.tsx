@@ -230,18 +230,7 @@ export default function TeachersPage() {
   };
 
   const openInviteDialog = () => {
-    const next: Record<string, string> = {};
-    surveyClasses.forEach(({ name }) => {
-      const allocatedTeacher = teachers.find(
-        (teacher) => teacher.allocatedClass?.trim().toLowerCase() === name.toLowerCase(),
-      );
-      const currentTeacher = teachers.find(
-        (teacher) => teacher.currentClass?.trim().toLowerCase() === name.toLowerCase(),
-      );
-      const teacher = allocatedTeacher || currentTeacher;
-      if (teacher) next[name] = teacher.id;
-    });
-    setClassTeacherAllocations(next);
+    setClassTeacherAllocations({});
     setIsInviteDialogOpen(true);
   };
 
@@ -788,23 +777,46 @@ export default function TeachersPage() {
                           <TableCell className="font-medium">{name}</TableCell>
                           <TableCell>{studentCount} student{studentCount === 1 ? "" : "s"}</TableCell>
                           <TableCell>
-                            <Select
-                              value={classTeacherAllocations[name] || undefined}
-                              onValueChange={(teacherId) =>
-                                setClassTeacherAllocations((current) => ({ ...current, [name]: teacherId }))
-                              }
-                            >
-                              <SelectTrigger data-testid={`select-survey-teacher-${name}`}>
-                                <SelectValue placeholder="Select teacher" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                {teachers.map((teacher) => (
-                                  <SelectItem key={teacher.id} value={teacher.id}>
-                                    {teacher.firstName} {teacher.lastName} · {teacher.email}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
+                            <div className="flex items-center gap-2">
+                              <Select
+                                value={classTeacherAllocations[name] || undefined}
+                                onValueChange={(teacherId) =>
+                                  setClassTeacherAllocations((current) => ({ ...current, [name]: teacherId }))
+                                }
+                              >
+                                <SelectTrigger data-testid={`select-survey-teacher-${name}`}>
+                                  <SelectValue placeholder="Select teacher" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {teachers.map((teacher) => (
+                                    <SelectItem key={teacher.id} value={teacher.id}>
+                                      {teacher.firstName} {teacher.lastName} · {teacher.email}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                              {classTeacherAllocations[name] && (
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  className="shrink-0"
+                                  aria-label={`Remove teacher from ${name}`}
+                                  title="Do not send to this teacher"
+                                  onClick={() =>
+                                    setClassTeacherAllocations((current) => {
+                                      const next = { ...current };
+                                      delete next[name];
+                                      return next;
+                                    })
+                                  }
+                                  data-testid={`button-remove-survey-teacher-${name}`}
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              )}
+                            </div>
+
                           </TableCell>
                         </TableRow>
                       ))}
