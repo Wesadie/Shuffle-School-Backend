@@ -20,6 +20,15 @@ const getOidcConfig = memoize(
   { maxAge: 3600 * 1000 }
 );
 
+let oidcConfigPromise: Promise<Awaited<ReturnType<typeof getOidcConfig>>> | null = null;
+
+async function getLazyOidcConfig() {
+  if (!oidcConfigPromise) {
+    oidcConfigPromise = getOidcConfig();
+  }
+  return oidcConfigPromise;
+}
+
 export function getSession() {
   const sessionTtl = 7 * 24 * 60 * 60 * 1000; // 1 week
 
@@ -124,14 +133,18 @@ export async function setupAuth(app: Express) {
   app.use(passport.initialize());
   app.use(passport.session());
 
-  console.log("[auth] discovering OIDC config...");
-  const config = await getOidcConfig();
-  console.log("[auth] OIDC config discovered");
+  const resolveOidcConfig = async () => {
+    console.log("[auth] discovering OIDC config...");
+    const config = await getLazyOidcConfig();
+    console.log("[auth] OIDC config discovered");
+    return config;
+  };
 
   const verify: VerifyFunction = async (
     tokens: client.TokenEndpointResponse & client.TokenEndpointResponseHelpers,
     verified: passport.AuthenticateCallback
   ) => {
+
     const user = {};
     updateUserSession(user, tokens);
     await upsertUser(tokens.claims());
@@ -140,51 +153,75 @@ export async function setupAuth(app: Express) {
 
   const registeredStrategies = new Set<string>();
 
-  const ensureStrategy = (domain: string) => {
-    const strategyName = `replitauth:${domain}`;
-    if (!registeredStrategies.has(strategyName)) {
-      const strategy = new Strategy(
-        {
-          name: strategyName,
-          config,
-          scope: "openid email profile offline_access",
-          callbackURL: `https://${domain}/api/callback`,
-        },
-        verify,
-      );
-      passport.use(strategy);
-      registeredStrategies.add(strategyName);
-    }
-  };
-
   passport.serializeUser((user: Express.User, cb) => cb(null, user));
   passport.deserializeUser((user: Express.User, cb) => cb(null, user));
 
-  app.get("/api/login", (req, res, next) => {
-    ensureStrategy(req.hostname);
-    passport.authenticate(`replitauth:${req.hostname}`, {
-      prompt: "login consent",
-      scope: ["openid", "email", "profile", "offline_access"],
-    })(req, res, next);
+  app.get("/api/login", async (req, res, next) => {
+    try {
+      const strategyName = `replitauth:${req.hostname}`;
+      if (!registeredStrategies.has(strategyName)) {
+        const config = await resolveOidcConfig();
+        const strategy = new Strategy(
+          {
+            name: strategyName,
+            config,
+            scope: "openid email profile offline_access",
+            callbackURL: `https://${req.hostname}/api/callback`,
+          },
+          verify,
+        );
+        passport.use(strategy);
+        registeredStrategies.add(strategyName);
+      }
+      passport.authenticate(strategyName, {
+        prompt: "login consent",
+        scope: ["openid", "email", "profile", "offline_access"],
+      })(req, res, next);
+    } catch (error) {
+      next(error);
+    }
   });
 
-  app.get("/api/callback", (req, res, next) => {
-    ensureStrategy(req.hostname);
-    passport.authenticate(`replitauth:${req.hostname}`, {
-      successReturnToOrRedirect: "/dashboard",
-      failureRedirect: "/api/login",
-    })(req, res, next);
+  app.get("/api/callback", async (req, res, next) => {
+    try {
+      const strategyName = `replitauth:${req.hostname}`;
+      if (!registeredStrategies.has(strategyName)) {
+        const config = await resolveOidcConfig();
+        const strategy = new Strategy(
+          {
+            name: strategyName,
+            config,
+            scope: "openid email profile offline_access",
+            callbackURL: `https://${req.hostname}/api/callback`,
+          },
+          verify,
+        );
+        passport.use(strategy);
+        registeredStrategies.add(strategyName);
+      }
+      passport.authenticate(strategyName, {
+        successReturnToOrRedirect: "/dashboard",
+        failureRedirect: "/api/login",
+      })(req, res, next);
+    } catch (error) {
+      next(error);
+    }
   });
 
-  app.get("/api/logout", (req, res) => {
-    req.logout(() => {
-      res.redirect(
-        client.buildEndSessionUrl(config, {
-          client_id: process.env.REPL_ID!,
-          post_logout_redirect_uri: `${req.protocol}://${req.hostname}`,
-        }).href
-      );
-    });
+  app.get("/api/logout", async (req, res, next) => {
+    try {
+      const config = await resolveOidcConfig();
+      req.logout(() => {
+        res.redirect(
+          client.buildEndSessionUrl(config, {
+            client_id: process.env.REPL_ID!,
+            post_logout_redirect_uri: `${req.protocol}://${req.hostname}`,
+          }).href
+        );
+      });
+    } catch (error) {
+      next(error);
+    }
   });
 }
 
@@ -226,8 +263,9 @@ export const isAuthenticated: RequestHandler = async (req, res, next) => {
   }
 
   try {
-    const config = await getOidcConfig();
+    const config = await getLazyOidcConfig();
     const tokenResponse = await client.refreshTokenGrant(config, refreshToken);
+  
     updateUserSession(user, tokenResponse);
     console.log("[auth] authentication middleware completed: refreshed token");
     return next();

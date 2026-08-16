@@ -13,21 +13,3 @@ if (connectionString) {
 
 export const pool = new Pool({ connectionString });
 export const db = drizzle(pool, { schema });
-
-void (async () => {
-  if (!connectionString) return;
-
-  try {
-    console.log("[db] connectivity check started");
-    await pool.query("SELECT 1");
-
-    console.log("[db] SELECT 1 completed");
-
-    const result = await pool.query("SELECT COUNT(*)::int AS count FROM students");
-    console.log(`[db] students count completed with row count: ${result.rows[0]?.count ?? 0}`);
-  } catch (error) {
-    console.error("[db] connectivity check caught error", {
-      message: error instanceof Error ? error.message : String(error),
-    });
-  }
-})();
