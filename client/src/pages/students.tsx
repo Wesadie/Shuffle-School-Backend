@@ -641,13 +641,6 @@ export default function StudentsPage() {
           onOpenChange={setIsImportDialogOpen}
           characteristics={formCharacteristicColumns}
         />
-        <CSVImportDialog
-          open={isCharacteristicImportDialogOpen}
-          onOpenChange={setIsCharacteristicImportDialogOpen}
-          characteristics={formCharacteristicColumns}
-          importType="characteristics"
-        />
-
       </div>
     );
   }
@@ -1311,6 +1304,12 @@ export default function StudentsPage() {
         open={isImportDialogOpen}
         onOpenChange={setIsImportDialogOpen}
         characteristics={formCharacteristicColumns}
+      />
+      <CSVImportDialog
+        open={isCharacteristicImportDialogOpen}
+        onOpenChange={setIsCharacteristicImportDialogOpen}
+        characteristics={formCharacteristicColumns}
+        importType="characteristics"
       />
     </div>
   );
