@@ -307,6 +307,102 @@ export async function registerRoutes(
 
   });
 
+  app.post("/api/students/bulk-import-characteristics", isAuthenticated, requireWritableWorkspace, async (req, res) => {
+    try {
+      const rows = req.body?.students;
+      if (!Array.isArray(rows)) {
+        return res.status(400).json({ error: "students must be an array" });
+      }
+
+      const accountId = accountIdFor(req);
+      const [existingStudents, existingCharacteristics] = await Promise.all([
+        storage.getStudents(accountId),
+        storage.getCharacteristics(accountId),
+      ]);
+      const studentByExternalId = new Map(
+        existingStudents
+          .filter((student) => student.studentId)
+          .map((student) => [student.studentId!.trim(), student]),
+      );
+      const characteristicByName = new Map(
+        existingCharacteristics.map((characteristic) => [characteristic.name.toLowerCase(), characteristic]),
+      );
+      const updatesByStudentId = new Map<string, Record<string, string | string[]>>();
+      const importedCategoryValues = new Map<string, Set<string>>();
+
+      for (let index = 0; index < rows.length; index++) {
+        const row = rows[index];
+        const studentId = typeof row?.studentId === "string" ? row.studentId.trim() : "";
+        const characteristicName = typeof row?.characteristic === "string" ? row.characteristic.trim() : "";
+        const response = typeof row?.response === "string" ? row.response.trim() : "";
+        if (!studentId || !characteristicName || !response) {
+          return res.status(400).json({ error: `Row ${index + 1} is missing Student ID, Characteristic, or Response` });
+        }
+
+        const student = studentByExternalId.get(studentId);
+        if (!student) {
+          return res.status(400).json({ error: `No student found with Student ID ${studentId}` });
+        }
+        const characteristic = characteristicByName.get(characteristicName.toLowerCase());
+        if (!characteristic) {
+          return res.status(400).json({ error: `Unknown characteristic: ${characteristicName}` });
+        }
+
+        if (characteristic.type === "scale" || characteristic.type === "percentage") {
+          const numericValue = Number(response);
+          if (!Number.isFinite(numericValue)) {
+            return res.status(400).json({ error: `${characteristic.name} must contain numeric values` });
+          }
+          if (characteristic.type === "percentage" && (numericValue < 0 || numericValue > 100)) {
+            return res.status(400).json({ error: `${characteristic.name} must contain values between 0 and 100` });
+          }
+        } else {
+          if (!importedCategoryValues.has(characteristic.id)) {
+            importedCategoryValues.set(characteristic.id, new Set());
+          }
+          importedCategoryValues.get(characteristic.id)!.add(response);
+        }
+
+        const nextCharacteristics = updatesByStudentId.get(student.id) ?? {
+          ...((student.characteristics || {}) as Record<string, string | string[]>),
+        };
+        nextCharacteristics[characteristic.name] = response;
+        updatesByStudentId.set(student.id, nextCharacteristics);
+      }
+
+      for (const characteristic of existingCharacteristics) {
+        const importedValues = importedCategoryValues.get(characteristic.id);
+        if (!importedValues?.size || characteristic.type !== "category") continue;
+        const responses = normalizeResponses(characteristic);
+        const existingNames = new Set(responses.map((response) => response.name));
+        for (const value of importedValues) {
+          if (existingNames.has(value)) continue;
+          responses.push({
+            id: getStableResponseId(characteristic.id, value),
+            name: value,
+            color: defaultResponseColor(responses.length),
+            description: "",
+            sortOrder: responses.length + 1,
+          });
+          existingNames.add(value);
+        }
+        await storage.updateCharacteristic(accountId, characteristic.id, {
+          options: responses.map((response) => response.name),
+          responseConfig: responses,
+        });
+      }
+
+      for (const [studentId, characteristics] of updatesByStudentId) {
+        await storage.updateStudent(accountId, studentId, { characteristics });
+      }
+
+      res.json({ count: rows.length, studentsUpdated: updatesByStudentId.size });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to import characteristic responses";
+      res.status(400).json({ error: message });
+    }
+  });
+
   app.delete("/api/students", isAuthenticated, requireWritableWorkspace, async (req, res) => {
     if (blockDemoWorkspace(req, res, "Deleting all students")) return;
     await storage.deleteAllStudents(accountIdFor(req));
@@ -319,6 +415,7 @@ export async function registerRoutes(
       if (!Array.isArray(ids)) {
         return res.status(400).json({ error: "ids must be an array" });
       }
+
       if (isDemoWorkspace(req)) {
         const existingStudents = await storage.getStudents(accountIdFor(req));
         const requestedIds = new Set(ids);
