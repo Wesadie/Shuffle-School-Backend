@@ -37,6 +37,7 @@ import TutorialsPage from "@/pages/tutorials";
 import AuthHandoffPage from "@/pages/auth-handoff";
 import PayfastReturnPage from "@/pages/payfast-return";
 import PayfastCancelPage from "@/pages/payfast-cancel";
+import TeacherSurveyPage from "@/pages/teacher-survey";
 
 import type { Student, Placement, ClassConfig } from "@shared/schema";
 
@@ -207,6 +208,11 @@ function AppContent() {
     return <AuthHandoffPage />;
   }
 
+  if (location.startsWith("/teacher-survey/")) {
+    const token = decodeURIComponent(location.slice("/teacher-survey/".length));
+    return <TeacherSurveyPage token={token} />;
+  }
+
   const { data: students = [] } = useQuery<Student[]>({
 
     queryKey: ["/api/students"],
@@ -300,7 +306,7 @@ function AppContent() {
       <main className="flex-1 overflow-auto">
         <AuthenticatedRouter />
       </main>
-      <CSVImportDialog open={importOpen} onOpenChange={setImportOpen} />
+      <CSVImportDialog open={importOpen} onOpenChange={setImportOpen} characteristics={[]} />
     </div>
   );
 }

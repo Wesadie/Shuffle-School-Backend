@@ -200,21 +200,24 @@ export default function TeachersPage() {
   });
 
   const inviteMutation = useMutation({
-    mutationFn: (payload: { message: string; allocations: { className: string; teacherId: string }[] }) =>
-      apiRequest("POST", "/api/teachers/invite-to-survey", payload),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["/api/teachers"] });
-      const recipientIds = new Set(Object.values(classTeacherAllocations).filter(Boolean));
-      const recipients = teachers.filter((teacher) => recipientIds.has(teacher.id));
-      const surveyUrl = `${window.location.origin}/surveys`;
-      const body = `${inviteMessage.trim()}\n\nAccess Survey: ${surveyUrl}`;
-      const mailto = `mailto:?bcc=${encodeURIComponent(recipients.map((teacher) => teacher.email).join(","))}&subject=${encodeURIComponent("ShuffleSchool teacher survey")}&body=${encodeURIComponent(body)}`;
-      setIsInviteDialogOpen(false);
-      toast({ title: "Survey invitations prepared", description: `${recipients.length} teacher${recipients.length === 1 ? "" : "s"} marked as sent.` });
-      window.location.href = mailto;
+    mutationFn: async (payload: { message: string; allocations: { className: string; teacherId: string }[] }) => {
+      const response = await apiRequest("POST", "/api/teachers/invite-to-survey", payload);
+      return response.json() as Promise<{ count: number }>;
     },
-    onError: () => {
-      toast({ title: "Failed to prepare survey invitations", variant: "destructive" });
+    onSuccess: async ({ count }) => {
+      await queryClient.invalidateQueries({ queryKey: ["/api/teachers"] });
+      setIsInviteDialogOpen(false);
+      toast({
+        title: "Survey invitations sent",
+        description: `${count} teacher${count === 1 ? "" : "s"} emailed successfully.`,
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Failed to send survey invitations",
+        description: error.message,
+        variant: "destructive",
+      });
     },
   });
 
@@ -788,11 +791,17 @@ export default function TeachersPage() {
                                   <SelectValue placeholder="Select teacher" />
                                 </SelectTrigger>
                                 <SelectContent>
-                                  {teachers.map((teacher) => (
-                                    <SelectItem key={teacher.id} value={teacher.id}>
-                                      {teacher.firstName} {teacher.lastName} · {teacher.email}
-                                    </SelectItem>
-                                  ))}
+                                  {teachers.map((teacher) => {
+                                    const selectedForAnotherClass = Object.entries(classTeacherAllocations).some(
+                                      ([className, teacherId]) => className !== name && teacherId === teacher.id,
+                                    );
+                                    return (
+                                      <SelectItem key={teacher.id} value={teacher.id} disabled={selectedForAnotherClass}>
+                                        {teacher.firstName} {teacher.lastName} · {teacher.email}
+                                      </SelectItem>
+                                    );
+                                  })}
+
                                 </SelectContent>
                               </Select>
                               {classTeacherAllocations[name] && (

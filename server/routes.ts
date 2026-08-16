@@ -6,6 +6,7 @@ import { attachAccountContext, getAccountContext } from "./accountContext";
 import { authenticateSupabaseJwt, requireSupabaseUser } from "./supabaseAuth";
 import { onboardSupabaseUser } from "./onboarding";
 import { createAuthHandoff, exchangeAuthHandoff } from "./authHandoff";
+import { createTeacherSurveyToken, sendTeacherSurveyEmail, verifyTeacherSurveyToken } from "./teacherSurvey";
 import {
   requireWritableWorkspace,
   requireFinalExportAccess,
@@ -58,6 +59,109 @@ export async function registerRoutes(
 
   // Setup authentication
   await setupAuth(app);
+
+  const resolvePublicTeacherSurvey = async (token: string) => {
+    const payload = verifyTeacherSurveyToken(token);
+    if (!payload) return null;
+    const teacher = await storage.getTeacher(payload.accountId, payload.teacherId);
+    if (
+      !teacher ||
+      teacher.surveyDate !== payload.surveyDate ||
+      teacher.allocatedClass !== payload.className
+    ) {
+      return null;
+    }
+    return { payload, teacher };
+  };
+
+  // Public teacher survey routes use signed, expiring links and must be registered before /api auth.
+  app.get("/api/public/teacher-surveys/:token", async (req, res) => {
+    try {
+      const resolved = await resolvePublicTeacherSurvey(req.params.token);
+      if (!resolved) return res.status(404).json({ error: "This survey link is invalid or has expired" });
+      const { payload, teacher } = resolved;
+      if (teacher.surveyStatus === "Completed") {
+        return res.json({ completed: true, teacherName: `${teacher.firstName} ${teacher.lastName}` });
+      }
+
+      const [students, characteristics] = await Promise.all([
+        storage.getStudents(payload.accountId),
+        storage.getCharacteristics(payload.accountId),
+      ]);
+      const classStudents = students.filter(
+        (student) => student.currentClass?.trim().toLowerCase() === payload.className.trim().toLowerCase(),
+      );
+      const visibleCharacteristics = characteristics.filter((characteristic) => !characteristic.adminOnly);
+      res.json({
+        completed: false,
+        teacherName: `${teacher.firstName} ${teacher.lastName}`,
+        className: payload.className,
+        students: classStudents,
+        characteristics: visibleCharacteristics,
+      });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to load teacher survey" });
+    }
+  });
+
+  app.patch("/api/public/teacher-surveys/:token/students/:studentId", async (req, res) => {
+    try {
+      const resolved = await resolvePublicTeacherSurvey(req.params.token);
+      if (!resolved) return res.status(404).json({ error: "This survey link is invalid or has expired" });
+      const { payload, teacher } = resolved;
+      if (teacher.surveyStatus === "Completed") {
+        return res.status(409).json({ error: "This survey has already been completed" });
+      }
+
+      const characteristicName = typeof req.body?.characteristic === "string" ? req.body.characteristic.trim() : "";
+      const value = typeof req.body?.value === "string" ? req.body.value.trim() : "";
+      const [student, characteristics] = await Promise.all([
+        storage.getStudent(payload.accountId, req.params.studentId),
+        storage.getCharacteristics(payload.accountId),
+      ]);
+      if (!student || student.currentClass?.trim().toLowerCase() !== payload.className.trim().toLowerCase()) {
+        return res.status(404).json({ error: "Student is not part of this survey class" });
+      }
+      const characteristic = characteristics.find(
+        (item) => item.name === characteristicName && !item.adminOnly && isCharacteristicApplicableToGrade(item, student.grade),
+      );
+      if (!characteristic) return res.status(400).json({ error: "Characteristic is not available in this survey" });
+
+      if (characteristic.type === "scale" || characteristic.type === "percentage") {
+        const numericValue = Number(value);
+        if (value && !Number.isFinite(numericValue)) {
+          return res.status(400).json({ error: `${characteristic.name} must be numeric` });
+        }
+        if (value && characteristic.type === "percentage" && (numericValue < 0 || numericValue > 100)) {
+          return res.status(400).json({ error: `${characteristic.name} must be between 0 and 100` });
+        }
+      } else if (value && !normalizeResponses(characteristic).some((response) => response.name === value)) {
+        return res.status(400).json({ error: `Invalid response for ${characteristic.name}` });
+      }
+
+      const nextCharacteristics = {
+        ...((student.characteristics || {}) as Record<string, string | string[]>),
+        [characteristic.name]: value,
+      };
+      await storage.updateStudent(payload.accountId, student.id, { characteristics: nextCharacteristics });
+      res.json({ saved: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to save survey response" });
+    }
+  });
+
+  app.post("/api/public/teacher-surveys/:token/complete", async (req, res) => {
+    try {
+      const resolved = await resolvePublicTeacherSurvey(req.params.token);
+      if (!resolved) return res.status(404).json({ error: "This survey link is invalid or has expired" });
+      const { payload, teacher } = resolved;
+      await storage.updateTeacher(payload.accountId, teacher.id, { surveyStatus: "Completed" });
+      res.json({ completed: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to complete teacher survey" });
+    }
+  });
+
   app.post("/api/onboarding/supabase", requireSupabaseUser, onboardSupabaseUser);
   app.post("/api/auth/handoff", requireSupabaseUser, createAuthHandoff);
   app.post("/api/auth/exchange", exchangeAuthHandoff);
@@ -1194,7 +1298,7 @@ export async function registerRoutes(
     res.json(teachers);
   });
 
-  app.post("/api/teachers/invite-to-survey", isAuthenticated, requireWritableWorkspace, async (req, res) => {
+  app.post("/api/teachers/invite-to-survey", isAuthenticated, requireWritableWorkspace, async (req: any, res) => {
     try {
       const message = typeof req.body?.message === "string" ? req.body.message.trim() : "";
       const allocations = Array.isArray(req.body?.allocations) ? req.body.allocations : [];
@@ -1208,7 +1312,14 @@ export async function registerRoutes(
       const accountId = accountIdFor(req);
       const existingTeachers = await storage.getTeachers(accountId);
       const teacherById = new Map(existingTeachers.map((teacher) => [teacher.id, teacher]));
-      const surveyDate = new Date().toISOString();
+      const teacherIds = allocations.map((allocation: any) => allocation?.teacherId).filter(Boolean);
+      if (new Set(teacherIds).size !== teacherIds.length) {
+        return res.status(400).json({ error: "A teacher can only be allocated to one survey class" });
+      }
+
+      const replyTo = req.supabaseUser?.email || req.user?.claims?.email || req.user?.email;
+      const configuredBaseUrl = (process.env.PUBLIC_APP_URL || process.env.APP_BASE_URL || "").replace(/\/$/, "");
+      const publicBaseUrl = configuredBaseUrl || `${req.protocol}://${req.get("host")}`;
       const recipients: { id: string; email: string; className: string }[] = [];
 
       for (const allocation of allocations) {
@@ -1218,6 +1329,23 @@ export async function registerRoutes(
         if (!teacher || !className) {
           return res.status(400).json({ error: "Every allocation must reference a valid teacher and class" });
         }
+
+        const surveyDate = new Date().toISOString();
+        const token = createTeacherSurveyToken({
+          accountId,
+          teacherId: teacher.id,
+          className,
+          surveyDate,
+          expiresAt: Date.now() + 14 * 24 * 60 * 60 * 1000,
+        });
+        const surveyUrl = `${publicBaseUrl}/teacher-survey/${encodeURIComponent(token)}`;
+        await sendTeacherSurveyEmail({
+          to: teacher.email,
+          replyTo,
+          teacherName: `${teacher.firstName} ${teacher.lastName}`,
+          message,
+          surveyUrl,
+        });
         await storage.updateTeacher(accountId, teacher.id, {
           allocatedClass: className,
           surveyStatus: "Sent",
@@ -1226,9 +1354,11 @@ export async function registerRoutes(
         recipients.push({ id: teacher.id, email: teacher.email, className });
       }
 
-      res.json({ count: recipients.length, recipients, message });
+      res.json({ count: recipients.length, recipients });
     } catch (error) {
-      res.status(400).json({ error: "Failed to prepare teacher survey invitations" });
+      const message = error instanceof Error ? error.message : "Failed to send teacher survey invitations";
+      console.error("[teacher-survey] invitation failed", { message });
+      res.status(400).json({ error: message });
     }
   });
 
