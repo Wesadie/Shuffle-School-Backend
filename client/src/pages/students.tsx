@@ -50,7 +50,9 @@ export default function StudentsPage() {
   const [selectedStudents, setSelectedStudents] = useState<Set<string>>(new Set());
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [isImportDialogOpen, setIsImportDialogOpen] = useState(false);
+  const [isCharacteristicImportDialogOpen, setIsCharacteristicImportDialogOpen] = useState(false);
   const [showImportView, setShowImportView] = useState(false);
+
   const [editingStudent, setEditingStudent] = useState<Student | null>(null);
   const [sortField, setSortField] = useState<SortField>("lastName");
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
@@ -639,6 +641,13 @@ export default function StudentsPage() {
           onOpenChange={setIsImportDialogOpen}
           characteristics={formCharacteristicColumns}
         />
+        <CSVImportDialog
+          open={isCharacteristicImportDialogOpen}
+          onOpenChange={setIsCharacteristicImportDialogOpen}
+          characteristics={formCharacteristicColumns}
+          importType="characteristics"
+        />
+
       </div>
     );
   }
@@ -677,7 +686,28 @@ export default function StudentsPage() {
             <Upload className="h-4 w-4 mr-2" />
             Import Students
           </Button>
+          <Button variant="outline" onClick={() => setIsCharacteristicImportDialogOpen(true)} data-testid="button-import-characteristics">
+            <Upload className="h-4 w-4 mr-2" />
+            Import Characteristics
+          </Button>
+          <Button variant="outline" onClick={() => {
+            const csvHeaders = ["Student ID", "First Name", "Last Name", "Gender", "Current Grade", "Current Class", ...formCharacteristicColumns.map((characteristic) => characteristic.name)];
+            const csvContent = `${csvHeaders.map((header) => `"${header.replace(/"/g, '""')}"`).join(";")}\r\n`;
+            const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement("a");
+            link.href = url;
+            link.download = "students_export.csv";
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+          }} data-testid="button-export-students">
+            <Download className="h-4 w-4 mr-2" />
+            Export Students
+          </Button>
           <Button onClick={() => setIsAddDialogOpen(true)} data-testid="button-add-student">
+
             <Plus className="h-4 w-4 mr-2" />
             Add Student
           </Button>

@@ -21,6 +21,7 @@ interface CSVImportDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   characteristics: Pick<Characteristic, "name" | "type">[];
+  importType?: "students" | "characteristics";
 }
 
 interface ParsedStudent {
@@ -30,6 +31,18 @@ interface ParsedStudent {
   grade: string;
   currentClass?: string;
   gender?: string;
+  [key: string]: string | undefined;
+}
+
+interface ParsedCharacteristicRow {
+  studentId?: string;
+  firstName?: string;
+  lastName?: string;
+  grade?: string;
+  currentClass?: string;
+  gender?: string;
+  characteristic: string;
+  response: string;
   [key: string]: string | undefined;
 }
 
@@ -72,24 +85,29 @@ function parseCsvRows(text: string): string[][] {
   return rows;
 }
 
-export function CSVImportDialog({ open, onOpenChange, characteristics }: CSVImportDialogProps) {
+export function CSVImportDialog({ open, onOpenChange, characteristics, importType = "students" }: CSVImportDialogProps) {
   const { toast } = useToast();
   const [file, setFile] = useState<File | null>(null);
-  const [parsedData, setParsedData] = useState<ParsedStudent[]>([]);
+  const [parsedData, setParsedData] = useState<ParsedStudent[] | ParsedCharacteristicRow[]>([]);
   const [headers, setHeaders] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
 
   const importMutation = useMutation({
-    mutationFn: async (students: ParsedStudent[]) => {
-      const response = await apiRequest("POST", "/api/students/bulk-import", { students });
+    mutationFn: async (rows: ParsedStudent[] | ParsedCharacteristicRow[]) => {
+      const response = await apiRequest(
+        "POST",
+        importType === "characteristics" ? "/api/students/bulk-import-characteristics" : "/api/students/bulk-import",
+        { students: rows },
+      );
       return await response.json() as { count: number };
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["/api/students"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/characteristics"] });
       toast({
-        title: "Import successful",
-        description: `${data.count} students imported`,
+        title: importType === "characteristics" ? "Characteristic responses imported" : "Import successful",
+        description: `${data.count} ${importType === "characteristics" ? "responses" : "students"} imported`,
       });
       handleClose();
     },
@@ -104,17 +122,58 @@ export function CSVImportDialog({ open, onOpenChange, characteristics }: CSVImpo
           // Keep the response text when the backend did not return JSON.
         }
       }
-      toast({ title: "Failed to import students", description, variant: "destructive" });
+      toast({
+        title: importType === "characteristics" ? "Failed to import characteristic responses" : "Failed to import students",
+        description,
+        variant: "destructive",
+      });
     },
   });
 
-  const parseCSV = (text: string): { headers: string[]; data: ParsedStudent[] } => {
+  const parseCSV = (text: string): { headers: string[]; data: ParsedStudent[] | ParsedCharacteristicRow[] } => {
     const rows = parseCsvRows(text);
     if (rows.length === 0) {
       throw new Error("CSV must have a header row");
     }
 
     const headers = rows[0].map((header) => header.replace(/^\uFEFF/, "").trim());
+    const characteristicByName = new Map(characteristics.map((characteristic) => [characteristic.name.toLowerCase(), characteristic]));
+
+    if (importType === "characteristics") {
+      const requiredHeaders = ["Student ID", "Characteristic", "Response"];
+      const altHeaders: Record<string, string[]> = {
+        "Student ID": ["student id", "student_id", "id"],
+        Characteristic: ["characteristic", "characteristics", "field"],
+        Response: ["response", "value", "answer"],
+      };
+      const mappedHeaders = headers.map((header) => {
+        const lowerHeader = header.toLowerCase();
+        for (const [standard, alternatives] of Object.entries(altHeaders)) {
+          if (lowerHeader === standard.toLowerCase() || alternatives.includes(lowerHeader)) return standard;
+        }
+        return header;
+      });
+      const missingRequired = requiredHeaders.filter((required) => !mappedHeaders.includes(required));
+      if (missingRequired.length > 0) {
+        throw new Error(`Missing required columns: ${missingRequired.join(", ")}. Found columns: ${headers.join(", ")}`);
+      }
+
+      const data: ParsedCharacteristicRow[] = [];
+      for (let rowIndex = 1; rowIndex < rows.length; rowIndex++) {
+        const values = rows[rowIndex];
+        const row: Record<string, string> = {};
+        mappedHeaders.forEach((header, index) => {
+          row[header] = values[index]?.trim() || "";
+        });
+        if (!row["Student ID"] || !row["Characteristic"] || !row["Response"]) continue;
+        if (!characteristicByName.has(row["Characteristic"].toLowerCase())) {
+          throw new Error(`Row ${rowIndex + 1}: Unknown characteristic "${row["Characteristic"]}".`);
+        }
+        data.push({ studentId: row["Student ID"], characteristic: row["Characteristic"], response: row["Response"] });
+      }
+      return { headers: mappedHeaders, data };
+    }
+
     const requiredHeaders = ["Student ID", "First Name", "Last Name", "Gender", "Current Grade", "Current Class"];
     const altHeaders: Record<string, string[]> = {
       "Student ID": ["student id", "student_id", "id"],
@@ -124,7 +183,6 @@ export function CSVImportDialog({ open, onOpenChange, characteristics }: CSVImpo
       "Current Grade": ["current grade", "current_grade", "grade", "grade_level", "gradelevel", "year"],
       "Current Class": ["current class", "current_class", "class"],
     };
-    const characteristicByName = new Map(characteristics.map((characteristic) => [characteristic.name.toLowerCase(), characteristic]));
 
     const mappedHeaders = headers.map((header) => {
       const lowerHeader = header.toLowerCase();
@@ -207,7 +265,7 @@ export function CSVImportDialog({ open, onOpenChange, characteristics }: CSVImpo
       setError("Failed to read file");
     };
     reader.readAsText(file);
-  }, [characteristics]);
+  }, [characteristics, importType]);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -244,21 +302,16 @@ export function CSVImportDialog({ open, onOpenChange, characteristics }: CSVImpo
   };
 
   const handleDownloadTemplate = () => {
-    const templateHeaders = [
-      "Student ID",
-      "First Name",
-      "Last Name",
-      "Gender",
-      "Current Grade",
-      "Current Class",
-      ...characteristics.map((characteristic) => characteristic.name),
-    ];
+    const templateHeaders =
+      importType === "characteristics"
+        ? ["Student ID", "Characteristic", "Response"]
+        : ["Student ID", "First Name", "Last Name", "Gender", "Current Grade", "Current Class", ...characteristics.map((characteristic) => characteristic.name)];
     const csvContent = `${templateHeaders.map((header) => `"${header.replace(/"/g, '""')}"`).join(";")}\r\n`;
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = "student-template.csv";
+    link.download = importType === "characteristics" ? "student-characteristics-template.csv" : "student-template.csv";
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -269,9 +322,11 @@ export function CSVImportDialog({ open, onOpenChange, characteristics }: CSVImpo
     <Dialog open={open} onOpenChange={handleClose}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
-          <DialogTitle>Import Students from CSV</DialogTitle>
+          <DialogTitle>{importType === "characteristics" ? "Import Characteristic Responses" : "Import Students from CSV"}</DialogTitle>
           <DialogDescription>
-            Upload student details and optional characteristic columns. Percentage characteristics accept numeric values from 0 to 100.
+            {importType === "characteristics"
+              ? "Upload student characteristic responses, then review the parsed rows before importing."
+              : "Upload student details and optional characteristic columns. Percentage characteristics accept numeric values from 0 to 100."}
           </DialogDescription>
         </DialogHeader>
 
@@ -350,7 +405,7 @@ export function CSVImportDialog({ open, onOpenChange, characteristics }: CSVImpo
                 <Alert className="border-green-200 bg-green-50 dark:border-green-800 dark:bg-green-950">
                   <CheckCircle className="h-4 w-4 text-green-600 dark:text-green-400" />
                   <AlertDescription className="text-green-700 dark:text-green-300">
-                    Found {parsedData.length} valid student records ready to import.
+                    Found {parsedData.length} valid {importType === "characteristics" ? "characteristic response" : "student"} records ready to import.
                   </AlertDescription>
                 </Alert>
               )}
@@ -369,6 +424,8 @@ export function CSVImportDialog({ open, onOpenChange, characteristics }: CSVImpo
                           "Gender",
                           "Current Grade",
                           "Current Class",
+                          "Characteristic",
+                          "Response",
                         ].includes(h) ? "default" : "secondary"}
                       >
                         {h}
@@ -386,23 +443,43 @@ export function CSVImportDialog({ open, onOpenChange, characteristics }: CSVImpo
                       <table className="w-full text-sm">
                         <thead className="bg-muted">
                           <tr>
-                            <th className="px-3 py-2 text-left font-medium">Student ID</th>
-                            <th className="px-3 py-2 text-left font-medium">First Name</th>
-                            <th className="px-3 py-2 text-left font-medium">Last Name</th>
-                            <th className="px-3 py-2 text-left font-medium">Gender</th>
-                            <th className="px-3 py-2 text-left font-medium">Current Grade</th>
-                            <th className="px-3 py-2 text-left font-medium">Current Class</th>
+                            {importType === "characteristics" ? (
+                              <>
+                                <th className="px-3 py-2 text-left font-medium">Student ID</th>
+                                <th className="px-3 py-2 text-left font-medium">Characteristic</th>
+                                <th className="px-3 py-2 text-left font-medium">Response</th>
+                              </>
+                            ) : (
+                              <>
+                                <th className="px-3 py-2 text-left font-medium">Student ID</th>
+                                <th className="px-3 py-2 text-left font-medium">First Name</th>
+                                <th className="px-3 py-2 text-left font-medium">Last Name</th>
+                                <th className="px-3 py-2 text-left font-medium">Gender</th>
+                                <th className="px-3 py-2 text-left font-medium">Current Grade</th>
+                                <th className="px-3 py-2 text-left font-medium">Current Class</th>
+                              </>
+                            )}
                           </tr>
                         </thead>
                         <tbody>
-                          {parsedData.slice(0, 5).map((student, i) => (
+                          {parsedData.slice(0, 5).map((row, i) => (
                             <tr key={i} className="border-t">
-                              <td className="px-3 py-2">{student.studentId || "—"}</td>
-                              <td className="px-3 py-2">{student.firstName}</td>
-                              <td className="px-3 py-2">{student.lastName}</td>
-                              <td className="px-3 py-2">{student.gender || "—"}</td>
-                              <td className="px-3 py-2">{student.grade}</td>
-                              <td className="px-3 py-2">{student.currentClass || "—"}</td>
+                              {importType === "characteristics" ? (
+                                <>
+                                  <td className="px-3 py-2">{(row as ParsedCharacteristicRow).studentId || "—"}</td>
+                                  <td className="px-3 py-2">{(row as ParsedCharacteristicRow).characteristic}</td>
+                                  <td className="px-3 py-2">{(row as ParsedCharacteristicRow).response}</td>
+                                </>
+                              ) : (
+                                <>
+                                  <td className="px-3 py-2">{(row as ParsedStudent).studentId || "—"}</td>
+                                  <td className="px-3 py-2">{(row as ParsedStudent).firstName}</td>
+                                  <td className="px-3 py-2">{(row as ParsedStudent).lastName}</td>
+                                  <td className="px-3 py-2">{(row as ParsedStudent).gender || "—"}</td>
+                                  <td className="px-3 py-2">{(row as ParsedStudent).grade}</td>
+                                  <td className="px-3 py-2">{(row as ParsedStudent).currentClass || "—"}</td>
+                                </>
+                              )}
                             </tr>
                           ))}
                         </tbody>
@@ -411,7 +488,7 @@ export function CSVImportDialog({ open, onOpenChange, characteristics }: CSVImpo
                   </div>
                   {parsedData.length > 5 && (
                     <p className="text-xs text-muted-foreground">
-                      And {parsedData.length - 5} more students...
+                      And {parsedData.length - 5} more rows...
                     </p>
                   )}
                 </div>
@@ -429,7 +506,7 @@ export function CSVImportDialog({ open, onOpenChange, characteristics }: CSVImpo
             disabled={parsedData.length === 0 || importMutation.isPending}
             data-testid="button-confirm-import"
           >
-            {importMutation.isPending ? "Importing..." : `Import ${parsedData.length} Students`}
+            {importMutation.isPending ? "Importing..." : `Import ${parsedData.length} ${importType === "characteristics" ? "Rows" : "Students"}`}
           </Button>
         </DialogFooter>
       </DialogContent>
