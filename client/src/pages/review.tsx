@@ -271,7 +271,8 @@ export default function ReviewPage() {
 
   const classStatistics = useMemo(() => {
     const percentageFieldNames = ["Aggregate %", "Maths %", "English %", "Afrikaans/Isizulu %"];
-    
+    const visibleCharacteristics = characteristics.filter((characteristic) => !characteristic.adminOnly);
+
     return classesWithStudents.map(({ config, students: classStudents }) => {
       const averages: Record<string, number | null> = {};
       percentageFieldNames.forEach(fieldName => {
@@ -283,7 +284,7 @@ export default function ReviewPage() {
           })
           .filter((v): v is number => v !== null && !isNaN(v));
         
-        averages[fieldName] = values.length > 0 
+        averages[fieldName] = values.length > 0
           ? Math.round(values.reduce((sum, v) => sum + v, 0) / values.length * 10) / 10
           : null;
       });
@@ -298,6 +299,47 @@ export default function ReviewPage() {
         return g === 'female' || g === 'f' || g === 'girl';
       }).length;
 
+      const characteristicStats = visibleCharacteristics.map((characteristic) => {
+        const values = classStudents
+          .filter((student) => isCharacteristicApplicableToGrade(characteristic, student.grade))
+          .map((student) => (student.characteristics || {})[characteristic.name])
+          .flatMap((value) => characteristicValueToArray(value as string | string[] | null | undefined));
+
+        if (characteristic.type === "scale" || characteristic.type === "percentage") {
+          const numericValues = values
+            .map((value) => Number.parseFloat(value.replace("%", "").trim()))
+            .filter((value) => Number.isFinite(value));
+          return {
+            id: characteristic.id,
+            name: characteristic.name,
+            value: numericValues.length > 0
+              ? `${Math.round((numericValues.reduce((sum, value) => sum + value, 0) / numericValues.length) * 10) / 10}`
+              : "—",
+          };
+        }
+
+        if (characteristic.type === "category") {
+          const counts = new Map<string, number>();
+          values.forEach((value) => {
+            counts.set(value, (counts.get(value) || 0) + 1);
+          });
+          const summary = Array.from(counts.entries())
+            .map(([value, count]) => `${value} (${count})`)
+            .join(", ");
+          return {
+            id: characteristic.id,
+            name: characteristic.name,
+            value: summary || "—",
+          };
+        }
+
+        return {
+          id: characteristic.id,
+          name: characteristic.name,
+          value: values.length > 0 ? values.join(", ") : "—",
+        };
+      });
+
       return {
         classId: config.id,
         className: config.name,
@@ -305,9 +347,10 @@ export default function ReviewPage() {
         maleCount,
         femaleCount,
         totalStudents: classStudents.length,
+        characteristicStats,
       };
     });
-  }, [classesWithStudents]);
+  }, [classesWithStudents, characteristics]);
 
   const handleDragStart = (student: Student) => {
     setDraggedStudent(student);
@@ -757,6 +800,13 @@ export default function ReviewPage() {
                             <span className="font-medium">{stat.averages["Afrikaans/Isizulu %"]}%</span>
                           </div>
                         )}
+                        {stat.characteristicStats.map((characteristic) => (
+                          <div key={characteristic.id} className="flex justify-between gap-2">
+                            <span className="text-muted-foreground">{characteristic.name}</span>
+                            <span className="font-medium text-right">{characteristic.value}</span>
+                          </div>
+                        ))}
+
                       </div>
                     </div>
                   ))}
