@@ -363,22 +363,24 @@ export default function StudentsPage() {
     key: string,
     value: string,
     options: string[],
-    buildData: (value: string) => Partial<InsertStudent>,
+    buildData: (value: string | null) => Partial<InsertStudent>,
     responses?: Map<string, CharacteristicResponse>,
   ) => {
     const keyForCell = cellKey(student, key);
     const isSaving = savingCellKey === keyForCell;
     const displayValue = value === "—" ? "" : value;
-    const allOptions = uniqueOptions([displayValue, ...options]);
+    const allOptions = uniqueOptions(options);
     const selectedResponse = responses?.get(displayValue);
 
     return (
       <Select
-        value={displayValue || undefined}
+        value={displayValue || "__empty__"}
         disabled={isSaving || allOptions.length === 0}
         onValueChange={(nextValue) => {
-          if (nextValue !== displayValue) {
-            void saveInlineUpdate(student, key, buildData(nextValue));
+          const normalizedValue = nextValue === "__empty__" ? null : nextValue;
+          const nextDisplayValue = normalizedValue ?? "";
+          if (nextDisplayValue !== displayValue) {
+            void saveInlineUpdate(student, key, buildData(normalizedValue));
           }
         }}
       >
@@ -397,10 +399,11 @@ export default function StudentsPage() {
               <span className="truncate">{isSaving ? "Saving…" : displayValue}</span>
             </span>
           ) : (
-            <SelectValue placeholder={isSaving ? "Saving…" : "—"} />
+            <SelectValue placeholder={isSaving ? "Saving…" : "Select…"} />
           )}
         </SelectTrigger>
         <SelectContent>
+          <SelectItem value="__empty__">Select…</SelectItem>
           {allOptions.map((option) => {
             const response = responses?.get(option);
             return (
@@ -922,8 +925,9 @@ export default function StudentsPage() {
                           "gender",
                           student.gender || "—",
                           genderOptions,
-                          (value) => ({ gender: value }),
+                          (value) => ({ gender: value ?? "" }),
                         )}
+
                       </TableCell>
                       <TableCell className="whitespace-nowrap">
                         {renderSelectCell(
@@ -931,8 +935,9 @@ export default function StudentsPage() {
                           "grade",
                           student.grade,
                           gradeOptions,
-                          (value) => ({ grade: value }),
+                          (value) => ({ grade: value ?? student.grade }),
                         )}
+
                       </TableCell>
                       <TableCell className="whitespace-nowrap">
                         {currentClassOptions.length > 0
@@ -956,8 +961,9 @@ export default function StudentsPage() {
                           "newGrade",
                           getNewGrade(student),
                           newGradeOptions,
-                          (value) => updateCharacteristicData(student, "newGrade", value),
+                          (value) => updateCharacteristicData(student, "newGrade", value ?? ""),
                         )}
+
                       </TableCell>
                       <TableCell className="min-w-48 max-w-72" title={student.notes || ""}>
                         {renderTextCell(
@@ -986,7 +992,8 @@ export default function StudentsPage() {
                                     `characteristic:${char.name}`,
                                     rawValue,
                                     options,
-                                    (value) => updateCharacteristicData(student, char.name, value),
+                                    (value) => updateCharacteristicData(student, char.name, value ?? ""),
+
                                     responses,
                                   )
                                 : char.type === "category" && options.length > 0
@@ -995,9 +1002,10 @@ export default function StudentsPage() {
                                       `characteristic:${char.name}`,
                                       getCharacteristicValue(student, char.name),
                                       options,
-                                      (value) => updateCharacteristicData(student, char.name, value),
+                                      (value) => updateCharacteristicData(student, char.name, value ?? ""),
                                       responses,
                                     )
+
                                   : renderTextCell(
                                       student,
                                       `characteristic:${char.name}:${char.type}`,
@@ -1171,13 +1179,13 @@ export default function StudentsPage() {
                           </div>
                         ) : char.type === "category" && options.length > 0 ? (
                           <Select
-                            value={selectedValue || undefined}
+                            value={selectedValue || "__empty__"}
                             onValueChange={(value) =>
                               setFormData({
                                 ...formData,
                                 characteristics: {
                                   ...formData.characteristics,
-                                  [char.name]: value,
+                                  [char.name]: value === "__empty__" ? "" : value,
                                 },
                               })
                             }
@@ -1195,6 +1203,7 @@ export default function StudentsPage() {
                               )}
                             </SelectTrigger>
                             <SelectContent>
+                              <SelectItem value="__empty__">Select…</SelectItem>
                               {options.map((opt) => {
                                 const response = responses?.get(opt);
                                 return (
@@ -1211,6 +1220,7 @@ export default function StudentsPage() {
                             </SelectContent>
                           </Select>
                         ) : (
+
                           <Input
                             id={char.id}
                             type={isNumeric ? "number" : "text"}
