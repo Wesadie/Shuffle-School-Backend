@@ -1,10 +1,12 @@
 import { useState, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { 
-  Users, AlertTriangle, CheckCircle, ArrowRight, Download, 
+import { motion } from "framer-motion";
+import {
+  Users, AlertTriangle, CheckCircle, ArrowRight, Download,
   GripVertical, Link2, Unlink, BarChart3, RefreshCw, Zap,
   ArrowRightLeft, Check, X, Loader2
 } from "lucide-react";
+
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -47,6 +49,7 @@ export default function ReviewPage() {
   const { toast } = useToast();
   const [draggedStudent, setDraggedStudent] = useState<Student | null>(null);
   const [dragOverClass, setDragOverClass] = useState<string | null>(null);
+  const [recentlyMovedStudentId, setRecentlyMovedStudentId] = useState<string | null>(null);
   const [showBoostPanel, setShowBoostPanel] = useState(false);
 
   const { data: classConfigs = [], isLoading: configsLoading } = useQuery<ClassConfig[]>({
@@ -86,16 +89,33 @@ export default function ReviewPage() {
   const moveMutation = useMutation({
     mutationFn: ({ studentId, targetClassId }: { studentId: string; targetClassId: string }) =>
       apiRequest("POST", "/api/placements/move", { studentId, targetClassId }),
+    onMutate: async ({ studentId, targetClassId }) => {
+      await queryClient.cancelQueries({ queryKey: ["/api/placements"] });
+      const previousPlacements = queryClient.getQueryData<Placement[]>(["/api/placements"]);
+      queryClient.setQueryData<Placement[]>(["/api/placements"], (current = []) =>
+        current.map((placement) =>
+          placement.studentId === studentId ? { ...placement, classId: targetClassId } : placement,
+        ),
+      );
+      setRecentlyMovedStudentId(studentId);
+      window.setTimeout(() => setRecentlyMovedStudentId((current) => current === studentId ? null : current), 900);
+      return { previousPlacements };
+    },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/placements"] });
       toast({ title: "Student moved successfully" });
     },
-    onError: (error: any) => {
-      toast({ 
-        title: "Failed to move student", 
+    onError: (error: any, _variables, context) => {
+      if (context?.previousPlacements) {
+        queryClient.setQueryData(["/api/placements"], context.previousPlacements);
+      }
+      toast({
+        title: "Failed to move student",
         description: error?.message || "An error occurred",
-        variant: "destructive" 
+        variant: "destructive"
       });
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/placements"] });
     },
   });
 
@@ -352,24 +372,32 @@ export default function ReviewPage() {
     });
   }, [classesWithStudents, characteristics]);
 
-  const handleDragStart = (student: Student) => {
+  const handleDragStart = (event: React.DragEvent, student: Student) => {
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", student.id);
     setDraggedStudent(student);
   };
 
   const handleDragOver = (e: React.DragEvent, classId: string) => {
     e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
     setDragOverClass(classId);
   };
 
-  const handleDragLeave = () => {
-    setDragOverClass(null);
+  const handleDragLeave = (event: React.DragEvent) => {
+    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+      setDragOverClass(null);
+    }
   };
 
   const handleDrop = (e: React.DragEvent, targetClassId: string) => {
     e.preventDefault();
     setDragOverClass(null);
     if (draggedStudent) {
-      moveMutation.mutate({ studentId: draggedStudent.id, targetClassId });
+      const currentPlacement = placements.find((placement) => placement.studentId === draggedStudent.id);
+      if (currentPlacement?.classId !== targetClassId) {
+        moveMutation.mutate({ studentId: draggedStudent.id, targetClassId });
+      }
       setDraggedStudent(null);
     }
   };
@@ -603,50 +631,70 @@ export default function ReviewPage() {
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-1">
+                    {dragOverClass === config.id && draggedStudent && (
+                      <div className="mb-2 rounded-md border-2 border-dashed border-primary bg-primary/10 px-3 py-2 text-center text-sm font-medium text-primary">
+                        Drop {draggedStudent.firstName} {draggedStudent.lastName} into {config.name}
+                      </div>
+                    )}
                     {classStudents.length === 0 ? (
                       <p className="text-sm text-muted-foreground text-center py-4">
                         Drop students here
                       </p>
                     ) : (
+
                       classStudents.map((student) => {
                         const hasConflict = conflicts.some((c) => c.studentIds.includes(student.id));
                         return (
-                          <div
+                          <motion.div
                             key={student.id}
-                            draggable
-                            onDragStart={() => handleDragStart(student)}
-                            className={`flex items-center gap-2 p-2 rounded-md cursor-grab active:cursor-grabbing transition-colors ${
-                              hasConflict 
-                                ? "bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800" 
-                                : "bg-muted/50"
-                            } ${draggedStudent?.id === student.id ? "opacity-50" : ""}`}
-                            data-testid={`student-card-${student.id}`}
+                            layout
+                            initial={{ opacity: 0, y: -10, scale: 0.98 }}
+                            animate={{ opacity: 1, y: 0, scale: 1 }}
+                            transition={{ type: "spring", stiffness: 420, damping: 32 }}
                           >
-                            <GripVertical className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-                            <div className="flex-1 min-w-0">
-                              <p className="text-sm font-medium truncate">
-                                {student.lastName}, {student.firstName}
-                              </p>
-                              <div className="flex items-center gap-1 flex-wrap">
-                                {student.gender && (
-                                  <Badge variant="outline" className="text-xs">
-                                    {student.gender}
-                                  </Badge>
-                                )}
+                            <div
+                              draggable
+                              onDragStart={(event) => handleDragStart(event, student)}
+                              onDragEnd={() => {
+                                setDraggedStudent(null);
+                                setDragOverClass(null);
+                              }}
+                              className={`flex items-center gap-2 p-2 rounded-md cursor-grab active:cursor-grabbing transition-colors ${
+                                hasConflict
+                                  ? "bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800"
+                                  : "bg-muted/50"
+                              } ${draggedStudent?.id === student.id ? "opacity-40 ring-1 ring-primary" : ""} ${
+                                recentlyMovedStudentId === student.id ? "bg-primary/15 ring-2 ring-primary/50" : ""
+                              }`}
+                              data-testid={`student-card-${student.id}`}
+                            >
+                              <GripVertical className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                              <div className="flex-1 min-w-0">
+                                <p className="text-sm font-medium truncate">
+                                  {student.lastName}, {student.firstName}
+                                </p>
+                                <div className="flex items-center gap-1 flex-wrap">
+                                  {student.gender && (
+                                    <Badge variant="outline" className="text-xs">
+                                      {student.gender}
+                                    </Badge>
+                                  )}
+                                </div>
                               </div>
+                              {hasConflict && (
+                                <Tooltip>
+                                  <TooltipTrigger>
+                                    <AlertTriangle className="h-4 w-4 text-red-500 flex-shrink-0" />
+                                  </TooltipTrigger>
+                                  <TooltipContent>
+                                    <p>This student is involved in a conflict</p>
+                                  </TooltipContent>
+                                </Tooltip>
+                              )}
                             </div>
-                            {hasConflict && (
-                              <Tooltip>
-                                <TooltipTrigger>
-                                  <AlertTriangle className="h-4 w-4 text-red-500 flex-shrink-0" />
-                                </TooltipTrigger>
-                                <TooltipContent>
-                                  <p>This student is involved in a conflict</p>
-                                </TooltipContent>
-                              </Tooltip>
-                            )}
-                          </div>
+                          </motion.div>
                         );
+
                       })
                     )}
                   </div>
@@ -667,18 +715,24 @@ export default function ReviewPage() {
               <CardContent>
                 <div className="flex flex-wrap gap-2">
                   {unplacedStudents.map((student) => (
-                    <div
-                      key={student.id}
-                      draggable
-                      onDragStart={() => handleDragStart(student)}
-                      className="flex items-center gap-2 p-2 rounded-md bg-amber-50 dark:bg-amber-950 border border-amber-200 dark:border-amber-800 cursor-grab active:cursor-grabbing"
-                    >
-                      <GripVertical className="h-4 w-4 text-muted-foreground" />
-                      <span className="text-sm font-medium">
-                        {student.firstName} {student.lastName}
-                      </span>
-                    </div>
+                    <motion.div key={student.id} layout>
+                      <div
+                        draggable
+                        onDragStart={(event) => handleDragStart(event, student)}
+                        onDragEnd={() => {
+                          setDraggedStudent(null);
+                          setDragOverClass(null);
+                        }}
+                        className="flex items-center gap-2 p-2 rounded-md bg-amber-50 dark:bg-amber-950 border border-amber-200 dark:border-amber-800 cursor-grab active:cursor-grabbing"
+                      >
+                        <GripVertical className="h-4 w-4 text-muted-foreground" />
+                        <span className="text-sm font-medium">
+                          {student.firstName} {student.lastName}
+                        </span>
+                      </div>
+                    </motion.div>
                   ))}
+
                 </div>
               </CardContent>
             </Card>
