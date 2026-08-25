@@ -10,10 +10,18 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Progress } from "@/components/ui/progress";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Tooltip,
   TooltipContent,
@@ -45,12 +53,21 @@ const parseCharacteristicNumber = (value: string | string[] | undefined) => {
   return Number.isFinite(parsed) ? parsed : null;
 };
 
+const getGenderTextClass = (gender?: string | null) => {
+  const normalized = (gender || "").toLowerCase().trim();
+  if (["female", "f", "girl"].includes(normalized)) return "text-rose-600 dark:text-rose-400";
+  if (["male", "m", "boy"].includes(normalized)) return "text-blue-600 dark:text-blue-400";
+  return "text-foreground";
+};
+
 export default function ReviewPage() {
   const { toast } = useToast();
   const [draggedStudent, setDraggedStudent] = useState<Student | null>(null);
   const [dragOverClass, setDragOverClass] = useState<string | null>(null);
   const [recentlyMovedStudentId, setRecentlyMovedStudentId] = useState<string | null>(null);
   const [showBoostPanel, setShowBoostPanel] = useState(false);
+  const [selectedGrade, setSelectedGrade] = useState("all");
+  const [hiddenCharacteristicIds, setHiddenCharacteristicIds] = useState<string[]>([]);
 
   const { data: classConfigs = [], isLoading: configsLoading } = useQuery<ClassConfig[]>({
     queryKey: ["/api/class-configs"],
@@ -372,6 +389,19 @@ export default function ReviewPage() {
     });
   }, [classesWithStudents, characteristics]);
 
+  const availableGrades = useMemo(
+    () => Array.from(new Set(classConfigs.map((config) => config.grade))).sort(),
+    [classConfigs],
+  );
+  const visibleClassesWithStudents = selectedGrade === "all"
+    ? classesWithStudents
+    : classesWithStudents.filter(({ config }) => config.grade === selectedGrade);
+  const visibleBalanceMetrics = balanceMetrics.filter(
+    (metric) => !hiddenCharacteristicIds.includes(metric.characteristicId),
+  );
+  const pairRequestCount = rules.filter((rule) => rule.type === "pair").length;
+  const separateRequestCount = rules.filter((rule) => rule.type === "separate").length;
+
   const handleDragStart = (event: React.DragEvent, student: Student) => {
     event.dataTransfer.effectAllowed = "move";
     event.dataTransfer.setData("text/plain", student.id);
@@ -406,15 +436,13 @@ export default function ReviewPage() {
 
   if (isLoading) {
     return (
-      <div className="p-6 space-y-6">
-        <Skeleton className="h-10 w-64" />
-        <div className="grid gap-4 lg:grid-cols-3">
-          <div className="lg:col-span-2 grid gap-4 md:grid-cols-2">
-            {[...Array(4)].map((_, i) => (
-              <Skeleton key={i} className="h-64 w-full" />
-            ))}
+      <div className="p-4 space-y-4">
+        <Skeleton className="h-8 w-64" />
+        <div className="grid gap-3 lg:grid-cols-[250px_minmax(0,1fr)]">
+          <Skeleton className="h-[640px] w-full" />
+          <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+            {[...Array(4)].map((_, i) => <Skeleton key={i} className="h-[640px] w-full" />)}
           </div>
-          <Skeleton className="h-96 w-full" />
         </div>
       </div>
     );
@@ -422,28 +450,17 @@ export default function ReviewPage() {
 
   if (placements.length === 0) {
     return (
-      <div className="p-6 space-y-6">
+      <div className="p-4 space-y-4">
         <div>
-          <h1 className="text-3xl font-semibold" data-testid="text-page-title">Review & Adjust</h1>
-          <p className="text-muted-foreground mt-1">
-            Review generated class placements and make manual adjustments
-          </p>
+          <h1 className="text-2xl font-semibold tracking-tight" data-testid="text-page-title">Solver</h1>
+          <p className="mt-0.5 text-sm text-muted-foreground">Review and adjust balanced class placements</p>
         </div>
         <Card>
-          <CardContent className="flex flex-col items-center justify-center py-16">
-            <div className="rounded-full bg-muted p-4 mb-4">
-              <Users className="h-8 w-8 text-muted-foreground" />
-            </div>
-            <h3 className="text-lg font-medium mb-2">No placements generated yet</h3>
-            <p className="text-muted-foreground text-center max-w-sm mb-4">
-              Generate class placements first, then come back here to review and fine-tune.
-            </p>
-            <Link href="/generate">
-              <Button data-testid="button-go-to-generate">
-                <ArrowRight className="h-4 w-4 mr-2" />
-                Go to Generate Classes
-              </Button>
-            </Link>
+          <CardContent className="flex flex-col items-center justify-center py-14">
+            <div className="mb-3 rounded-full bg-muted p-3"><Users className="h-7 w-7 text-muted-foreground" /></div>
+            <h3 className="mb-1 text-base font-medium">No placements generated yet</h3>
+            <p className="mb-4 max-w-sm text-center text-sm text-muted-foreground">Generate class placements first, then come back here to review and fine-tune.</p>
+            <Link href="/generate"><Button size="sm" data-testid="button-go-to-generate"><ArrowRight className="mr-2 h-4 w-4" />Go to Generate Classes</Button></Link>
           </CardContent>
         </Card>
       </div>
@@ -451,424 +468,181 @@ export default function ReviewPage() {
   }
 
   return (
-    <div className="p-6 space-y-6">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+    <div className="space-y-3 p-3 sm:p-4">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-3xl font-semibold" data-testid="text-page-title">Review & Adjust</h1>
-          <p className="text-muted-foreground mt-1">
-            Drag and drop students between classes to fine-tune placements
-          </p>
+          <h1 className="text-2xl font-semibold tracking-tight" data-testid="text-page-title">Solver</h1>
+          <p className="text-xs text-muted-foreground">Review & Adjust · Drag students between class columns</p>
         </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          <Badge 
-            variant={conflicts.length === 0 ? "default" : "destructive"}
-            className="gap-1"
-          >
-            {conflicts.length === 0 ? (
-              <><CheckCircle className="h-3 w-3" /> No Conflicts</>
-            ) : (
-              <><AlertTriangle className="h-3 w-3" /> {conflicts.length} Conflict{conflicts.length !== 1 ? "s" : ""}</>
-            )}
+        <div className="flex flex-wrap items-center gap-1.5">
+          <Badge variant={conflicts.length === 0 ? "default" : "destructive"} className="h-7 gap-1 text-xs">
+            {conflicts.length === 0 ? <><CheckCircle className="h-3.5 w-3.5" /> No conflicts</> : <><AlertTriangle className="h-3.5 w-3.5" /> {conflicts.length} conflict{conflicts.length !== 1 ? "s" : ""}</>}
           </Badge>
-          <Badge variant="outline" className="gap-1">
-            <BarChart3 className="h-3 w-3" />
-            {overallBalance}% Balanced
-          </Badge>
-          <Button
-            variant={showBoostPanel ? "default" : "outline"}
-            size="sm"
-            onClick={() => setShowBoostPanel(!showBoostPanel)}
-            data-testid="button-toggle-boost"
-          >
-            <Zap className="h-4 w-4 mr-1" />
-            Boost
-          </Button>
+          <Badge variant="outline" className="h-7 gap-1 text-xs"><BarChart3 className="h-3.5 w-3.5" /> {overallBalance}% balance</Badge>
+          <Button variant={showBoostPanel ? "default" : "outline"} size="sm" className="h-7 px-2.5 text-xs" onClick={() => setShowBoostPanel(!showBoostPanel)} data-testid="button-toggle-boost"><Zap className="mr-1 h-3.5 w-3.5" /> Boost</Button>
         </div>
       </div>
 
       {conflicts.length > 0 && (
-        <div className="space-y-2">
-          {conflicts.slice(0, 3).map((conflict, i) => (
-            <Alert key={i} variant="destructive">
-              {conflict.type === "pairing" ? (
-                <Link2 className="h-4 w-4" />
-              ) : conflict.type === "separation" ? (
-                <Unlink className="h-4 w-4" />
-              ) : (
-                <AlertTriangle className="h-4 w-4" />
-              )}
-              <AlertTitle className="capitalize">{conflict.type} Conflict</AlertTitle>
-              <AlertDescription>{conflict.message}</AlertDescription>
-            </Alert>
-          ))}
-          {conflicts.length > 3 && (
-            <p className="text-sm text-muted-foreground">
-              And {conflicts.length - 3} more conflict{conflicts.length - 3 !== 1 ? "s" : ""}...
-            </p>
-          )}
-        </div>
+        <Alert variant="destructive" className="py-2">
+          <AlertTriangle className="h-4 w-4" />
+          <AlertTitle className="text-sm">Conflicts need attention</AlertTitle>
+          <AlertDescription className="text-xs">
+            {conflicts.slice(0, 3).map((conflict) => conflict.message).join(" · ")}
+            {conflicts.length > 3 ? ` · +${conflicts.length - 3} more` : ""}
+          </AlertDescription>
+        </Alert>
       )}
 
-      {showBoostPanel && (
-        <Card data-testid="card-boost-panel">
-          <CardHeader className="pb-3">
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <Zap className="h-5 w-5 text-amber-500" />
-                <CardTitle className="text-base">Boost Optimization</CardTitle>
+      <div className="grid items-start gap-3 lg:grid-cols-[250px_minmax(0,1fr)]">
+        <aside className="space-y-3 lg:sticky lg:top-[76px]">
+          <Card className="overflow-hidden">
+            <CardHeader className="border-b bg-muted/30 px-3 py-2.5">
+              <CardTitle className="text-sm">Solver overview</CardTitle>
+              <CardDescription className="text-[11px]">Live placement statistics</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3 p-3">
+              <div className="space-y-1.5">
+                <label className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Grade</label>
+                <Select value={selectedGrade} onValueChange={setSelectedGrade}>
+                  <SelectTrigger className="h-8 text-xs" data-testid="select-solver-grade"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All grades</SelectItem>
+                    {availableGrades.map((grade) => <SelectItem key={grade} value={grade}>Grade {grade}</SelectItem>)}
+                  </SelectContent>
+                </Select>
               </div>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => refetchBoost()}
-                disabled={boostLoading}
-                data-testid="button-refresh-boost"
-              >
-                <RefreshCw className={`h-4 w-4 ${boostLoading ? "animate-spin" : ""}`} />
-              </Button>
-            </div>
-            <CardDescription>
-              Intelligent suggestions to improve class balance
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            {boostLoading ? (
-              <div className="flex items-center justify-center py-8">
-                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-                <span className="ml-2 text-sm text-muted-foreground">Analyzing placements...</span>
+
+              <div className="grid grid-cols-2 overflow-hidden rounded-md border text-xs">
+                <div className="border-b border-r p-2"><div className="text-[10px] text-muted-foreground">Students</div><div className="text-lg font-semibold leading-5">{students.length}</div></div>
+                <div className="border-b p-2"><div className="text-[10px] text-muted-foreground">Placed</div><div className="text-lg font-semibold leading-5">{placements.length}</div></div>
+                <div className="border-r p-2"><div className="text-[10px] text-muted-foreground">Classes</div><div className="text-lg font-semibold leading-5">{classConfigs.length}</div></div>
+                <div className="p-2"><div className="text-[10px] text-muted-foreground">Conflicts</div><div className={`text-lg font-semibold leading-5 ${conflicts.length ? "text-red-600" : "text-emerald-600"}`}>{conflicts.length}</div></div>
               </div>
-            ) : boostData?.suggestions && boostData.suggestions.length > 0 ? (
-              <div className="space-y-3">
-                <p className="text-sm text-muted-foreground">
-                  Found {boostData.suggestions.length} swap{boostData.suggestions.length !== 1 ? "s" : ""} that could improve balance
-                </p>
-                <ScrollArea className="h-64">
-                  <div className="space-y-2">
-                    {boostData.suggestions.map((suggestion) => (
-                      <div
-                        key={suggestion.id}
-                        className="flex items-center gap-3 p-3 rounded-md bg-muted/50 group"
-                        data-testid={`boost-suggestion-${suggestion.id}`}
-                      >
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 text-sm">
-                            <span className="font-medium truncate">{suggestion.student1.name}</span>
-                            <Badge variant="outline" className="text-xs flex-shrink-0">
-                              {suggestion.student1.currentClass}
-                            </Badge>
+
+              <div className="space-y-1.5">
+                <div className="flex justify-between text-[11px]"><span className="text-muted-foreground">Students placed</span><span className="font-medium">{placements.length}/{students.length}</span></div>
+                <Progress value={students.length ? (placements.length / students.length) * 100 : 0} className="h-1.5" />
+                <div className="flex justify-between text-[11px]"><span className="text-muted-foreground">Overall balance</span><span className="font-semibold">{overallBalance}%</span></div>
+                <Progress value={overallBalance} className={`h-1.5 ${overallBalance >= 80 ? "[&>div]:bg-emerald-500" : overallBalance >= 60 ? "[&>div]:bg-amber-500" : "[&>div]:bg-red-500"}`} />
+              </div>
+
+              <div className="border-t pt-2.5">
+                <div className="mb-1.5 flex items-center justify-between text-[11px] font-semibold uppercase tracking-wide text-muted-foreground"><span>Requests</span><span>{rules.length} total</span></div>
+                <div className="grid grid-cols-2 gap-1.5 text-xs">
+                  <div className="rounded border px-2 py-1.5"><Link2 className="mr-1 inline h-3 w-3" />Together <b className="float-right">{pairRequestCount}</b></div>
+                  <div className="rounded border px-2 py-1.5"><Unlink className="mr-1 inline h-3 w-3" />Apart <b className="float-right">{separateRequestCount}</b></div>
+                </div>
+              </div>
+
+              <div className="border-t pt-2.5">
+                <div className="mb-2 flex items-center justify-between text-[11px] font-semibold uppercase tracking-wide text-muted-foreground"><span>Characteristic balance</span><span>{visibleBalanceMetrics.length}/{balanceMetrics.length}</span></div>
+                {balanceMetrics.length > 0 ? (
+                  <ScrollArea className="h-[190px] pr-2">
+                    <div className="space-y-2">
+                      {balanceMetrics.map((metric) => {
+                        const isVisible = !hiddenCharacteristicIds.includes(metric.characteristicId);
+                        return (
+                          <div key={metric.characteristicId} className={isVisible ? "space-y-1" : "space-y-1 opacity-50"}>
+                            <div className="flex items-center gap-1.5 text-[11px]">
+                              <Checkbox className="h-3.5 w-3.5" checked={isVisible} onCheckedChange={(checked) => setHiddenCharacteristicIds((current) => checked ? current.filter((id) => id !== metric.characteristicId) : [...current, metric.characteristicId])} aria-label={`Show ${metric.name} balance`} />
+                              <span className="min-w-0 flex-1 truncate">{metric.name}</span><span className="font-medium">{metric.score}%</span>
+                            </div>
+                            {isVisible && <Progress value={metric.score} className="h-1" />}
                           </div>
-                          <div className="flex items-center gap-2 my-1">
-                            <ArrowRightLeft className="h-3 w-3 text-muted-foreground flex-shrink-0" />
-                          </div>
-                          <div className="flex items-center gap-2 text-sm">
-                            <span className="font-medium truncate">{suggestion.student2.name}</span>
-                            <Badge variant="outline" className="text-xs flex-shrink-0">
-                              {suggestion.student2.currentClass}
-                            </Badge>
-                          </div>
-                        </div>
-                        <div className="flex flex-col items-end gap-1">
-                          <Badge variant="secondary" className="text-xs">
-                            +{suggestion.improvement}%
-                          </Badge>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => applyBoostMutation.mutate(suggestion)}
-                            disabled={applyBoostMutation.isPending}
-                            data-testid={`button-apply-boost-${suggestion.id}`}
-                          >
-                            {applyBoostMutation.isPending ? (
-                              <Loader2 className="h-4 w-4 animate-spin" />
-                            ) : (
-                              <Check className="h-4 w-4" />
-                            )}
-                            Apply
-                          </Button>
-                        </div>
+                        );
+                      })}
+                    </div>
+                  </ScrollArea>
+                ) : <p className="text-[11px] text-muted-foreground">No balancing characteristics configured.</p>}
+              </div>
+
+              {classStatistics.length > 0 && (
+                <div className="border-t pt-2.5">
+                  <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Class balance</div>
+                  <div className="space-y-1.5">
+                    {classStatistics.filter((stat) => visibleClassesWithStudents.some(({ config }) => config.id === stat.classId)).map((stat) => (
+                      <div key={stat.classId} className="rounded border px-2 py-1.5 text-[11px]" data-testid={`class-stats-${stat.classId}`}>
+                        <div className="flex justify-between font-medium"><span className="truncate">{stat.className}</span><span>{stat.totalStudents}</span></div>
+                        <div className="mt-0.5 flex justify-between text-muted-foreground"><span><span className="text-blue-600">{stat.maleCount} boys</span> · <span className="text-rose-600">{stat.femaleCount} girls</span></span>{stat.averages["Aggregate %"] !== null && <span>{stat.averages["Aggregate %"]}% avg</span>}</div>
                       </div>
                     ))}
                   </div>
-                </ScrollArea>
-              </div>
-            ) : (
-              <div className="flex flex-col items-center justify-center py-8 text-center">
-                <CheckCircle className="h-8 w-8 text-green-500 mb-2" />
-                <p className="text-sm font-medium">Already Optimized</p>
-                <p className="text-xs text-muted-foreground">
-                  No beneficial swaps found. Classes are well balanced.
-                </p>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      )}
-
-      <div className="space-y-6">
-        <div className="grid gap-4 grid-cols-1 md:grid-cols-2 lg:grid-cols-4">
-          {classesWithStudents.map(({ config, students: classStudents }) => {
-            const teacherName = classToTeacher[config.name];
-            const displayName = teacherName ? `${config.name} - ${teacherName}` : config.name;
-            return (
-              <Card
-                key={config.id}
-                className={`transition-colors ${
-                  dragOverClass === config.id ? "ring-2 ring-primary border-primary" : ""
-                }`}
-                onDragOver={(e) => handleDragOver(e, config.id)}
-                onDragLeave={handleDragLeave}
-                onDrop={(e) => handleDrop(e, config.id)}
-                data-testid={`card-class-review-${config.id}`}
-              >
-                <CardHeader className="pb-2">
-                  <div className="flex items-center justify-between gap-2">
-                    <CardTitle className="text-sm" data-testid={`text-class-name-${config.id}`}>{displayName}</CardTitle>
-                    <Badge variant={classStudents.length > (config.capacity || 30) ? "destructive" : "secondary"}>
-                      {classStudents.length}/{config.capacity || 30}
-                    </Badge>
-                  </div>
-                  <CardDescription>Grade {config.grade}</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-1">
-                    {dragOverClass === config.id && draggedStudent && (
-                      <div className="mb-2 rounded-md border-2 border-dashed border-primary bg-primary/10 px-3 py-2 text-center text-sm font-medium text-primary">
-                        Drop {draggedStudent.firstName} {draggedStudent.lastName} into {config.name}
-                      </div>
-                    )}
-                    {classStudents.length === 0 ? (
-                      <p className="text-sm text-muted-foreground text-center py-4">
-                        Drop students here
-                      </p>
-                    ) : (
-
-                      classStudents.map((student) => {
-                        const hasConflict = conflicts.some((c) => c.studentIds.includes(student.id));
-                        return (
-                          <motion.div
-                            key={student.id}
-                            layout
-                            initial={{ opacity: 0, y: -10, scale: 0.98 }}
-                            animate={{ opacity: 1, y: 0, scale: 1 }}
-                            transition={{ type: "spring", stiffness: 420, damping: 32 }}
-                          >
-                            <div
-                              draggable
-                              onDragStart={(event) => handleDragStart(event, student)}
-                              onDragEnd={() => {
-                                setDraggedStudent(null);
-                                setDragOverClass(null);
-                              }}
-                              className={`flex items-center gap-2 p-2 rounded-md cursor-grab active:cursor-grabbing transition-colors ${
-                                hasConflict
-                                  ? "bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800"
-                                  : "bg-muted/50"
-                              } ${draggedStudent?.id === student.id ? "opacity-40 ring-1 ring-primary" : ""} ${
-                                recentlyMovedStudentId === student.id ? "bg-primary/15 ring-2 ring-primary/50" : ""
-                              }`}
-                              data-testid={`student-card-${student.id}`}
-                            >
-                              <GripVertical className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-                              <div className="flex-1 min-w-0">
-                                <p className="text-sm font-medium truncate">
-                                  {student.lastName}, {student.firstName}
-                                </p>
-                                <div className="flex items-center gap-1 flex-wrap">
-                                  {student.gender && (
-                                    <Badge variant="outline" className="text-xs">
-                                      {student.gender}
-                                    </Badge>
-                                  )}
-                                </div>
-                              </div>
-                              {hasConflict && (
-                                <Tooltip>
-                                  <TooltipTrigger>
-                                    <AlertTriangle className="h-4 w-4 text-red-500 flex-shrink-0" />
-                                  </TooltipTrigger>
-                                  <TooltipContent>
-                                    <p>This student is involved in a conflict</p>
-                                  </TooltipContent>
-                                </Tooltip>
-                              )}
-                            </div>
-                          </motion.div>
-                        );
-
-                      })
-                    )}
-                  </div>
-                </CardContent>
-              </Card>
-            );
-          })}
-          </div>
-
-          {unplacedStudents.length > 0 && (
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base flex items-center gap-2">
-                  <AlertTriangle className="h-4 w-4 text-amber-500" />
-                  Unplaced Students ({unplacedStudents.length})
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="flex flex-wrap gap-2">
-                  {unplacedStudents.map((student) => (
-                    <motion.div key={student.id} layout>
-                      <div
-                        draggable
-                        onDragStart={(event) => handleDragStart(event, student)}
-                        onDragEnd={() => {
-                          setDraggedStudent(null);
-                          setDragOverClass(null);
-                        }}
-                        className="flex items-center gap-2 p-2 rounded-md bg-amber-50 dark:bg-amber-950 border border-amber-200 dark:border-amber-800 cursor-grab active:cursor-grabbing"
-                      >
-                        <GripVertical className="h-4 w-4 text-muted-foreground" />
-                        <span className="text-sm font-medium">
-                          {student.firstName} {student.lastName}
-                        </span>
-                      </div>
-                    </motion.div>
-                  ))}
-
                 </div>
+              )}
+            </CardContent>
+          </Card>
+        </aside>
+
+        <main className="min-w-0 space-y-3">
+          {showBoostPanel && (
+            <Card data-testid="card-boost-panel">
+              <CardHeader className="flex-row items-center justify-between space-y-0 border-b px-3 py-2">
+                <div><CardTitle className="text-sm"><Zap className="mr-1.5 inline h-4 w-4 text-amber-500" />Boost optimization</CardTitle><CardDescription className="text-[11px]">Suggested swaps to improve balance</CardDescription></div>
+                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => refetchBoost()} disabled={boostLoading} data-testid="button-refresh-boost"><RefreshCw className={`h-3.5 w-3.5 ${boostLoading ? "animate-spin" : ""}`} /></Button>
+              </CardHeader>
+              <CardContent className="p-2">
+                {boostLoading ? <div className="flex items-center justify-center py-5 text-xs text-muted-foreground"><Loader2 className="mr-2 h-4 w-4 animate-spin" />Analyzing placements...</div> : boostData?.suggestions?.length ? (
+                  <ScrollArea className="h-40"><div className="grid gap-1.5 xl:grid-cols-2">
+                    {boostData.suggestions.map((suggestion) => (
+                      <div key={suggestion.id} className="flex items-center gap-2 rounded border bg-muted/30 p-2 text-xs" data-testid={`boost-suggestion-${suggestion.id}`}>
+                        <div className="min-w-0 flex-1"><span className="font-medium">{suggestion.student1.name}</span><ArrowRightLeft className="mx-1 inline h-3 w-3 text-muted-foreground" /><span className="font-medium">{suggestion.student2.name}</span><div className="truncate text-[10px] text-muted-foreground">{suggestion.student1.currentClass} ↔ {suggestion.student2.currentClass}</div></div>
+                        <Badge variant="secondary" className="text-[10px]">+{suggestion.improvement}%</Badge>
+                        <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" onClick={() => applyBoostMutation.mutate(suggestion)} disabled={applyBoostMutation.isPending} data-testid={`button-apply-boost-${suggestion.id}`}><Check className="mr-1 h-3 w-3" />Apply</Button>
+                      </div>
+                    ))}
+                  </div></ScrollArea>
+                ) : <div className="flex items-center justify-center py-5 text-xs text-muted-foreground"><CheckCircle className="mr-2 h-4 w-4 text-emerald-500" />No beneficial swaps found.</div>}
               </CardContent>
             </Card>
           )}
 
-        <div className="grid gap-4 md:grid-cols-2">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base flex items-center gap-2">
-                <BarChart3 className="h-4 w-4" />
-                Balance Overview
-              </CardTitle>
-              <CardDescription>
-                How evenly characteristics are distributed
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="space-y-2">
-                <div className="flex justify-between text-sm">
-                  <span className="font-medium">Overall Balance</span>
-                  <span className={overallBalance >= 80 ? "text-green-600" : overallBalance >= 60 ? "text-amber-600" : "text-red-600"}>
-                    {overallBalance}%
-                  </span>
-                </div>
-                <Progress 
-                  value={overallBalance} 
-                  className={`h-3 ${
-                    overallBalance >= 80 
-                      ? "[&>div]:bg-green-500" 
-                      : overallBalance >= 60 
-                      ? "[&>div]:bg-amber-500" 
-                      : "[&>div]:bg-red-500"
-                  }`}
-                />
-              </div>
-
-              {balanceMetrics.length > 0 ? (
-                <div className="space-y-3 pt-2">
-                  {balanceMetrics.map((metric) => (
-                    <div key={metric.characteristicId} className="space-y-1">
-                      <div className="flex justify-between text-sm">
-                        <span className="text-muted-foreground">{metric.name}</span>
-                        <span>{metric.score}%</span>
+          <div className="overflow-x-auto pb-2">
+            <div className="grid min-w-full grid-flow-col auto-cols-[minmax(215px,1fr)] gap-2.5">
+              {visibleClassesWithStudents.map(({ config, students: classStudents }) => {
+                const teacherName = classToTeacher[config.name];
+                return (
+                  <Card key={config.id} className={`overflow-hidden transition-colors ${dragOverClass === config.id ? "ring-2 ring-primary border-primary" : ""}`} onDragOver={(event) => handleDragOver(event, config.id)} onDragLeave={handleDragLeave} onDrop={(event) => handleDrop(event, config.id)} data-testid={`card-class-review-${config.id}`}>
+                    <CardHeader className="border-b bg-muted/35 px-2.5 py-2">
+                      <div className="flex items-start justify-between gap-1.5">
+                        <div className="min-w-0"><CardTitle className="truncate text-xs font-semibold" data-testid={`text-class-name-${config.id}`}>{config.name}</CardTitle><CardDescription className="truncate text-[10px]">{teacherName || "No teacher assigned"} · Grade {config.grade}</CardDescription></div>
+                        <Badge variant={classStudents.length > (config.capacity || 30) ? "destructive" : "secondary"} className="h-5 shrink-0 px-1.5 text-[10px]">{classStudents.length}/{config.capacity || 30}</Badge>
                       </div>
-                      <Progress value={metric.score} className="h-1.5" />
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-sm text-muted-foreground">
-                  Add characteristics to see balance metrics
-                </p>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Summary</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <div className="flex justify-between text-sm">
-                <span className="text-muted-foreground">Total Students</span>
-                <span className="font-medium">{students.length}</span>
-              </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-muted-foreground">Placed</span>
-                <span className="font-medium">{placements.length}</span>
-              </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-muted-foreground">Unplaced</span>
-                <span className={`font-medium ${unplacedStudents.length > 0 ? "text-amber-600" : ""}`}>
-                  {unplacedStudents.length}
-                </span>
-              </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-muted-foreground">Classes</span>
-                <span className="font-medium">{classConfigs.length}</span>
-              </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-muted-foreground">Conflicts</span>
-                <span className={`font-medium ${conflicts.length > 0 ? "text-red-600" : "text-green-600"}`}>
-                  {conflicts.length}
-                </span>
-              </div>
-
-              {classStatistics.length > 0 && placements.length > 0 && (
-                <div className="pt-4 border-t space-y-4">
-                  <p className="text-sm font-medium">Class Statistics</p>
-                  {classStatistics.map((stat) => (
-                    <div key={stat.classId} className="space-y-2" data-testid={`class-stats-${stat.classId}`}>
-                      <p className="text-sm font-medium text-muted-foreground">{stat.className}</p>
-                      <div className="pl-2 space-y-1 text-xs">
-                        <div className="flex justify-between gap-2">
-                          <span className="text-muted-foreground">Gender</span>
-                          <span className="font-medium">{stat.maleCount} M / {stat.femaleCount} F</span>
-                        </div>
-                        {stat.averages["Aggregate %"] !== null && (
-                          <div className="flex justify-between gap-2">
-                            <span className="text-muted-foreground">Aggregate Avg</span>
-                            <span className="font-medium">{stat.averages["Aggregate %"]}%</span>
-                          </div>
-                        )}
-                        {stat.averages["Maths %"] !== null && (
-                          <div className="flex justify-between gap-2">
-                            <span className="text-muted-foreground">Maths Avg</span>
-                            <span className="font-medium">{stat.averages["Maths %"]}%</span>
-                          </div>
-                        )}
-                        {stat.averages["English %"] !== null && (
-                          <div className="flex justify-between gap-2">
-                            <span className="text-muted-foreground">English Avg</span>
-                            <span className="font-medium">{stat.averages["English %"]}%</span>
-                          </div>
-                        )}
-                        {stat.averages["Afrikaans/Isizulu %"] !== null && (
-                          <div className="flex justify-between gap-2">
-                            <span className="text-muted-foreground">Afrikaans/Isizulu Avg</span>
-                            <span className="font-medium">{stat.averages["Afrikaans/Isizulu %"]}%</span>
-                          </div>
-                        )}
-                        {stat.characteristicStats.map((characteristic) => (
-                          <div key={characteristic.id} className="flex justify-between gap-2">
-                            <span className="text-muted-foreground">{characteristic.name}</span>
-                            <span className="font-medium text-right">{characteristic.value}</span>
-                          </div>
-                        ))}
-
+                    </CardHeader>
+                    <CardContent className="p-1.5">
+                      <div className="space-y-0.5">
+                        {dragOverClass === config.id && draggedStudent && <div className="mb-1 rounded border border-dashed border-primary bg-primary/10 px-1.5 py-1 text-center text-[10px] font-medium text-primary">Drop {draggedStudent.firstName} here</div>}
+                        {classStudents.length === 0 ? <p className="py-6 text-center text-[11px] text-muted-foreground">Drop students here</p> : classStudents.map((student) => {
+                          const hasConflict = conflicts.some((conflict) => conflict.studentIds.includes(student.id));
+                          return (
+                            <motion.div key={student.id} layout initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} transition={{ type: "spring", stiffness: 420, damping: 32 }}>
+                              <div draggable onDragStart={(event) => handleDragStart(event, student)} onDragEnd={() => { setDraggedStudent(null); setDragOverClass(null); }} className={`group flex h-7 items-center gap-1 rounded px-1 text-[11px] transition-colors hover:bg-muted cursor-grab active:cursor-grabbing ${hasConflict ? "border border-red-300 bg-red-50/70 dark:border-red-900 dark:bg-red-950/30" : "border border-transparent odd:bg-muted/35"} ${draggedStudent?.id === student.id ? "opacity-40 ring-1 ring-primary" : ""} ${recentlyMovedStudentId === student.id ? "bg-primary/15 ring-1 ring-primary/50" : ""}`} data-testid={`student-card-${student.id}`}>
+                                <GripVertical className="h-3 w-3 shrink-0 text-muted-foreground/60" />
+                                <span className={`min-w-0 flex-1 truncate font-medium ${getGenderTextClass(student.gender)}`}>{student.lastName}, {student.firstName}</span>
+                                {hasConflict && <Tooltip><TooltipTrigger asChild><AlertTriangle className="h-3 w-3 shrink-0 text-red-500" /></TooltipTrigger><TooltipContent><p>This student is involved in a conflict</p></TooltipContent></Tooltip>}
+                              </div>
+                            </motion.div>
+                          );
+                        })}
                       </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
+                    </CardContent>
+                  </Card>
+                );
+              })}
+            </div>
+          </div>
+
+          {unplacedStudents.length > 0 && (
+            <Card className="border-amber-300">
+              <CardHeader className="border-b px-3 py-2"><CardTitle className="text-xs"><AlertTriangle className="mr-1.5 inline h-3.5 w-3.5 text-amber-500" />Unplaced students ({unplacedStudents.length})</CardTitle></CardHeader>
+              <CardContent className="flex flex-wrap gap-1 p-2">
+                {unplacedStudents.map((student) => (
+                  <motion.div key={student.id} layout><div draggable onDragStart={(event) => handleDragStart(event, student)} onDragEnd={() => { setDraggedStudent(null); setDragOverClass(null); }} className="flex h-7 cursor-grab items-center gap-1 rounded border border-amber-200 bg-amber-50 px-1.5 text-[11px] active:cursor-grabbing dark:border-amber-900 dark:bg-amber-950/30"><GripVertical className="h-3 w-3 text-muted-foreground" /><span className={`font-medium ${getGenderTextClass(student.gender)}`}>{student.lastName}, {student.firstName}</span></div></motion.div>
+                ))}
+              </CardContent>
+            </Card>
+          )}
+        </main>
       </div>
     </div>
   );
