@@ -408,19 +408,40 @@ export default function ReviewPage() {
         };
       }
 
-      const allValues = new Set<string>();
-      distribution.forEach((d) => Object.keys(d.values).filter((value) => value !== "Unset").forEach((v) => allValues.add(v)));
-
-      let totalVariance = 0;
-      allValues.forEach((value) => {
-        const counts = distribution.map((d) => d.values[value] || 0);
-        const mean = counts.reduce((a, b) => a + b, 0) / counts.length;
-        const variance = counts.reduce((sum, c) => sum + Math.pow(c - mean, 2), 0) / counts.length;
-        totalVariance += variance;
+      // Category characteristics: compare each class's distribution with the
+      // overall learner distribution (cohort shares), not variance within a class,
+      // so a class holding a single value can no longer score 100%.
+      const overallCounts: Record<string, number> = {};
+      let overallTotal = 0;
+      students.forEach((student) => {
+        if (!isCharacteristicApplicableToGrade(char, student.grade)) return;
+        const values = characteristicValueToArray(getStudentCharacteristicValue(student, char));
+        if (values.length === 0) {
+          overallCounts.Unset = (overallCounts.Unset || 0) + 1;
+          overallTotal += 1;
+          return;
+        }
+        values.forEach((value) => {
+          overallCounts[value] = (overallCounts[value] || 0) + 1;
+          overallTotal += 1;
+        });
       });
 
-      const maxVariance = allValues.size * Math.pow(students.length / 2, 2);
-      const score = maxVariance > 0 ? Math.max(0, 100 - (totalVariance / maxVariance) * 100) : 100;
+      const classScores = distribution
+        .filter((d) => Object.values(d.values).reduce((sum, count) => sum + count, 0) > 0)
+        .map((d) => {
+          const classTotal = Object.values(d.values).reduce((sum, count) => sum + count, 0);
+          const valueNames = new Set<string>([...Object.keys(d.values), ...Object.keys(overallCounts)]);
+          let deviation = 0;
+          valueNames.forEach((value) => {
+            deviation += Math.abs((d.values[value] || 0) / classTotal - (overallCounts[value] || 0) / overallTotal);
+          });
+          return Math.max(0, 100 - (deviation / 2) * 100);
+        });
+
+      const score = classScores.length === 0
+        ? 100
+        : classScores.reduce((sum, classScore) => sum + classScore, 0) / classScores.length;
 
       return {
         characteristicId: char.id,

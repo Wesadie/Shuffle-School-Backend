@@ -1543,18 +1543,42 @@ const parseCharacteristicNumber = (value: string | string[] | undefined) => {
 };
 
 const getNumericTargets = (students: Student[], characteristics: Characteristic[]) => {
-  const targets = new Map<string, { average: number; range: number }>();
+  // Cohort-wide targets: numeric averages for scale/percentage characteristics and
+  // overall value shares for category characteristics (e.g. Race, Gender).
+  const targets = new Map<string, { average: number; range: number; shares: Map<string, number> }>();
   for (const char of characteristics) {
-    if (!isNumericCharacteristic(char)) continue;
-    const values = students
-      .filter((student) => isCharacteristicApplicableToGrade(char, student.grade))
-      .map((student) => parseCharacteristicNumber(getStudentCharacteristicValue(student, char)))
-      .filter((value): value is number => value !== null);
-    if (values.length === 0) continue;
-    const average = values.reduce((sum, value) => sum + value, 0) / values.length;
-    const min = Math.min(...values);
-    const max = Math.max(...values);
-    targets.set(char.id, { average, range: Math.max(1, max - min) });
+    if (isNumericCharacteristic(char)) {
+      const values = students
+        .filter((student) => isCharacteristicApplicableToGrade(char, student.grade))
+        .map((student) => parseCharacteristicNumber(getStudentCharacteristicValue(student, char)))
+        .filter((value): value is number => value !== null);
+      if (values.length === 0) continue;
+      const average = values.reduce((sum, value) => sum + value, 0) / values.length;
+      const min = Math.min(...values);
+      const max = Math.max(...values);
+      targets.set(char.id, { average, range: Math.max(1, max - min), shares: new Map() });
+      continue;
+    }
+
+    const counts = new Map<string, number>();
+    let total = 0;
+    for (const student of students) {
+      if (!isCharacteristicApplicableToGrade(char, student.grade)) continue;
+      const values = characteristicValueToArray(getStudentCharacteristicValue(student, char));
+      if (values.length === 0) {
+        counts.set("Unset", (counts.get("Unset") || 0) + 1);
+        total += 1;
+        continue;
+      }
+      for (const value of values) {
+        counts.set(value, (counts.get(value) || 0) + 1);
+        total += 1;
+      }
+    }
+    if (total === 0) continue;
+    const shares = new Map<string, number>();
+    counts.forEach((count, value) => shares.set(value, count / total));
+    targets.set(char.id, { average: 0, range: 0, shares });
   }
   return targets;
 };
@@ -1562,7 +1586,7 @@ const getNumericTargets = (students: Student[], characteristics: Characteristic[
 const calculateCharacteristicScore = (
   classStudents: Student[],
   char: Characteristic,
-  numericTargets: Map<string, { average: number; range: number }>,
+  numericTargets: Map<string, { average: number; range: number; shares: Map<string, number> }>,
 ) => {
   if (classStudents.length === 0) return 100;
 
@@ -1578,27 +1602,45 @@ const calculateCharacteristicScore = (
     return Math.max(0, Math.round(100 - Math.min(1, deviation) * 100));
   }
 
+  // Category characteristics: compare the class distribution with the overall
+  // learner distribution (cohort shares) instead of variance within the class,
+  // so a class holding a single value can no longer score 100%.
+  const target = numericTargets.get(char.id);
+  if (!target || target.shares.size === 0) return 100;
+
   const distribution: Record<string, number> = {};
+  let classTotal = 0;
   for (const student of classStudents) {
     if (!isCharacteristicApplicableToGrade(char, student.grade)) continue;
     const values = characteristicValueToArray(getStudentCharacteristicValue(student, char));
+    if (values.length === 0) {
+      distribution.Unset = (distribution.Unset || 0) + 1;
+      classTotal += 1;
+      continue;
+    }
     for (const value of values) {
       distribution[value] = (distribution[value] || 0) + 1;
+      classTotal += 1;
     }
   }
+  if (classTotal === 0) return 100;
 
-  const values = Object.values(distribution);
-  if (values.length <= 1) return 100;
-  const mean = values.reduce((a, b) => a + b, 0) / values.length;
-  const variance = values.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / values.length;
-  const maxVariance = Math.max(1, Math.pow(classStudents.length, 2));
-  return Math.max(0, Math.round(100 - (variance / maxVariance) * 100));
+  // Total variation distance between class shares and cohort shares
+  // (0 = perfectly proportional, 1 = completely disjoint distributions).
+  const valueNames = new Set<string>([...Object.keys(distribution), ...target.shares.keys()]);
+  let deviation = 0;
+  valueNames.forEach((value) => {
+    const classShare = (distribution[value] || 0) / classTotal;
+    const cohortShare = target.shares.get(value) || 0;
+    deviation += Math.abs(classShare - cohortShare);
+  });
+  return Math.max(0, Math.round(100 - (deviation / 2) * 100));
 };
 
 const calculateCandidateBalanceScore = (
   candidateStudents: Student[],
   char: Characteristic,
-  numericTargets: Map<string, { average: number; range: number }>,
+  numericTargets: Map<string, { average: number; range: number; shares: Map<string, number> }>,
 ) => {
   const priority = char.priority || 1; // Priority is the balancing weight: higher priority has more influence.
   const score = calculateCharacteristicScore(candidateStudents, char, numericTargets);
@@ -1680,10 +1722,24 @@ async function generateBalancedClasses(
   // Assign groups to classes using a balanced approach
   const classConfigList = Array.from(classConfigs);
   
+  // Class size is the first priority: give every class a target size that is as
+  // equal as mathematically possible (e.g. 103 learners over 4 classes -> 26/26/26/25),
+  // capped by each class capacity.
+  const baseClassSize = Math.floor(students.length / numClasses);
+  const classSizeRemainder = students.length % numClasses;
+  const targetClassSizes = new Map<string, number>();
+  classConfigList.forEach((config, index) => {
+    const idealSize = baseClassSize + (index < classSizeRemainder ? 1 : 0);
+    targetClassSizes.set(config.id, Math.min(idealSize, config.capacity || 30));
+  });
+
   for (const group of pairingGroups) {
-    // Find the best class for this group
-    let bestClassId = classConfigList[0].id;
-    let bestScore = -Infinity;
+    // Find the best class for this group: separation rules first, then equal
+    // class sizes, then characteristic balance.
+    let bestClassId: string | null = null;
+    let bestSeparationViolations = Infinity;
+    let bestSizeOverflow = Infinity;
+    let bestBalanceScore = -Infinity;
     
     for (const config of classConfigList) {
       const currentStudents = classAssignments.get(config.id)!;
@@ -1714,20 +1770,28 @@ async function generateBalancedClasses(
         balanceScore += calculateCandidateBalanceScore(candidateStudents, char, numericTargets);
       }
       
-      // Prefer smaller classes to balance sizes
-      const sizeBalance = -(currentStudents.length + group.length);
-      
-      // Calculate total score
-      const totalScore = balanceScore + sizeBalance * 10 - separationViolations * 1000;
-      
-      if (totalScore > bestScore) {
-        bestScore = totalScore;
+      // Equal class sizes are the primary goal: prefer classes that stay within
+      // their target size; characteristics only decide between classes that are
+      // equally on target.
+      const targetSize = targetClassSizes.get(config.id) ?? group.length;
+      const sizeOverflow = Math.max(0, currentStudents.length + group.length - targetSize);
+
+      if (
+        bestClassId === null ||
+        separationViolations < bestSeparationViolations ||
+        (separationViolations === bestSeparationViolations && sizeOverflow < bestSizeOverflow) ||
+        (separationViolations === bestSeparationViolations && sizeOverflow === bestSizeOverflow && balanceScore > bestBalanceScore)
+      ) {
         bestClassId = config.id;
+        bestSeparationViolations = separationViolations;
+        bestSizeOverflow = sizeOverflow;
+        bestBalanceScore = balanceScore;
       }
     }
-    
-    // Assign group to best class
-    const targetClass = classAssignments.get(bestClassId)!;
+
+    // Assign group to best class (fall back to the first class when every class
+    // is already at capacity, matching the previous behaviour).
+    const targetClass = classAssignments.get(bestClassId ?? classConfigList[0].id)!;
     targetClass.push(...group);
   }
 
