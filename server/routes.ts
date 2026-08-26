@@ -978,14 +978,22 @@ export async function registerRoutes(
         .slice(0, 50);
       const numericTargets = getNumericTargets(students, activeCharacteristics);
 
+      // Optional single-characteristic boosting: reuse the same swap search but
+      // score candidate swaps against one characteristic instead of the overall average.
+      const { characteristicId } = req.body || {};
+      const targetCharacteristic = characteristicId
+        ? activeCharacteristics.find((char) => char.id === characteristicId) || null
+        : null;
+      const scoreCharacteristics = targetCharacteristic ? [targetCharacteristic] : activeCharacteristics;
+
       // Calculate balance score for a class using the same category/numeric model as generation.
       const calculateClassBalance = (classStudentList: Student[]): number => {
-        if (activeCharacteristics.length === 0 || classStudentList.length === 0) return 100;
-        const totalScore = activeCharacteristics.reduce(
+        if (scoreCharacteristics.length === 0 || classStudentList.length === 0) return 100;
+        const totalScore = scoreCharacteristics.reduce(
           (sum, char) => sum + calculateCharacteristicScore(classStudentList, char, numericTargets),
           0,
         );
-        return totalScore / activeCharacteristics.length;
+        return totalScore / scoreCharacteristics.length;
       };
 
       // Calculate overall balance
@@ -1086,7 +1094,7 @@ export async function registerRoutes(
                     currentClassId: class2Id,
                   },
                   improvement: Math.round(improvement * 10) / 10,
-                  reason: `Swapping these students would improve overall balance by ${improvement.toFixed(1)}%`,
+                  reason: `Swapping these students would improve ${targetCharacteristic ? `${targetCharacteristic.name} balance` : "overall balance"} by ${improvement.toFixed(1)}%`,
                 });
               }
             }

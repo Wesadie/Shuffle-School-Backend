@@ -100,6 +100,85 @@ const getGenderTextClass = (gender?: string | null) => {
   return "text-foreground";
 };
 
+type CharacteristicCohortTarget = { average: number; range: number; shares: Map<string, number> };
+
+const getCharacteristicCohortTarget = (students: Student[], char: Characteristic): CharacteristicCohortTarget | null => {
+  if (isNumericCharacteristic(char)) {
+    const values = students
+      .filter((student) => isCharacteristicApplicableToGrade(char, student.grade))
+      .map((student) => parseCharacteristicNumber(getStudentCharacteristicValue(student, char)))
+      .filter((value): value is number => value !== null);
+    if (values.length === 0) return null;
+    const average = values.reduce((sum, value) => sum + value, 0) / values.length;
+    return { average, range: Math.max(1, Math.max(...values) - Math.min(...values)), shares: new Map() };
+  }
+  const counts = new Map<string, number>();
+  let total = 0;
+  students.forEach((student) => {
+    if (!isCharacteristicApplicableToGrade(char, student.grade)) return;
+    const values = characteristicValueToArray(getStudentCharacteristicValue(student, char));
+    if (values.length === 0) {
+      counts.set("Unset", (counts.get("Unset") || 0) + 1);
+      total += 1;
+      return;
+    }
+    values.forEach((value) => {
+      counts.set(value, (counts.get(value) || 0) + 1);
+      total += 1;
+    });
+  });
+  if (total === 0) return null;
+  const shares = new Map<string, number>();
+  counts.forEach((count, value) => shares.set(value, count / total));
+  return { average: 0, range: 0, shares };
+};
+
+// Mirrors the server's calculateCharacteristicScore so client-side boostability
+// checks agree with /api/boost suggestions.
+const computeCharacteristicClassScore = (
+  classStudents: Student[],
+  char: Characteristic,
+  target: CharacteristicCohortTarget | null,
+): number => {
+  if (classStudents.length === 0) return 100;
+
+  if (isNumericCharacteristic(char)) {
+    const values = classStudents
+      .filter((student) => isCharacteristicApplicableToGrade(char, student.grade))
+      .map((student) => parseCharacteristicNumber(getStudentCharacteristicValue(student, char)))
+      .filter((value): value is number => value !== null);
+    if (!target || values.length === 0) return 100;
+    const classAverage = values.reduce((sum, value) => sum + value, 0) / values.length;
+    const deviation = Math.abs(classAverage - target.average) / target.range;
+    return Math.max(0, Math.round(100 - Math.min(1, deviation) * 100));
+  }
+
+  if (!target || target.shares.size === 0) return 100;
+  const distribution: Record<string, number> = {};
+  let classTotal = 0;
+  classStudents.forEach((student) => {
+    if (!isCharacteristicApplicableToGrade(char, student.grade)) return;
+    const values = characteristicValueToArray(getStudentCharacteristicValue(student, char));
+    if (values.length === 0) {
+      distribution.Unset = (distribution.Unset || 0) + 1;
+      classTotal += 1;
+      return;
+    }
+    values.forEach((value) => {
+      distribution[value] = (distribution[value] || 0) + 1;
+      classTotal += 1;
+    });
+  });
+  if (classTotal === 0) return 100;
+
+  const valueNames = new Set<string>([...Object.keys(distribution), ...target.shares.keys()]);
+  let deviation = 0;
+  valueNames.forEach((value) => {
+    deviation += Math.abs((distribution[value] || 0) / classTotal - (target.shares.get(value) || 0));
+  });
+  return Math.max(0, Math.round(100 - (deviation / 2) * 100));
+};
+
 export default function ReviewPage() {
   const { toast } = useToast();
   const [draggedStudent, setDraggedStudent] = useState<Student | null>(null);
@@ -208,6 +287,33 @@ export default function ReviewPage() {
     },
     onError: () => {
       toast({ title: "Failed to apply swap", variant: "destructive" });
+    },
+  });
+
+  // Boost a single characteristic: fetch the best swap for that characteristic
+  // from /api/boost (characteristicId filter) and apply it via /api/boost/apply.
+  const characteristicBoostMutation = useMutation({
+    mutationFn: ({ characteristicId }: { characteristicId: string; name: string; historySnapshot: PlacementSnapshot }) =>
+      (async () => {
+        const res = await apiRequest("POST", "/api/boost", { characteristicId });
+        const data = await res.json() as BoostResponse;
+        const best = data.suggestions[0];
+        if (!best) throw new Error("No improving swap found for this characteristic");
+        await apiRequest("POST", "/api/boost/apply", {
+          student1Id: best.student1.id,
+          student1NewClassId: best.student2.currentClassId,
+          student2Id: best.student2.id,
+          student2NewClassId: best.student1.currentClassId,
+        });
+      })(),
+    onSuccess: (_data, variables) => {
+      setUndoStack((current) => [...current, variables.historySnapshot].slice(-20));
+      queryClient.invalidateQueries({ queryKey: ["/api/placements"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/boost"] });
+      toast({ title: `${variables.name} boosted`, description: "Best balancing swap applied." });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Boost failed", description: error.message || "An error occurred", variant: "destructive" });
     },
   });
 
@@ -456,6 +562,92 @@ export default function ReviewPage() {
     if (balanceMetrics.length === 0) return 100;
     return Math.round(balanceMetrics.reduce((sum, m) => sum + m.score, 0) / balanceMetrics.length);
   }, [balanceMetrics]);
+
+  // Best possible single-characteristic swap improvement for each active
+  // characteristic, mirroring /api/boost's swap search and 0.5% threshold so
+  // the per-row boost icons reflect what the server can actually suggest.
+  const characteristicBoostImprovements = useMemo(() => {
+    const improvements = new Map<string, number>();
+    const activeCharacteristics = [...characteristics]
+      .filter((char) => !char.tagOnly)
+      .sort((a, b) => (b.priority || 0) - (a.priority || 0))
+      .slice(0, 50);
+    if (activeCharacteristics.length === 0 || classesWithStudents.length < 2) return improvements;
+
+    const separations = new Map<string, Set<string>>();
+    const pairings = new Map<string, Set<string>>();
+    rules.forEach((rule) => {
+      const map = rule.type === "separate" ? separations : rule.type === "pair" ? pairings : null;
+      if (!map) return;
+      if (!map.has(rule.studentId1)) map.set(rule.studentId1, new Set());
+      if (!map.has(rule.studentId2)) map.set(rule.studentId2, new Set());
+      map.get(rule.studentId1)!.add(rule.studentId2);
+      map.get(rule.studentId2)!.add(rule.studentId1);
+    });
+
+    const classOfStudent = new Map<string, string>();
+    classesWithStudents.forEach(({ config, students: classStudents }) => {
+      classStudents.forEach((student) => classOfStudent.set(student.id, config.id));
+    });
+
+    const violatesRules = (student: Student, targetClassId: string): boolean => {
+      const targetStudents = classesWithStudents.find((c) => c.config.id === targetClassId)?.students ?? [];
+      const mustSeparate = separations.get(student.id);
+      if (mustSeparate) {
+        for (const other of targetStudents) {
+          if (mustSeparate.has(other.id)) return true;
+        }
+      }
+      const mustPair = pairings.get(student.id);
+      if (mustPair) {
+        const currentClassId = classOfStudent.get(student.id);
+        if (currentClassId) {
+          const currentStudents = classesWithStudents.find((c) => c.config.id === currentClassId)?.students ?? [];
+          for (const partnerId of mustPair) {
+            if (currentStudents.some((s) => s.id === partnerId) && !targetStudents.some((s) => s.id === partnerId)) {
+              return true;
+            }
+          }
+        }
+      }
+      return false;
+    };
+
+    const classCount = classesWithStudents.length;
+    for (const char of activeCharacteristics) {
+      const target = getCharacteristicCohortTarget(students, char);
+      const currentScores = classesWithStudents.map(({ students: classStudents }) =>
+        computeCharacteristicClassScore(classStudents, char, target),
+      );
+      let best = 0;
+      scan: for (let i = 0; i < classesWithStudents.length; i++) {
+        for (let j = i + 1; j < classesWithStudents.length; j++) {
+          const class1Students = classesWithStudents[i].students;
+          const class2Students = classesWithStudents[j].students;
+          const class1Id = classesWithStudents[i].config.id;
+          const class2Id = classesWithStudents[j].config.id;
+          for (const student1 of class1Students) {
+            for (const student2 of class2Students) {
+              if (violatesRules(student1, class2Id) || violatesRules(student2, class1Id)) continue;
+              const newClass1 = class1Students.filter((s) => s.id !== student1.id).concat([student2]);
+              const newClass2 = class2Students.filter((s) => s.id !== student2.id).concat([student1]);
+              const gain = (computeCharacteristicClassScore(newClass1, char, target)
+                + computeCharacteristicClassScore(newClass2, char, target))
+                - (currentScores[i] + currentScores[j]);
+              const improvement = gain / classCount;
+              if (improvement > best) best = improvement;
+              if (best > 0.5) break scan;
+            }
+          }
+        }
+      }
+      improvements.set(char.id, best);
+    }
+    return improvements;
+  }, [characteristics, classesWithStudents, rules, students]);
+
+  const isCharacteristicBoostable = (characteristicId: string) =>
+    (characteristicBoostImprovements.get(characteristicId) ?? 0) > 0.5;
 
   const classStatistics = useMemo(() => {
     const percentageFieldNames = ["Aggregate %", "Maths %", "English %", "Afrikaans/Isizulu %"];
@@ -865,11 +1057,33 @@ export default function ReviewPage() {
                     <div className="space-y-2">
                       {balanceMetrics.map((metric) => {
                         const isVisible = !hiddenCharacteristicIds.includes(metric.characteristicId);
+                        const boostable = isCharacteristicBoostable(metric.characteristicId);
+                        const isBoosting = characteristicBoostMutation.isPending
+                          && characteristicBoostMutation.variables?.characteristicId === metric.characteristicId;
                         return (
                           <div key={metric.characteristicId} className={isVisible ? "space-y-1" : "space-y-1 opacity-50"}>
                             <div className="flex items-center gap-1.5 text-[11px]">
                               <Checkbox className="h-3.5 w-3.5" checked={isVisible} onCheckedChange={(checked) => setHiddenCharacteristicIds((current) => checked ? current.filter((id) => id !== metric.characteristicId) : [...current, metric.characteristicId])} aria-label={`Show ${metric.name} balance`} />
                               <span className="min-w-0 flex-1 truncate">{metric.name}</span><span className="font-medium">{metric.score}%</span>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <button
+                                    type="button"
+                                    disabled={!boostable || characteristicBoostMutation.isPending}
+                                    onClick={() => characteristicBoostMutation.mutate({
+                                      characteristicId: metric.characteristicId,
+                                      name: metric.name,
+                                      historySnapshot: placements.map(({ studentId, classId }) => ({ studentId, classId })),
+                                    })}
+                                    className={`flex h-5 w-5 shrink-0 items-center justify-center rounded transition-colors ${boostable ? "text-amber-500 hover:bg-amber-500/15 hover:text-amber-600" : "cursor-not-allowed text-muted-foreground/40"}`}
+                                    aria-label={`Boost ${metric.name} balance`}
+                                    data-testid={`button-boost-characteristic-${metric.characteristicId}`}
+                                  >
+                                    {isBoosting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Zap className="h-3 w-3" />}
+                                  </button>
+                                </TooltipTrigger>
+                                <TooltipContent><p>{boostable ? `Boost ${metric.name} balance` : "This characteristic cannot be boosted further."}</p></TooltipContent>
+                              </Tooltip>
                             </div>
                             {isVisible && <Progress value={metric.score} className="h-1" />}
                           </div>
