@@ -4,7 +4,7 @@ import { motion } from "framer-motion";
 import {
   Users, AlertTriangle, CheckCircle, ArrowRight, Download,
   GripVertical, Link2, Unlink, BarChart3, RefreshCw, Zap,
-  ArrowRightLeft, Check, X, Loader2
+  ArrowRightLeft, Check, Loader2, Undo2
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -29,6 +29,7 @@ import {
 } from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
+import { downloadXlsx, type SpreadsheetCell, type SpreadsheetSheet } from "@/lib/xlsx-export";
 import { Link } from "wouter";
 import { characteristicValueToArray, isCharacteristicApplicableToGrade } from "@shared/characteristics";
 import type {
@@ -42,6 +43,21 @@ interface ClassWithStudents {
   placements: Placement[];
 }
 
+type PlacementSnapshot = Array<Pick<Placement, "studentId" | "classId">>;
+
+type ColourLegendItem = {
+  value: string;
+  count: number;
+  colour: string;
+};
+
+const CHARACTERISTIC_COLOURS = [
+  "#2563eb", "#dc2626", "#0891b2", "#16a34a", "#a16207",
+  "#7c3aed", "#db2777", "#0d9488", "#ea580c", "#475569",
+];
+
+const PERCENTAGE_BUCKET_ORDER = ["Below 50%", "50–59%", "60–69%", "70–79%", "80%+"];
+
 const isNumericCharacteristic = (char: Characteristic) => char.type === "scale" || char.type === "percentage";
 
 const getStudentCharacteristicValue = (student: Student, char: Characteristic) =>
@@ -51,6 +67,30 @@ const parseCharacteristicNumber = (value: string | string[] | undefined) => {
   if (!value || Array.isArray(value)) return null;
   const parsed = Number.parseFloat(value.replace("%", "").trim());
   return Number.isFinite(parsed) ? parsed : null;
+};
+
+const getCharacteristicColourValues = (student: Student, characteristic: Characteristic | null, useGender: boolean) => {
+  if (useGender) return [student.gender?.trim() || "Unset"];
+  if (!characteristic) return [];
+  const values = characteristicValueToArray(getStudentCharacteristicValue(student, characteristic));
+  if (values.length === 0) return ["Unset"];
+  if (characteristic.type !== "percentage") return values;
+  return values.map((value) => {
+    const numericValue = Number.parseFloat(value.replace("%", "").trim());
+    if (!Number.isFinite(numericValue)) return value;
+    if (numericValue < 50) return "Below 50%";
+    if (numericValue < 60) return "50–59%";
+    if (numericValue < 70) return "60–69%";
+    if (numericValue < 80) return "70–79%";
+    return "80%+";
+  });
+};
+
+const getExportCharacteristic = (student: Student, aliases: string[]) => {
+  const entries = Object.entries(student.characteristics || {});
+  const match = entries.find(([name]) => aliases.some((alias) => name.toLowerCase() === alias.toLowerCase()));
+  if (!match) return "";
+  return Array.isArray(match[1]) ? match[1].join(", ") : match[1];
 };
 
 const getGenderTextClass = (gender?: string | null) => {
@@ -67,7 +107,9 @@ export default function ReviewPage() {
   const [recentlyMovedStudentId, setRecentlyMovedStudentId] = useState<string | null>(null);
   const [showBoostPanel, setShowBoostPanel] = useState(false);
   const [selectedGrade, setSelectedGrade] = useState("all");
+  const [selectedColourCharacteristic, setSelectedColourCharacteristic] = useState("none");
   const [hiddenCharacteristicIds, setHiddenCharacteristicIds] = useState<string[]>([]);
+  const [undoStack, setUndoStack] = useState<PlacementSnapshot[]>([]);
 
   const { data: classConfigs = [], isLoading: configsLoading } = useQuery<ClassConfig[]>({
     queryKey: ["/api/class-configs"],
@@ -104,7 +146,7 @@ export default function ReviewPage() {
   }, [teachers]);
 
   const moveMutation = useMutation({
-    mutationFn: ({ studentId, targetClassId }: { studentId: string; targetClassId: string }) =>
+    mutationFn: ({ studentId, targetClassId }: { studentId: string; targetClassId: string; historySnapshot?: PlacementSnapshot }) =>
       apiRequest("POST", "/api/placements/move", { studentId, targetClassId }),
     onMutate: async ({ studentId, targetClassId }) => {
       await queryClient.cancelQueries({ queryKey: ["/api/placements"] });
@@ -118,7 +160,10 @@ export default function ReviewPage() {
       window.setTimeout(() => setRecentlyMovedStudentId((current) => current === studentId ? null : current), 900);
       return { previousPlacements };
     },
-    onSuccess: () => {
+    onSuccess: (_data, variables) => {
+      if (variables.historySnapshot) {
+        setUndoStack((current) => [...current, variables.historySnapshot!].slice(-20));
+      }
       toast({ title: "Student moved successfully" });
     },
     onError: (error: any, _variables, context) => {
@@ -146,14 +191,17 @@ export default function ReviewPage() {
   });
 
   const applyBoostMutation = useMutation({
-    mutationFn: (suggestion: BoostSuggestion) =>
+    mutationFn: ({ suggestion }: { suggestion: BoostSuggestion; historySnapshot?: PlacementSnapshot }) =>
       apiRequest("POST", "/api/boost/apply", {
         student1Id: suggestion.student1.id,
         student1NewClassId: suggestion.student2.currentClassId,
         student2Id: suggestion.student2.id,
         student2NewClassId: suggestion.student1.currentClassId,
       }),
-    onSuccess: () => {
+    onSuccess: (_data, variables) => {
+      if (variables.historySnapshot) {
+        setUndoStack((current) => [...current, variables.historySnapshot!].slice(-20));
+      }
       queryClient.invalidateQueries({ queryKey: ["/api/placements"] });
       queryClient.invalidateQueries({ queryKey: ["/api/boost"] });
       toast({ title: "Swap applied successfully" });
@@ -162,6 +210,88 @@ export default function ReviewPage() {
       toast({ title: "Failed to apply swap", variant: "destructive" });
     },
   });
+
+  const regenerateMutation = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/generate-classes", {}),
+    onSuccess: () => {
+      setUndoStack([]);
+      queryClient.invalidateQueries({ queryKey: ["/api/placements"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/boost"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
+      toast({
+        title: "Solver re-run complete",
+        description: "Class placements replaced with a new solution.",
+      });
+    },
+    onError: (error: Error) => {
+      const message = error.message || "";
+      const isLimit = message.includes("TRIAL_SOLVER_LIMIT_REACHED");
+      const isExpired = message.includes("TRIAL_EXPIRED");
+      toast({
+        title: isLimit ? "Trial solver limit reached" : isExpired ? "Trial expired" : "Failed to re-run solver",
+        description: isLimit
+          ? "You have used all 3 trial generations. Upgrade to generate more class lists."
+          : isExpired
+            ? "This workspace is now read-only until you upgrade."
+            : message || undefined,
+        variant: "destructive",
+      });
+    },
+  });
+
+  const undoMutation = useMutation({
+    mutationFn: async (snapshot: PlacementSnapshot) => {
+      const current = queryClient.getQueryData<Placement[]>(["/api/placements"]) ?? [];
+      let restoredCount = 0;
+      for (const entry of snapshot) {
+        const placement = current.find((p) => p.studentId === entry.studentId);
+        if (placement && placement.classId !== entry.classId) {
+          await apiRequest("POST", "/api/placements/move", {
+            studentId: entry.studentId,
+            targetClassId: entry.classId,
+          });
+          restoredCount += 1;
+        }
+      }
+      return restoredCount;
+    },
+    onMutate: async (snapshot) => {
+      await queryClient.cancelQueries({ queryKey: ["/api/placements"] });
+      const previousPlacements = queryClient.getQueryData<Placement[]>(["/api/placements"]);
+      queryClient.setQueryData<Placement[]>(["/api/placements"], (current = []) =>
+        current.map((placement) => {
+          const entry = snapshot.find((s) => s.studentId === placement.studentId);
+          return entry && entry.classId !== placement.classId ? { ...placement, classId: entry.classId } : placement;
+        }),
+      );
+      return { previousPlacements };
+    },
+    onSuccess: (restoredCount) => {
+      toast({
+        title: restoredCount > 0 ? "Change undone" : "Nothing to restore",
+        description: restoredCount > 0
+          ? `${restoredCount} placement${restoredCount === 1 ? "" : "s"} restored.`
+          : undefined,
+      });
+    },
+    onError: (error: any, snapshot, context) => {
+      if (context?.previousPlacements) {
+        queryClient.setQueryData(["/api/placements"], context.previousPlacements);
+      }
+      setUndoStack((current) => [...current, snapshot].slice(-20));
+      toast({ title: "Failed to undo", description: error?.message || "An error occurred", variant: "destructive" });
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/placements"] });
+    },
+  });
+
+  const handleUndo = () => {
+    if (undoStack.length === 0 || undoMutation.isPending) return;
+    const lastSnapshot = undoStack[undoStack.length - 1];
+    undoMutation.mutate(lastSnapshot);
+    setUndoStack((current) => current.slice(0, -1));
+  };
 
   const classesWithStudents: ClassWithStudents[] = useMemo(() => {
     return classConfigs.map((config) => {
@@ -402,6 +532,122 @@ export default function ReviewPage() {
   const pairRequestCount = rules.filter((rule) => rule.type === "pair").length;
   const separateRequestCount = rules.filter((rule) => rule.type === "separate").length;
 
+  const colourableCharacteristics = useMemo(
+    () => characteristics.filter((characteristic) => !characteristic.adminOnly),
+    [characteristics],
+  );
+  const colourCharacteristic = colourableCharacteristics.find((c) => c.id === selectedColourCharacteristic) ?? null;
+
+  const colourLegend: ColourLegendItem[] = useMemo(() => {
+    if (!colourCharacteristic) return [];
+    const counts = new Map<string, number>();
+    if (colourCharacteristic.type === "category") {
+      (colourCharacteristic.options || []).forEach((option) => counts.set(option, 0));
+    }
+    if (colourCharacteristic.type === "percentage") {
+      PERCENTAGE_BUCKET_ORDER.forEach((bucket) => counts.set(bucket, 0));
+    }
+    students.forEach((student) => {
+      getCharacteristicColourValues(student, colourCharacteristic, false).forEach((value) => {
+        counts.set(value, (counts.get(value) || 0) + 1);
+      });
+    });
+    const isPercentage = colourCharacteristic.type === "percentage";
+    return Array.from(counts.entries())
+      .sort((a, b) => {
+        if ((a[0] === "Unset") !== (b[0] === "Unset")) return a[0] === "Unset" ? 1 : -1;
+        if (isPercentage) {
+          const aIndex = PERCENTAGE_BUCKET_ORDER.indexOf(a[0]);
+          const bIndex = PERCENTAGE_BUCKET_ORDER.indexOf(b[0]);
+          return (aIndex === -1 ? PERCENTAGE_BUCKET_ORDER.length : aIndex)
+            - (bIndex === -1 ? PERCENTAGE_BUCKET_ORDER.length : bIndex);
+        }
+        return b[1] - a[1] || a[0].localeCompare(b[0]);
+      })
+      .map(([value, count], index) => ({
+        value,
+        count,
+        colour: CHARACTERISTIC_COLOURS[index % CHARACTERISTIC_COLOURS.length],
+      }));
+  }, [students, colourCharacteristic]);
+
+  const characteristicColourLookup = useMemo(
+    () => new Map(colourLegend.map((item) => [item.value, item.colour])),
+    [colourLegend],
+  );
+
+  const getStudentColour = (student: Student): string | null => {
+    if (!colourCharacteristic) return null;
+    const value = getCharacteristicColourValues(student, colourCharacteristic, false)[0];
+    return value ? characteristicColourLookup.get(value) ?? null : null;
+  };
+
+  const getClassColourCounts = (classStudents: Student[]): ColourLegendItem[] => {
+    if (!colourCharacteristic) return [];
+    const counts = new Map<string, number>();
+    classStudents.forEach((student) => {
+      getCharacteristicColourValues(student, colourCharacteristic, false).forEach((value) => {
+        counts.set(value, (counts.get(value) || 0) + 1);
+      });
+    });
+    return colourLegend.map((item) => ({ ...item, count: counts.get(item.value) || 0 }));
+  };
+
+  const handleExportClasses = () => {
+    const exportHeader = ["Class", "Grade", "Teacher", "First name", "Surname", "Student ID", "Gender", "Aggregate", "English %", "Maths %", "2nd Language %", "2nd Language choice", "Medication", "Learner Support", "Race"];
+    const summaryHeader = ["Class", "Teacher", "Grade", "Learners", "Boys", "Girls", "Aggregate avg", "Maths avg", "English avg", "2nd Language avg", "Balance"];
+
+    const summaryRows: SpreadsheetCell[][] = [
+      summaryHeader,
+      ...classStatistics.map((stat): SpreadsheetCell[] => [
+        stat.className,
+        classToTeacher[stat.className] ?? "",
+        classConfigs.find((config) => config.id === stat.classId)?.grade ?? "",
+        stat.totalStudents,
+        stat.maleCount,
+        stat.femaleCount,
+        stat.averages["Aggregate %"],
+        stat.averages["Maths %"],
+        stat.averages["English %"],
+        stat.averages["Afrikaans/Isizulu %"],
+        `${overallBalance}%`,
+      ]),
+    ];
+
+    const sheets: SpreadsheetSheet[] = [
+      { name: "Summary", rows: summaryRows },
+      ...classesWithStudents.map(({ config, students: classStudents }) => ({
+        name: config.name,
+        rows: [
+          exportHeader,
+          ...classStudents.map((student): SpreadsheetCell[] => [
+            config.name,
+            config.grade,
+            classToTeacher[config.name] ?? "",
+            student.firstName,
+            student.lastName,
+            student.studentId ?? "",
+            student.gender ?? "",
+            getExportCharacteristic(student, ["aggregate %", "aggregate"]),
+            getExportCharacteristic(student, ["english %", "english"]),
+            getExportCharacteristic(student, ["maths %", "maths"]),
+            getExportCharacteristic(student, ["afrikaans/isizulu %", "2nd language %", "second language %"]),
+            getExportCharacteristic(student, ["2nd language choice", "second language choice", "afrikaans/isizulu", "2nd language", "second language"]),
+            getExportCharacteristic(student, ["medication"]),
+            getExportCharacteristic(student, ["learner support", "learning support"]),
+            getExportCharacteristic(student, ["race"]),
+          ]),
+        ],
+      })),
+    ];
+
+    downloadXlsx(`shuffleschool-classes-${new Date().toISOString().slice(0, 10)}`, sheets);
+    toast({
+      title: "Export ready",
+      description: `${classesWithStudents.length} class sheet${classesWithStudents.length === 1 ? "" : "s"} plus summary downloaded.`,
+    });
+  };
+
   const handleDragStart = (event: React.DragEvent, student: Student) => {
     event.dataTransfer.effectAllowed = "move";
     event.dataTransfer.setData("text/plain", student.id);
@@ -426,7 +672,8 @@ export default function ReviewPage() {
     if (draggedStudent) {
       const currentPlacement = placements.find((placement) => placement.studentId === draggedStudent.id);
       if (currentPlacement?.classId !== targetClassId) {
-        moveMutation.mutate({ studentId: draggedStudent.id, targetClassId });
+        const historySnapshot: PlacementSnapshot = placements.map(({ studentId, classId }) => ({ studentId, classId }));
+        moveMutation.mutate({ studentId: draggedStudent.id, targetClassId, historySnapshot });
       }
       setDraggedStudent(null);
     }
@@ -502,6 +749,38 @@ export default function ReviewPage() {
               <CardDescription className="text-[11px]">Live placement statistics</CardDescription>
             </CardHeader>
             <CardContent className="space-y-3 p-3">
+              <div className="grid grid-cols-3 gap-1.5">
+                <Button
+                  size="sm"
+                  className="h-8 px-2 text-xs"
+                  onClick={() => regenerateMutation.mutate()}
+                  disabled={regenerateMutation.isPending}
+                  data-testid="button-rerun-solver"
+                >
+                  <RefreshCw className={`mr-1 h-3.5 w-3.5 ${regenerateMutation.isPending ? "animate-spin" : ""}`} /> Re-Run
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8 px-2 text-xs"
+                  onClick={handleUndo}
+                  disabled={undoStack.length === 0 || undoMutation.isPending}
+                  title={undoStack.length > 0 ? `${undoStack.length} change${undoStack.length === 1 ? "" : "s"} to undo` : "No changes to undo"}
+                  data-testid="button-undo"
+                >
+                  <Undo2 className="mr-1 h-3.5 w-3.5" /> Undo{undoStack.length > 0 ? ` (${undoStack.length})` : ""}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8 px-2 text-xs"
+                  onClick={handleExportClasses}
+                  data-testid="button-export-classes"
+                >
+                  <Download className="mr-1 h-3.5 w-3.5" /> Export
+                </Button>
+              </div>
+
               <div className="space-y-1.5">
                 <label className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Grade</label>
                 <Select value={selectedGrade} onValueChange={setSelectedGrade}>
@@ -511,6 +790,29 @@ export default function ReviewPage() {
                     {availableGrades.map((grade) => <SelectItem key={grade} value={grade}>Grade {grade}</SelectItem>)}
                   </SelectContent>
                 </Select>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Characteristic colours</label>
+                <Select value={selectedColourCharacteristic} onValueChange={setSelectedColourCharacteristic}>
+                  <SelectTrigger className="h-8 text-xs" data-testid="select-colour-characteristic"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">No characteristic (gender)</SelectItem>
+                    {colourableCharacteristics.map((characteristic) => (
+                      <SelectItem key={characteristic.id} value={characteristic.id}>{characteristic.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {colourLegend.length > 0 && (
+                  <div className="flex flex-wrap gap-x-2 gap-y-1 rounded border bg-muted/20 px-2 py-1.5" data-testid="colour-legend">
+                    {colourLegend.map((item) => (
+                      <span key={item.value} className="flex items-center gap-1 text-[10px] text-muted-foreground" title={item.value}>
+                        <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: item.colour }} />
+                        <span className="font-medium text-foreground">{item.value}</span> · {item.count}
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
 
               <div className="grid grid-cols-2 overflow-hidden rounded-md border text-xs">
@@ -588,7 +890,7 @@ export default function ReviewPage() {
                       <div key={suggestion.id} className="flex items-center gap-2 rounded border bg-muted/30 p-2 text-xs" data-testid={`boost-suggestion-${suggestion.id}`}>
                         <div className="min-w-0 flex-1"><span className="font-medium">{suggestion.student1.name}</span><ArrowRightLeft className="mx-1 inline h-3 w-3 text-muted-foreground" /><span className="font-medium">{suggestion.student2.name}</span><div className="truncate text-[10px] text-muted-foreground">{suggestion.student1.currentClass} ↔ {suggestion.student2.currentClass}</div></div>
                         <Badge variant="secondary" className="text-[10px]">+{suggestion.improvement}%</Badge>
-                        <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" onClick={() => applyBoostMutation.mutate(suggestion)} disabled={applyBoostMutation.isPending} data-testid={`button-apply-boost-${suggestion.id}`}><Check className="mr-1 h-3 w-3" />Apply</Button>
+                        <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" onClick={() => applyBoostMutation.mutate({ suggestion, historySnapshot: placements.map(({ studentId, classId }) => ({ studentId, classId })) })} disabled={applyBoostMutation.isPending} data-testid={`button-apply-boost-${suggestion.id}`}><Check className="mr-1 h-3 w-3" />Apply</Button>
                       </div>
                     ))}
                   </div></ScrollArea>
@@ -608,17 +910,38 @@ export default function ReviewPage() {
                         <div className="min-w-0"><CardTitle className="truncate text-xs font-semibold" data-testid={`text-class-name-${config.id}`}>{config.name}</CardTitle><CardDescription className="truncate text-[10px]">{teacherName || "No teacher assigned"} · Grade {config.grade}</CardDescription></div>
                         <Badge variant={classStudents.length > (config.capacity || 30) ? "destructive" : "secondary"} className="h-5 shrink-0 px-1.5 text-[10px]">{classStudents.length}/{config.capacity || 30}</Badge>
                       </div>
+                      {colourLegend.length > 0 && (
+                        <div className="mt-1.5 flex flex-wrap gap-1" data-testid={`class-colour-summary-${config.id}`}>
+                          {getClassColourCounts(classStudents).map((item) => (
+                            <span
+                              key={item.value}
+                              className="flex items-center gap-0.5 rounded bg-background px-1 py-px text-[9px] font-semibold leading-4"
+                              style={{ color: item.colour }}
+                              title={`${item.value}: ${item.count}`}
+                            >
+                              <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: item.colour }} />
+                              {item.count}
+                            </span>
+                          ))}
+                        </div>
+                      )}
                     </CardHeader>
                     <CardContent className="p-1.5">
                       <div className="space-y-0.5">
                         {dragOverClass === config.id && draggedStudent && <div className="mb-1 rounded border border-dashed border-primary bg-primary/10 px-1.5 py-1 text-center text-[10px] font-medium text-primary">Drop {draggedStudent.firstName} here</div>}
                         {classStudents.length === 0 ? <p className="py-6 text-center text-[11px] text-muted-foreground">Drop students here</p> : classStudents.map((student) => {
                           const hasConflict = conflicts.some((conflict) => conflict.studentIds.includes(student.id));
+                          const studentColour = getStudentColour(student);
                           return (
                             <motion.div key={student.id} layout initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} transition={{ type: "spring", stiffness: 420, damping: 32 }}>
                               <div draggable onDragStart={(event) => handleDragStart(event, student)} onDragEnd={() => { setDraggedStudent(null); setDragOverClass(null); }} className={`group flex h-7 items-center gap-1 rounded px-1 text-[11px] transition-colors hover:bg-muted cursor-grab active:cursor-grabbing ${hasConflict ? "border border-red-300 bg-red-50/70 dark:border-red-900 dark:bg-red-950/30" : "border border-transparent odd:bg-muted/35"} ${draggedStudent?.id === student.id ? "opacity-40 ring-1 ring-primary" : ""} ${recentlyMovedStudentId === student.id ? "bg-primary/15 ring-1 ring-primary/50" : ""}`} data-testid={`student-card-${student.id}`}>
                                 <GripVertical className="h-3 w-3 shrink-0 text-muted-foreground/60" />
-                                <span className={`min-w-0 flex-1 truncate font-medium ${getGenderTextClass(student.gender)}`}>{student.lastName}, {student.firstName}</span>
+                                <span
+                                  className={`min-w-0 flex-1 truncate font-medium ${studentColour ? "" : getGenderTextClass(student.gender)}`}
+                                  style={studentColour ? { color: studentColour } : undefined}
+                                >
+                                  {student.lastName}, {student.firstName}
+                                </span>
                                 {hasConflict && <Tooltip><TooltipTrigger asChild><AlertTriangle className="h-3 w-3 shrink-0 text-red-500" /></TooltipTrigger><TooltipContent><p>This student is involved in a conflict</p></TooltipContent></Tooltip>}
                               </div>
                             </motion.div>
@@ -637,7 +960,7 @@ export default function ReviewPage() {
               <CardHeader className="border-b px-3 py-2"><CardTitle className="text-xs"><AlertTriangle className="mr-1.5 inline h-3.5 w-3.5 text-amber-500" />Unplaced students ({unplacedStudents.length})</CardTitle></CardHeader>
               <CardContent className="flex flex-wrap gap-1 p-2">
                 {unplacedStudents.map((student) => (
-                  <motion.div key={student.id} layout><div draggable onDragStart={(event) => handleDragStart(event, student)} onDragEnd={() => { setDraggedStudent(null); setDragOverClass(null); }} className="flex h-7 cursor-grab items-center gap-1 rounded border border-amber-200 bg-amber-50 px-1.5 text-[11px] active:cursor-grabbing dark:border-amber-900 dark:bg-amber-950/30"><GripVertical className="h-3 w-3 text-muted-foreground" /><span className={`font-medium ${getGenderTextClass(student.gender)}`}>{student.lastName}, {student.firstName}</span></div></motion.div>
+                  <motion.div key={student.id} layout><div draggable onDragStart={(event) => handleDragStart(event, student)} onDragEnd={() => { setDraggedStudent(null); setDragOverClass(null); }} className="flex h-7 cursor-grab items-center gap-1 rounded border border-amber-200 bg-amber-50 px-1.5 text-[11px] active:cursor-grabbing dark:border-amber-900 dark:bg-amber-950/30"><GripVertical className="h-3 w-3 text-muted-foreground" /><span className={`font-medium ${getStudentColour(student) ? "" : getGenderTextClass(student.gender)}`} style={getStudentColour(student) ? { color: getStudentColour(student)! } : undefined}>{student.lastName}, {student.firstName}</span></div></motion.div>
                 ))}
               </CardContent>
             </Card>
