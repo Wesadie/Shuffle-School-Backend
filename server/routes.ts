@@ -1326,9 +1326,36 @@ export async function registerRoutes(
       }
 
       const replyTo = req.supabaseUser?.email || req.user?.claims?.email || req.user?.email;
-      const requestOrigin = typeof req.get("origin") === "string" ? req.get("origin").replace(/\/$/, "") : "";
+      // Resolve the public base URL for teacher survey links. The link MUST point
+      // at the deployment that serves this app (it owns the /teacher-survey/:token
+      // SPA route). The browser Origin header cannot be trusted blindly: when the
+      // invite is triggered from the marketing site (shuffleschool.co.za), the
+      // origin is that site, which has no /teacher-survey route and 404s. Only
+      // accept the origin when its host matches the host actually serving this
+      // request; otherwise use the Render deployment URL.
       const configuredSurveyUrl = (process.env.TEACHER_SURVEY_APP_URL || "").replace(/\/$/, "");
-      const publicBaseUrl = configuredSurveyUrl || requestOrigin || `${req.protocol}://${req.get("host")}`;
+      const requestHost = (req.get("host") || "").toLowerCase();
+      let sameOriginUrl = "";
+      const originHeader = typeof req.get("origin") === "string" ? req.get("origin") : "";
+      if (originHeader && requestHost) {
+        try {
+          if (new URL(originHeader).host.toLowerCase() === requestHost) {
+            sameOriginUrl = originHeader.replace(/\/$/, "");
+          }
+        } catch {
+          sameOriginUrl = "";
+        }
+      }
+      const renderExternalUrl = (process.env.RENDER_EXTERNAL_URL || "").replace(/\/$/, "");
+      const publicBaseUrl = configuredSurveyUrl || sameOriginUrl || renderExternalUrl || `${req.protocol}://${req.get("host")}`;
+      console.log("[teacher-survey] survey link base resolved", {
+        publicBaseUrl,
+        hasConfiguredUrl: Boolean(configuredSurveyUrl),
+        usedSameOrigin: Boolean(sameOriginUrl),
+        usedRenderUrl: !configuredSurveyUrl && !sameOriginUrl && Boolean(renderExternalUrl),
+        requestHost,
+        originHeader: originHeader || "(none)",
+      });
       const recipients: { id: string; email: string; className: string }[] = [];
 
       for (const allocation of allocations) {
