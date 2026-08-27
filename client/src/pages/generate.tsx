@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Sparkles, Plus, Trash2, Users, AlertCircle, CheckCircle } from "lucide-react";
+import { Sparkles, Plus, Trash2, Users, AlertCircle, CheckCircle, Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -35,6 +35,13 @@ export default function GeneratePage() {
   const [, setLocation] = useLocation();
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [editingConfigId, setEditingConfigId] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState<{
+    name: string;
+    grade: string;
+    capacity: number;
+    teacherId: string;
+  }>({ name: "", grade: "", capacity: 30, teacherId: "none" });
 
   const [formData, setFormData] = useState<Partial<InsertClassConfig>>({
     name: "",
@@ -94,6 +101,69 @@ export default function GeneratePage() {
       toast({ title: "Failed to delete class", variant: "destructive" });
     },
   });
+
+  // Edit an existing class: update name/grade/capacity via the existing class-config
+  // API, then reassign the teacher by updating their currentClass through the
+  // existing teacher API. Teacher assignments are stored by class name, so a
+  // rename also moves the assigned teacher to the new name.
+  const updateConfigMutation = useMutation({
+    mutationFn: async ({ configId, name, grade, capacity, teacherId }: {
+      configId: string;
+      name: string;
+      grade: string;
+      capacity: number;
+      teacherId: string;
+    }) => {
+      const original = classConfigs.find((c) => c.id === configId);
+      if (!original) throw new Error("Class not found");
+
+      await apiRequest("PATCH", `/api/class-configs/${configId}`, { name, grade, capacity });
+
+      const previousTeacher = teachers.find((t) => t.currentClass === original.name);
+      if (teacherId === "none") {
+        if (previousTeacher) {
+          await apiRequest("PATCH", `/api/teachers/${previousTeacher.id}`, { currentClass: null });
+        }
+      } else {
+        const selected = teachers.find((t) => t.id === teacherId);
+        if (!selected) throw new Error("Selected teacher not found");
+        await apiRequest("PATCH", `/api/teachers/${selected.id}`, { currentClass: name });
+        if (previousTeacher && previousTeacher.id !== selected.id) {
+          await apiRequest("PATCH", `/api/teachers/${previousTeacher.id}`, { currentClass: null });
+        }
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/class-configs"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/teachers"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/placements"] });
+      setEditingConfigId(null);
+      toast({ title: "Class updated successfully" });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Failed to update class", description: error.message || undefined, variant: "destructive" });
+    },
+  });
+
+  const openEditDialog = (config: ClassConfig) => {
+    const assignedTeacher = teachers.find((t) => t.currentClass === config.name);
+    setEditForm({
+      name: config.name,
+      grade: config.grade,
+      capacity: config.capacity ?? 30,
+      teacherId: assignedTeacher?.id ?? "none",
+    });
+    setEditingConfigId(config.id);
+  };
+
+  const handleEditSubmit = () => {
+    if (!editingConfigId) return;
+    if (!editForm.name.trim() || !editForm.grade.trim()) {
+      toast({ title: "Please fill in all required fields", variant: "destructive" });
+      return;
+    }
+    updateConfigMutation.mutate({ configId: editingConfigId, ...editForm, name: editForm.name.trim(), grade: editForm.grade.trim() });
+  };
 
   const generateMutation = useMutation({
     mutationFn: () => apiRequest("POST", "/api/generate-classes", {}),
@@ -298,22 +368,37 @@ export default function GeneratePage() {
                 100,
                 (gradeStudents.length / classConfigs.filter((c) => c.grade === config.grade).length / (config.capacity || 30)) * 100
               );
+              const assignedTeacher = teachers.find((t) => t.currentClass === config.name);
               return (
                 <Card key={config.id} data-testid={`card-class-${config.id}`}>
                   <CardHeader className="pb-2">
                     <div className="flex items-center justify-between gap-2">
                       <CardTitle className="text-base">{config.name}</CardTitle>
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        onClick={() => deleteConfigMutation.mutate(config.id)}
-                        data-testid={`button-delete-class-${config.id}`}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
+                      <div className="flex items-center gap-1">
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-8 w-8"
+                          onClick={() => openEditDialog(config)}
+                          data-testid={`button-edit-class-${config.id}`}
+                          aria-label={`Edit ${config.name}`}
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-8 w-8"
+                          onClick={() => deleteConfigMutation.mutate(config.id)}
+                          data-testid={`button-delete-class-${config.id}`}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
                     </div>
                     <CardDescription>
                       Grade {config.grade} • Capacity: {config.capacity}
+                      {assignedTeacher ? ` • ${assignedTeacher.firstName} ${assignedTeacher.lastName}` : ""}
                     </CardDescription>
                   </CardHeader>
                   <CardContent>
@@ -445,6 +530,94 @@ export default function GeneratePage() {
               data-testid="button-save-class"
             >
               {createConfigMutation.isPending ? "Saving..." : "Add Class"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={editingConfigId !== null} onOpenChange={(open) => { if (!open) setEditingConfigId(null); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Edit Class</DialogTitle>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="edit-name">Class Name *</Label>
+              <Input
+                id="edit-name"
+                value={editForm.name}
+                onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
+                data-testid="input-edit-class-name"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit-grade">Grade *</Label>
+              <Input
+                id="edit-grade"
+                value={editForm.grade}
+                onChange={(e) => setEditForm({ ...editForm, grade: e.target.value })}
+                data-testid="input-edit-class-grade"
+              />
+              {grades.length > 0 && (
+                <div className="flex flex-wrap gap-1 mt-2">
+                  {grades.map((g) => (
+                    <Badge
+                      key={g}
+                      variant="outline"
+                      className="cursor-pointer text-xs"
+                      onClick={() => setEditForm({ ...editForm, grade: g })}
+                    >
+                      {g}
+                    </Badge>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="space-y-2">
+              <Label>Assigned Teacher</Label>
+              <Select
+                value={editForm.teacherId}
+                onValueChange={(value) => setEditForm({ ...editForm, teacherId: value })}
+              >
+                <SelectTrigger data-testid="select-edit-class-teacher">
+                  <SelectValue placeholder="Select a teacher..." />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">Unassigned</SelectItem>
+                  {teachers.map((teacher) => (
+                    <SelectItem key={teacher.id} value={teacher.id}>
+                      {teacher.firstName} {teacher.lastName}
+                      {teacher.currentClass && teacher.currentClass !== classConfigs.find((c) => c.id === editingConfigId)?.name
+                        ? ` (currently ${teacher.currentClass})`
+                        : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit-capacity">Capacity</Label>
+              <Input
+                id="edit-capacity"
+                type="number"
+                min={1}
+                max={50}
+                value={editForm.capacity}
+                onChange={(e) => setEditForm({ ...editForm, capacity: Number(e.target.value) })}
+                data-testid="input-edit-class-capacity"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditingConfigId(null)} data-testid="button-edit-cancel">
+              Cancel
+            </Button>
+            <Button
+              onClick={handleEditSubmit}
+              disabled={updateConfigMutation.isPending}
+              data-testid="button-edit-save"
+            >
+              {updateConfigMutation.isPending ? "Saving..." : "Save Changes"}
             </Button>
           </DialogFooter>
         </DialogContent>
