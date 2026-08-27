@@ -231,6 +231,7 @@ export const teachers = pgTable("teachers", {
   allocatedClass: text("allocated_class"),
   surveyStatus: text("survey_status").default("Not Sent"),
   surveyDate: text("survey_date"),
+  teacherPreference: varchar("teacher_preference", { length: 36 }),
 }, (table) => [index("teachers_account_id_idx").on(table.accountId)]);
 
 export const insertTeacherSchema = createInsertSchema(teachers).omit({ id: true, accountId: true });

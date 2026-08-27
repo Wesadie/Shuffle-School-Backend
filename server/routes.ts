@@ -92,12 +92,30 @@ export async function registerRoutes(
         (student) => student.currentClass?.trim().toLowerCase() === payload.className.trim().toLowerCase(),
       );
       const visibleCharacteristics = characteristics.filter((characteristic) => !characteristic.adminOnly);
+      const [rules, teachers] = await Promise.all([
+        storage.getRules(payload.accountId),
+        storage.getTeachers(payload.accountId),
+      ]);
+      const classStudentIds = new Set(classStudents.map((student) => student.id));
+      const classRules = rules.filter(
+        (rule) => classStudentIds.has(rule.studentId1) && classStudentIds.has(rule.studentId2),
+      );
+      const preferredTeacher = teacher.teacherPreference
+        ? teachers.find((item) => item.id === teacher.teacherPreference)
+        : undefined;
       res.json({
         completed: false,
         teacherName: `${teacher.firstName} ${teacher.lastName}`,
         className: payload.className,
         students: classStudents,
         characteristics: visibleCharacteristics,
+        requests: classRules,
+        teachers: teachers
+          .filter((item) => item.id !== teacher.id)
+          .map((item) => ({ id: item.id, name: `${item.firstName} ${item.lastName}` })),
+        teacherPreference: preferredTeacher
+          ? { id: preferredTeacher.id, name: `${preferredTeacher.firstName} ${preferredTeacher.lastName}` }
+          : null,
       });
     } catch (error) {
       res.status(500).json({ error: "Failed to load teacher survey" });
@@ -159,6 +177,104 @@ export async function registerRoutes(
       res.json({ completed: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to complete teacher survey" });
+    }
+  });
+
+  // Teacher requests submitted from the public survey. These reuse the existing
+  // rules system (same table/API the admin Requests page and solver consume);
+  // the reason field marks requests created by this teacher via the survey.
+  const teacherSurveyRequestReason = (teacher: { firstName: string; lastName: string }) =>
+    `Teacher survey request by ${teacher.firstName} ${teacher.lastName}`;
+
+  app.post("/api/public/teacher-surveys/:token/requests", async (req, res) => {
+    try {
+      const resolved = await resolvePublicTeacherSurvey(req.params.token);
+      if (!resolved) return res.status(404).json({ error: "This survey link is invalid or has expired" });
+      const { payload, teacher } = resolved;
+      if (teacher.surveyStatus === "Completed") {
+        return res.status(409).json({ error: "This survey has already been completed" });
+      }
+
+      const type = req.body?.type === "pair" ? "pair" : req.body?.type === "separate" ? "separate" : "";
+      const studentId1 = typeof req.body?.studentId1 === "string" ? req.body.studentId1 : "";
+      const studentId2 = typeof req.body?.studentId2 === "string" ? req.body.studentId2 : "";
+      if (!type) return res.status(400).json({ error: "Request type must be separation or together" });
+      if (!studentId1 || !studentId2 || studentId1 === studentId2) {
+        return res.status(400).json({ error: "Select two different learners" });
+      }
+
+      const students = await storage.getStudents(payload.accountId);
+      const isClassStudent = (studentId: string) => students.some(
+        (student) =>
+          student.id === studentId &&
+          student.currentClass?.trim().toLowerCase() === payload.className.trim().toLowerCase(),
+      );
+      if (!isClassStudent(studentId1) || !isClassStudent(studentId2)) {
+        return res.status(400).json({ error: "Both learners must be part of this survey class" });
+      }
+
+      const rule = await storage.createRule(payload.accountId, {
+        type,
+        studentId1,
+        studentId2,
+        reason: teacherSurveyRequestReason(teacher),
+      });
+      res.status(201).json({ rule });
+    } catch (error) {
+      console.error("[teacher-survey] request save failed", error);
+      res.status(500).json({ error: "Failed to save teacher request" });
+    }
+  });
+
+  app.delete("/api/public/teacher-surveys/:token/requests/:ruleId", async (req, res) => {
+    try {
+      const resolved = await resolvePublicTeacherSurvey(req.params.token);
+      if (!resolved) return res.status(404).json({ error: "This survey link is invalid or has expired" });
+      const { payload, teacher } = resolved;
+      const rule = await storage.getRule(payload.accountId, req.params.ruleId);
+      if (!rule || rule.reason !== teacherSurveyRequestReason(teacher)) {
+        return res.status(404).json({ error: "Request not found" });
+      }
+      const students = await storage.getStudents(payload.accountId);
+      const classStudentIds = new Set(
+        students
+          .filter((student) => student.currentClass?.trim().toLowerCase() === payload.className.trim().toLowerCase())
+          .map((student) => student.id),
+      );
+      if (!classStudentIds.has(rule.studentId1) || !classStudentIds.has(rule.studentId2)) {
+        return res.status(404).json({ error: "Request not found" });
+      }
+      await storage.deleteRule(payload.accountId, rule.id);
+      res.json({ deleted: true });
+    } catch (error) {
+      console.error("[teacher-survey] request delete failed", error);
+      res.status(500).json({ error: "Failed to remove teacher request" });
+    }
+  });
+
+  app.post("/api/public/teacher-surveys/:token/preference", async (req, res) => {
+    try {
+      const resolved = await resolvePublicTeacherSurvey(req.params.token);
+      if (!resolved) return res.status(404).json({ error: "This survey link is invalid or has expired" });
+      const { payload, teacher } = resolved;
+      if (teacher.surveyStatus === "Completed") {
+        return res.status(409).json({ error: "This survey has already been completed" });
+      }
+
+      const teacherId = typeof req.body?.teacherId === "string" ? req.body.teacherId.trim() : "";
+      if (!teacherId) {
+        await storage.updateTeacher(payload.accountId, teacher.id, { teacherPreference: null });
+        return res.json({ teacherPreference: null });
+      }
+      const preferred = await storage.getTeacher(payload.accountId, teacherId);
+      if (!preferred || preferred.id === teacher.id) {
+        return res.status(400).json({ error: "Preferred teacher is not available" });
+      }
+      await storage.updateTeacher(payload.accountId, teacher.id, { teacherPreference: preferred.id });
+      res.json({ teacherPreference: { id: preferred.id, name: `${preferred.firstName} ${preferred.lastName}` } });
+    } catch (error) {
+      console.error("[teacher-survey] preference save failed", error);
+      res.status(500).json({ error: "Failed to save teacher preference" });
     }
   });
 
