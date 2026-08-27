@@ -4,7 +4,7 @@ import { motion } from "framer-motion";
 import {
   Users, AlertTriangle, CheckCircle, ArrowRight, Download,
   GripVertical, Link2, Unlink, BarChart3, RefreshCw, Zap,
-  ArrowRightLeft, Check, Loader2, Undo2
+  ArrowRightLeft, Check, Loader2, Undo2, X
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -91,6 +91,68 @@ const getExportCharacteristic = (student: Student, aliases: string[]) => {
   const match = entries.find(([name]) => aliases.some((alias) => name.toLowerCase() === alias.toLowerCase()));
   if (!match) return "";
   return Array.isArray(match[1]) ? match[1].join(", ") : match[1];
+};
+
+const normalizeGenderKey = (gender?: string | null) => {
+  const normalized = (gender || "").toLowerCase().trim();
+  if (["female", "f", "girl"].includes(normalized)) return "f";
+  if (["male", "m", "boy"].includes(normalized)) return "m";
+  return "";
+};
+
+const normalizeSimilarityText = (value: string) => value.trim().toLowerCase();
+
+// "Find similar learners" fields. Gender acts as a matching requirement (e.g. a
+// selected boy matches other boys); race is deliberately excluded so swaps can
+// rebalance race without disturbing the other characteristics.
+const SIMILARITY_NUMERIC_FIELDS: { key: string; weight: number; aliases: string[] }[] = [
+  { key: "aggregate", weight: 3, aliases: ["Aggregate %", "Aggregate"] },
+  { key: "english", weight: 2, aliases: ["English %", "English"] },
+  { key: "maths", weight: 2, aliases: ["Maths %", "Maths"] },
+  { key: "secondLanguagePct", weight: 2, aliases: ["Afrikaans/Isizulu %", "2nd Language %", "Second Language %"] },
+];
+
+const SIMILARITY_CATEGORY_FIELDS: { key: string; weight: number; aliases: string[] }[] = [
+  { key: "secondLanguageChoice", weight: 3, aliases: ["2nd Language choice", "Second Language choice", "Afrikaans/Isizulu", "2nd Language", "Second Language"] },
+  { key: "medication", weight: 1, aliases: ["Medication"] },
+  { key: "learnerSupport", weight: 2, aliases: ["Learner Support", "Learning Support"] },
+];
+
+const computeSimilarityScore = (
+  selected: Student,
+  candidate: Student,
+  ranges: Map<string, { min: number; max: number }>,
+): number | null => {
+  // Gender is a requirement, not a weighted preference: a selected learner only
+  // matches learners of the same gender (when both genders are known).
+  const selectedGender = normalizeGenderKey(selected.gender);
+  const candidateGender = normalizeGenderKey(candidate.gender);
+  if (selectedGender && candidateGender && selectedGender !== candidateGender) return null;
+
+  let weighted = 0;
+  let totalWeight = 0;
+
+  SIMILARITY_NUMERIC_FIELDS.forEach((field) => {
+    const a = parseCharacteristicNumber(getExportCharacteristic(selected, field.aliases));
+    const b = parseCharacteristicNumber(getExportCharacteristic(candidate, field.aliases));
+    const range = ranges.get(field.key);
+    let part: number;
+    if (a === null || b === null) part = 0.5; // neutral when either value is missing
+    else if (!range) part = a === b ? 1 : 0.5;
+    else part = 1 - Math.min(1, Math.abs(a - b) / Math.max(1, range.max - range.min));
+    weighted += part * field.weight;
+    totalWeight += field.weight;
+  });
+
+  SIMILARITY_CATEGORY_FIELDS.forEach((field) => {
+    const a = normalizeSimilarityText(getExportCharacteristic(selected, field.aliases));
+    const b = normalizeSimilarityText(getExportCharacteristic(candidate, field.aliases));
+    const part = !a || !b ? 0.5 : a === b ? 1 : 0;
+    weighted += part * field.weight;
+    totalWeight += field.weight;
+  });
+
+  return Math.round((weighted / totalWeight) * 100);
 };
 
 const getGenderTextClass = (gender?: string | null) => {
@@ -189,6 +251,7 @@ export default function ReviewPage() {
   const [selectedColourCharacteristic, setSelectedColourCharacteristic] = useState("none");
   const [hiddenCharacteristicIds, setHiddenCharacteristicIds] = useState<string[]>([]);
   const [undoStack, setUndoStack] = useState<PlacementSnapshot[]>([]);
+  const [selectedSimilarStudentId, setSelectedSimilarStudentId] = useState<string | null>(null);
 
   const { data: classConfigs = [], isLoading: configsLoading } = useQuery<ClassConfig[]>({
     queryKey: ["/api/class-configs"],
@@ -649,6 +712,50 @@ export default function ReviewPage() {
   const isCharacteristicBoostable = (characteristicId: string) =>
     (characteristicBoostImprovements.get(characteristicId) ?? 0) > 0.5;
 
+  // Find similar learners: cohort value ranges for the numeric similarity fields.
+  const similarityRanges = useMemo(() => {
+    const ranges = new Map<string, { min: number; max: number }>();
+    SIMILARITY_NUMERIC_FIELDS.forEach((field) => {
+      let min = Infinity;
+      let max = -Infinity;
+      students.forEach((student) => {
+        const value = parseCharacteristicNumber(getExportCharacteristic(student, field.aliases));
+        if (value === null) return;
+        min = Math.min(min, value);
+        max = Math.max(max, value);
+      });
+      if (Number.isFinite(min) && Number.isFinite(max)) ranges.set(field.key, { min, max });
+    });
+    return ranges;
+  }, [students]);
+
+  const selectedSimilarStudent = useMemo(
+    () => students.find((student) => student.id === selectedSimilarStudentId) ?? null,
+    [students, selectedSimilarStudentId],
+  );
+
+  // Similar learners in other classes, keyed by student id with a 0-100 score.
+  const similarityMatches = useMemo(() => {
+    const matches = new Map<string, number>();
+    if (!selectedSimilarStudent) return matches;
+    const selectedClassId = placements.find((p) => p.studentId === selectedSimilarStudent.id)?.classId;
+    students.forEach((candidate) => {
+      if (candidate.id === selectedSimilarStudent.id) return;
+      const candidateClassId = placements.find((p) => p.studentId === candidate.id)?.classId;
+      if (!candidateClassId || candidateClassId === selectedClassId) return;
+      const score = computeSimilarityScore(selectedSimilarStudent, candidate, similarityRanges);
+      if (score !== null && score >= 60) matches.set(candidate.id, score);
+    });
+    return matches;
+  }, [selectedSimilarStudent, students, placements, similarityRanges]);
+
+  const topSimilarMatches = useMemo(
+    () => Array.from(similarityMatches.entries())
+      .map(([studentId, score]) => ({ studentId, score }))
+      .sort((a, b) => b.score - a.score),
+    [similarityMatches],
+  );
+
   const classStatistics = useMemo(() => {
     const percentageFieldNames = ["Aggregate %", "Maths %", "English %", "Afrikaans/Isizulu %"];
     const visibleCharacteristics = characteristics.filter((characteristic) => !characteristic.adminOnly);
@@ -932,7 +1039,7 @@ export default function ReviewPage() {
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight" data-testid="text-page-title">Solver</h1>
-          <p className="text-xs text-muted-foreground">Review & Adjust · Drag students between class columns</p>
+          <p className="text-xs text-muted-foreground">Review & Adjust · Drag students between class columns · Click a learner to find similar</p>
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
           <Badge variant={conflicts.length === 0 ? "default" : "destructive"} className="h-7 gap-1 text-xs">
@@ -1112,6 +1219,38 @@ export default function ReviewPage() {
         </aside>
 
         <main className="min-w-0 space-y-3">
+          {selectedSimilarStudent && (
+            <Card className="border-primary/40" data-testid="card-similar-learners">
+              <CardContent className="p-2.5">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold">Similar learners to {selectedSimilarStudent.firstName} {selectedSimilarStudent.lastName}</p>
+                    <p className="text-[10px] text-muted-foreground">Matched on gender, Aggregate, English %, Maths %, 2nd Language, Medication &amp; Learner Support — race excluded · {similarityMatches.size} match{similarityMatches.size === 1 ? "" : "es"} at 60%+</p>
+                  </div>
+                  <Button size="icon" variant="ghost" className="h-6 w-6 shrink-0" onClick={() => setSelectedSimilarStudentId(null)} aria-label="Clear similar learners" data-testid="button-clear-similar"><X className="h-3.5 w-3.5" /></Button>
+                </div>
+                {topSimilarMatches.length > 0 ? (
+                  <div className="mt-2 space-y-0.5">
+                    {topSimilarMatches.slice(0, 8).map(({ studentId, score }) => {
+                      const match = students.find((s) => s.id === studentId);
+                      const matchClass = classesWithStudents.find(({ students: classStudents }) => classStudents.some((s) => s.id === studentId));
+                      if (!match || !matchClass) return null;
+                      return (
+                        <div key={studentId} className="flex items-center gap-1.5 rounded border border-emerald-200 bg-emerald-50/60 px-1.5 py-1 text-[11px] dark:border-emerald-900 dark:bg-emerald-950/25" data-testid={`similar-match-${studentId}`}>
+                          <span className={`font-medium ${getGenderTextClass(match.gender)}`}>{match.lastName}, {match.firstName}</span>
+                          <span className="min-w-0 flex-1 truncate text-[10px] text-muted-foreground">{matchClass.config.name}</span>
+                          <span className="shrink-0 rounded bg-emerald-600 px-1 py-px text-[9px] font-semibold leading-4 text-white">{score}%</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <p className="mt-1.5 text-[11px] text-muted-foreground">No similar learners found in other classes (learners need a 60%+ profile match).</p>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
           {showBoostPanel && (
             <Card data-testid="card-boost-panel">
               <CardHeader className="flex-row items-center justify-between space-y-0 border-b px-3 py-2">
@@ -1167,9 +1306,11 @@ export default function ReviewPage() {
                         {classStudents.length === 0 ? <p className="py-6 text-center text-[11px] text-muted-foreground">Drop students here</p> : classStudents.map((student) => {
                           const hasConflict = conflicts.some((conflict) => conflict.studentIds.includes(student.id));
                           const studentColour = getStudentColour(student);
+                          const similarityScore = similarityMatches.get(student.id);
+                          const isSimilarSelected = selectedSimilarStudentId === student.id;
                           return (
                             <motion.div key={student.id} layout initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} transition={{ type: "spring", stiffness: 420, damping: 32 }}>
-                              <div draggable onDragStart={(event) => handleDragStart(event, student)} onDragEnd={() => { setDraggedStudent(null); setDragOverClass(null); }} className={`group flex h-7 items-center gap-1 rounded px-1 text-[11px] transition-colors hover:bg-muted cursor-grab active:cursor-grabbing ${hasConflict ? "border border-red-300 bg-red-50/70 dark:border-red-900 dark:bg-red-950/30" : "border border-transparent odd:bg-muted/35"} ${draggedStudent?.id === student.id ? "opacity-40 ring-1 ring-primary" : ""} ${recentlyMovedStudentId === student.id ? "bg-primary/15 ring-1 ring-primary/50" : ""}`} data-testid={`student-card-${student.id}`}>
+                              <div draggable onDragStart={(event) => handleDragStart(event, student)} onDragEnd={() => { setDraggedStudent(null); setDragOverClass(null); }} onClick={() => setSelectedSimilarStudentId((current) => current === student.id ? null : student.id)} className={`group flex h-7 items-center gap-1 rounded px-1 text-[11px] transition-colors cursor-grab active:cursor-grabbing ${hasConflict ? "border border-red-300 bg-red-50/70 dark:border-red-900 dark:bg-red-950/30" : similarityScore !== undefined ? (similarityScore >= 85 ? "border border-emerald-400 bg-emerald-100/80 hover:bg-emerald-100 dark:border-emerald-700 dark:bg-emerald-950/50" : "border border-emerald-200 bg-emerald-50/60 hover:bg-emerald-50 dark:border-emerald-900 dark:bg-emerald-950/25") : "border border-transparent odd:bg-muted/35 hover:bg-muted"} ${draggedStudent?.id === student.id ? "opacity-40 ring-1 ring-primary" : ""} ${recentlyMovedStudentId === student.id ? "bg-primary/15 ring-1 ring-primary/50" : ""} ${isSimilarSelected ? "ring-2 ring-primary bg-primary/10" : ""}`} data-testid={`student-card-${student.id}`}>
                                 <GripVertical className="h-3 w-3 shrink-0 text-muted-foreground/60" />
                                 <span
                                   className={`min-w-0 flex-1 truncate font-medium ${studentColour ? "" : getGenderTextClass(student.gender)}`}
@@ -1177,6 +1318,9 @@ export default function ReviewPage() {
                                 >
                                   {student.lastName}, {student.firstName}
                                 </span>
+                                {similarityScore !== undefined && (
+                                  <span className="shrink-0 rounded bg-emerald-600 px-1 py-px text-[9px] font-semibold leading-4 text-white" data-testid={`similar-score-${student.id}`}>{similarityScore}%</span>
+                                )}
                                 {hasConflict && <Tooltip><TooltipTrigger asChild><AlertTriangle className="h-3 w-3 shrink-0 text-red-500" /></TooltipTrigger><TooltipContent><p>This student is involved in a conflict</p></TooltipContent></Tooltip>}
                               </div>
                             </motion.div>
