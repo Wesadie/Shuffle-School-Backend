@@ -34,6 +34,7 @@ import {
   type ConflictWarning,
   type ClassGenerationResult,
   type GeneratedClass,
+  type PlacementRequest,
   type PlacementRequestView,
 } from "@shared/schema";
 import { CHARACTERISTIC_TYPES, characteristicValueToArray, defaultResponseColor, getStableResponseId, isCharacteristicApplicableToGrade, normalizeResponses } from "@shared/characteristics";
@@ -93,11 +94,22 @@ export async function registerRoutes(
         (student) => student.currentClass?.trim().toLowerCase() === payload.className.trim().toLowerCase(),
       );
       const visibleCharacteristics = characteristics.filter((characteristic) => !characteristic.adminOnly);
-      const [rules, teachers, placementRequestRows] = await Promise.all([
+      const [rules, teachers] = await Promise.all([
         storage.getRules(payload.accountId),
         storage.getTeachers(payload.accountId),
-        storage.getPlacementRequests(payload.accountId),
       ]);
+      // Placement requests live in a newer table. Fetch them separately so a
+      // pending migration cannot break loading the survey itself; the section
+      // simply stays empty until the table exists.
+      let placementRequestRows: PlacementRequest[] = [];
+      try {
+        placementRequestRows = await storage.getPlacementRequests(payload.accountId);
+      } catch (error) {
+        console.warn(
+          "[teacher-survey] placement requests unavailable (has the placement_requests migration been applied?)",
+          error instanceof Error ? error.message : error,
+        );
+      }
       const classStudentIds = new Set(classStudents.map((student) => student.id));
       const classRules = rules.filter(
         (rule) => classStudentIds.has(rule.studentId1) && classStudentIds.has(rule.studentId2),
@@ -321,6 +333,13 @@ export async function registerRoutes(
       };
       res.status(existing ? 200 : 201).json({ request });
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes("placement_requests") || message.includes("does not exist")) {
+        console.error("[teacher-survey] placement request table missing (migration pending)");
+        return res.status(503).json({
+          error: "Placement requests are not available yet. The database migration for this feature is still pending.",
+        });
+      }
       console.error("[teacher-survey] placement request failed", error);
       res.status(500).json({ error: "Failed to save placement request" });
     }
@@ -725,8 +744,18 @@ export async function registerRoutes(
   app.get("/api/placement-requests", isAuthenticated, async (req, res) => {
     try {
       const accountId = accountIdFor(req);
-      const [requests, students, teachers] = await Promise.all([
-        storage.getPlacementRequests(accountId),
+      let requests;
+      try {
+        requests = await storage.getPlacementRequests(accountId);
+      } catch (error) {
+        // Migration pending: report an empty list instead of failing the page.
+        console.warn(
+          "[placement-requests] table unavailable (has the placement_requests migration been applied?)",
+          error instanceof Error ? error.message : error,
+        );
+        return res.json([]);
+      }
+      const [students, teachers] = await Promise.all([
         storage.getStudents(accountId),
         storage.getTeachers(accountId),
       ]);
