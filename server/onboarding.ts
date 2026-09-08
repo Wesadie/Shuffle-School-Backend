@@ -43,6 +43,36 @@ export async function ensureOnboardingAccount(user: NonNullable<Express.Request[
       [user.id, user.email ?? null, firstName, lastName, avatarUrl],
     );
 
+    // Administrator invites: when this sign-in's email matches an invited
+    // membership, link that membership to the real user id so the invited
+    // administrator joins the school's existing account instead of a new one.
+    if (user.email) {
+      const invited = await client.query<{ membership_id: string; invited_user_id: string }>(
+        `SELECT am.id AS membership_id, am.user_id AS invited_user_id
+         FROM account_memberships am
+         JOIN profiles p ON p.id = am.user_id
+         WHERE lower(p.email) = lower($1) AND am.status = 'invited'
+         ORDER BY am.created_at ASC
+         LIMIT 1`,
+        [user.email],
+      );
+      const invite = invited.rows[0];
+      if (invite && invite.invited_user_id !== user.id) {
+        await client.query(
+          `UPDATE account_memberships
+           SET user_id = $1, status = 'active', accepted_at = NOW(), updated_at = NOW()
+           WHERE id = $2`,
+          [user.id, invite.membership_id],
+        );
+        await client.query(
+          `DELETE FROM profiles p
+           WHERE p.id = $1 AND p.id <> $2
+             AND NOT EXISTS (SELECT 1 FROM account_memberships am WHERE am.user_id = p.id)`,
+          [invite.invited_user_id, user.id],
+        );
+      }
+    }
+
     const existing = await client.query<OnboardingAccount>(
       `SELECT a.id AS "accountId", a.status AS "accountStatus", a.workspace_mode AS "workspaceMode",
               COALESCE(s.status, 'trialing') AS "subscriptionStatus",

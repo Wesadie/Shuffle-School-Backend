@@ -36,6 +36,7 @@ import {
   type GeneratedClass,
   type PlacementRequest,
   type PlacementRequestView,
+  type AdministratorView,
 } from "@shared/schema";
 import { CHARACTERISTIC_TYPES, characteristicValueToArray, defaultResponseColor, getStableResponseId, isCharacteristicApplicableToGrade, normalizeResponses } from "@shared/characteristics";
 import { z } from "zod";
@@ -787,6 +788,141 @@ export async function registerRoutes(
       return res.status(404).json({ error: "Placement request not found" });
     }
     res.status(204).send();
+  });
+
+  // Administrator management, reusing the existing account membership system:
+  // membership role 'owner' is the Primary Administrator, 'admin' marks
+  // additional administrators (same app permissions as before). The Primary
+  // Administrator protections below are enforced server-side.
+  const getPrimaryAdministratorContext = async (req: any, res: any) => {
+    const accountId = accountIdFor(req);
+    const userId = (req.supabaseUser?.id ?? req.user?.claims?.sub) as string | undefined;
+    if (!userId) {
+      res.status(401).json({ error: "Authentication required" });
+      return null;
+    }
+    const memberships = await storage.getAccountMembershipsWithProfiles(accountId);
+    const current = memberships.find((membership) => membership.userId === userId);
+    if (!current || current.role !== "owner") {
+      res.status(403).json({ error: "Only the Primary Administrator can manage administrators" });
+      return null;
+    }
+    return { accountId, memberships, current, userId };
+  };
+
+  app.get("/api/administrators", isAuthenticated, async (req, res) => {
+    try {
+      const memberships = await storage.getAccountMembershipsWithProfiles(accountIdFor(req));
+      const administrators: AdministratorView[] = memberships.map((membership) => ({
+        id: membership.id,
+        userId: membership.userId,
+        firstName: membership.firstName,
+        lastName: membership.lastName,
+        email: membership.email,
+        role: membership.role,
+        status: membership.status,
+        isPrimary: membership.role === "owner",
+      }));
+      res.json(administrators);
+    } catch (error) {
+      console.error("[administrators] list failed", error);
+      res.status(500).json({ error: "Failed to load administrators" });
+    }
+  });
+
+  app.post("/api/administrators", isAuthenticated, requireWritableWorkspace, async (req, res) => {
+    const context = await getPrimaryAdministratorContext(req, res);
+    if (!context) return;
+    try {
+      const email = typeof req.body?.email === "string" ? req.body.email.trim().toLowerCase() : "";
+      const firstName = typeof req.body?.firstName === "string" ? req.body.firstName.trim() : "";
+      const lastName = typeof req.body?.lastName === "string" ? req.body.lastName.trim() : "";
+      if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        return res.status(400).json({ error: "A valid email address is required" });
+      }
+      if (context.memberships.some((membership) => (membership.email ?? "").toLowerCase() === email)) {
+        return res.status(409).json({ error: "This person is already an administrator" });
+      }
+
+      // Reuse the person's existing profile when they already have a login;
+      // otherwise create a profile that is linked to their account at first
+      // sign-in (see the invited-membership reconciliation in onboarding).
+      const existingProfile = await storage.findProfileByEmail(email);
+      const profile = existingProfile
+        ? existingProfile
+        : await storage.createProfile({ email, firstName: firstName || null, lastName: lastName || null });
+      const membership = await storage.createAccountMembership(context.accountId, {
+        userId: profile.id,
+        role: "admin",
+        status: existingProfile ? "active" : "invited",
+        invitedBy: context.userId,
+        acceptedAt: existingProfile ? new Date() : null,
+      });
+
+      const administrator: AdministratorView = {
+        id: membership.id,
+        userId: profile.id,
+        firstName: profile.firstName,
+        lastName: profile.lastName,
+        email: profile.email,
+        role: membership.role,
+        status: membership.status,
+        isPrimary: false,
+      };
+      res.status(201).json(administrator);
+    } catch (error) {
+      console.error("[administrators] add failed", error);
+      res.status(500).json({ error: "Failed to add administrator" });
+    }
+  });
+
+  app.delete("/api/administrators/:id", isAuthenticated, requireWritableWorkspace, async (req, res) => {
+    const context = await getPrimaryAdministratorContext(req, res);
+    if (!context) return;
+    const target = context.memberships.find((membership) => membership.id === req.params.id);
+    if (!target) {
+      return res.status(404).json({ error: "Administrator not found" });
+    }
+    // Server-side protection: the Primary Administrator can never be removed.
+    if (target.role === "owner") {
+      return res.status(403).json({
+        error: "The Primary Administrator cannot be removed. Transfer primary ownership first.",
+      });
+    }
+    await storage.deleteAccountMembership(context.accountId, target.id);
+    res.status(204).send();
+  });
+
+  app.post("/api/administrators/:id/transfer-primary", isAuthenticated, requireWritableWorkspace, async (req, res) => {
+    const context = await getPrimaryAdministratorContext(req, res);
+    if (!context) return;
+    if (req.body?.confirm !== true) {
+      return res.status(400).json({ error: "Confirmation is required to transfer the Primary Administrator role" });
+    }
+    const target = context.memberships.find((membership) => membership.id === req.params.id);
+    if (!target) {
+      return res.status(404).json({ error: "Administrator not found" });
+    }
+    if (target.userId === context.userId) {
+      return res.status(400).json({ error: "Select a different administrator to transfer ownership to" });
+    }
+    if (target.role !== "admin" || target.status !== "active") {
+      return res.status(400).json({ error: "Only an existing active administrator can become the Primary Administrator" });
+    }
+    await storage.updateAccountMembership(context.accountId, target.id, { role: "owner" });
+    await storage.updateAccountMembership(context.accountId, context.current.id, { role: "admin" });
+    res.json({ transferred: true });
+  });
+
+  app.patch("/api/administrators/primary-email", isAuthenticated, requireWritableWorkspace, async (req, res) => {
+    const context = await getPrimaryAdministratorContext(req, res);
+    if (!context) return;
+    const email = typeof req.body?.email === "string" ? req.body.email.trim() : "";
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ error: "A valid email address is required" });
+    }
+    await storage.updateProfileEmail(context.userId, email);
+    res.json({ email });
   });
 
   app.get("/api/rules", isAuthenticated, async (req, res) => {

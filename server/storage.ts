@@ -16,6 +16,9 @@ import {
   type InsertTeacher,
   type PlacementRequest,
   type InsertPlacementRequest,
+  type Profile,
+  type AccountMembership,
+  type InsertAccountMembership,
   type Survey,
   type InsertSurvey,
   type Scenario,
@@ -29,13 +32,15 @@ import {
   placements,
   teachers,
   placementRequests,
+  profiles,
+  accountMemberships,
   surveys,
   scenarios,
   users,
   appSettings,
 } from "@shared/schema";
 import { db, pool } from "./db";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { randomUUID } from "crypto";
 
 export interface CharacteristicSettingsInput {
@@ -208,6 +213,98 @@ export class DatabaseStorage {
     const result = await db
       .delete(placementRequests)
       .where(and(eq(placementRequests.accountId, accountId), eq(placementRequests.id, id)))
+      .returning();
+    return result.length > 0;
+  }
+
+  // ---- Administrator management (reuses account memberships + profiles) ----
+
+  async getAccountMembershipsWithProfiles(
+    accountId: string,
+  ): Promise<Array<AccountMembership & { email: string | null; firstName: string | null; lastName: string | null }>> {
+    accountId = requireAccountId(accountId);
+    return await db
+      .select({
+        id: accountMemberships.id,
+        accountId: accountMemberships.accountId,
+        userId: accountMemberships.userId,
+        role: accountMemberships.role,
+        status: accountMemberships.status,
+        invitedBy: accountMemberships.invitedBy,
+        invitedAt: accountMemberships.invitedAt,
+        acceptedAt: accountMemberships.acceptedAt,
+        createdAt: accountMemberships.createdAt,
+        updatedAt: accountMemberships.updatedAt,
+        email: profiles.email,
+        firstName: profiles.firstName,
+        lastName: profiles.lastName,
+      })
+      .from(accountMemberships)
+      .leftJoin(profiles, eq(accountMemberships.userId, profiles.id))
+      .where(eq(accountMemberships.accountId, accountId));
+  }
+
+  async findProfileByEmail(email: string): Promise<Profile | undefined> {
+    const [profile] = await db
+      .select()
+      .from(profiles)
+      .where(sql`lower(${profiles.email}) = lower(${email})`)
+      .limit(1);
+    return profile ?? undefined;
+  }
+
+  async createProfile(input: {
+    email: string;
+    firstName?: string | null;
+    lastName?: string | null;
+  }): Promise<Profile> {
+    const [profile] = await db
+      .insert(profiles)
+      .values({
+        id: randomUUID(),
+        email: input.email,
+        firstName: input.firstName ?? null,
+        lastName: input.lastName ?? null,
+      })
+      .returning();
+    return profile;
+  }
+
+  async updateProfileEmail(userId: string, email: string): Promise<void> {
+    await db.update(profiles).set({ email, updatedAt: new Date() }).where(eq(profiles.id, userId));
+  }
+
+  async createAccountMembership(
+    accountId: string,
+    input: { userId: string; role: string; status: string; invitedBy?: string | null; acceptedAt?: Date | null },
+  ): Promise<AccountMembership> {
+    accountId = requireAccountId(accountId);
+    const [membership] = await db
+      .insert(accountMemberships)
+      .values({ accountId, ...input })
+      .returning();
+    return membership;
+  }
+
+  async updateAccountMembership(
+    accountId: string,
+    id: string,
+    updates: Partial<InsertAccountMembership>,
+  ): Promise<AccountMembership | undefined> {
+    accountId = requireAccountId(accountId);
+    const [updated] = await db
+      .update(accountMemberships)
+      .set(updates)
+      .where(and(eq(accountMemberships.accountId, accountId), eq(accountMemberships.id, id)))
+      .returning();
+    return updated || undefined;
+  }
+
+  async deleteAccountMembership(accountId: string, id: string): Promise<boolean> {
+    accountId = requireAccountId(accountId);
+    const result = await db
+      .delete(accountMemberships)
+      .where(and(eq(accountMemberships.accountId, accountId), eq(accountMemberships.id, id)))
       .returning();
     return result.length > 0;
   }

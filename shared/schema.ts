@@ -265,6 +265,20 @@ export interface PlacementRequestView {
   requestedByTeacherName: string;
 }
 
+// API view of an account administrator (account membership + profile).
+// Membership role 'owner' is the Primary Administrator; 'admin' marks
+// additional administrators with the same app permissions.
+export interface AdministratorView {
+  id: string;
+  userId: string;
+  firstName: string | null;
+  lastName: string | null;
+  email: string | null;
+  role: string;
+  status: string;
+  isPrimary: boolean;
+}
+
 // Frontend types for class generation result
 export interface GeneratedClass {
   classConfig: ClassConfig;
