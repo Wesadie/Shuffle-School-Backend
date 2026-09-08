@@ -20,7 +20,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { isCharacteristicApplicableToGrade, normalizeResponses } from "@shared/characteristics";
-import type { Characteristic, Rule, Student } from "@shared/schema";
+import type { Characteristic, PlacementRequestView, Rule, Student } from "@shared/schema";
 
 type SurveyTeacherOption = { id: string; name: string };
 
@@ -32,7 +32,7 @@ type SurveyData = {
   characteristics?: Characteristic[];
   requests?: Rule[];
   teachers?: SurveyTeacherOption[];
-  teacherPreference?: SurveyTeacherOption | null;
+  placementRequests?: PlacementRequestView[];
 };
 
 async function readJsonResponse<T>(response: Response): Promise<T> {
@@ -72,12 +72,14 @@ export default function TeacherSurveyPage({ token }: { token: string }) {
   const [students, setStudents] = useState<Student[]>([]);
   const [requests, setRequests] = useState<Rule[]>([]);
   const [teacherOptions, setTeacherOptions] = useState<SurveyTeacherOption[]>([]);
-  const [teacherPreference, setTeacherPreference] = useState<SurveyTeacherOption | null>(null);
+  const [placementRequests, setPlacementRequests] = useState<PlacementRequestView[]>([]);
+  const [placementStudentId, setPlacementStudentId] = useState("");
+  const [placementTeacherId, setPlacementTeacherId] = useState("");
   const [requestType, setRequestType] = useState<"separate" | "pair">("separate");
   const [requestStudent1, setRequestStudent1] = useState("");
   const [requestStudent2, setRequestStudent2] = useState("");
   const [requestSaveState, setRequestSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
-  const [preferenceSaveState, setPreferenceSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [placementSaveState, setPlacementSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const saveTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   const activeSaves = useRef(0);
@@ -93,9 +95,7 @@ export default function TeacherSurveyPage({ token }: { token: string }) {
     if (surveyQuery.data?.students) setStudents(surveyQuery.data.students);
     if (surveyQuery.data?.requests) setRequests(surveyQuery.data.requests);
     if (surveyQuery.data?.teachers) setTeacherOptions(surveyQuery.data.teachers);
-    if (surveyQuery.data?.teacherPreference !== undefined) {
-      setTeacherPreference(surveyQuery.data.teacherPreference);
-    }
+    if (surveyQuery.data?.placementRequests) setPlacementRequests(surveyQuery.data.placementRequests);
   }, [surveyQuery.data]);
 
   useEffect(() => () => {
@@ -187,21 +187,42 @@ export default function TeacherSurveyPage({ token }: { token: string }) {
     onError: () => setRequestSaveState("error"),
   });
 
-  const savePreferenceMutation = useMutation({
-    mutationFn: async (teacherId: string) =>
-      readJsonResponse<{ teacherPreference: SurveyTeacherOption | null }>(
-        await fetch(apiUrl(`/api/public/teacher-surveys/${encodeURIComponent(token)}/preference`), {
+  const addPlacementRequestMutation = useMutation({
+    mutationFn: async (input: { studentId: string; teacherId: string }) =>
+      readJsonResponse<{ request: PlacementRequestView }>(
+        await fetch(apiUrl(`/api/public/teacher-surveys/${encodeURIComponent(token)}/placement-requests`), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ teacherId }),
+          body: JSON.stringify(input),
         }),
       ),
-    onMutate: () => setPreferenceSaveState("saving"),
+    onMutate: () => setPlacementSaveState("saving"),
     onSuccess: (data) => {
-      setTeacherPreference(data.teacherPreference);
-      setPreferenceSaveState("saved");
+      setPlacementRequests((current) => [
+        ...current.filter((request) => request.studentId !== data.request.studentId),
+        data.request,
+      ]);
+      setPlacementStudentId("");
+      setPlacementTeacherId("");
+      setPlacementSaveState("saved");
     },
-    onError: () => setPreferenceSaveState("error"),
+    onError: () => setPlacementSaveState("error"),
+  });
+
+  const removePlacementRequestMutation = useMutation({
+    mutationFn: async (requestId: string) =>
+      readJsonResponse<{ deleted: boolean }>(
+        await fetch(
+          apiUrl(`/api/public/teacher-surveys/${encodeURIComponent(token)}/placement-requests/${encodeURIComponent(requestId)}`),
+          { method: "DELETE" },
+        ),
+      ),
+    onMutate: () => setPlacementSaveState("saving"),
+    onSuccess: (_data, requestId) => {
+      setPlacementRequests((current) => current.filter((request) => request.id !== requestId));
+      setPlacementSaveState("saved");
+    },
+    onError: () => setPlacementSaveState("error"),
   });
 
   if (surveyQuery.isLoading) {
@@ -411,31 +432,67 @@ export default function TeacherSurveyPage({ token }: { token: string }) {
             )}
 
             <div className="border-t pt-4">
-              <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+              <div className="mb-3 flex items-center justify-between gap-3">
                 <div>
-                  <label className="text-sm font-medium">Teacher preference for next year</label>
+                  <label className="text-sm font-medium">Learner placement requests for next year</label>
                   <p className="text-sm text-muted-foreground">
-                    Optional — who would you prefer to work with next year?
+                    Recommend which teacher a learner from your class should be placed with next year.
                   </p>
                 </div>
-                <div className="flex items-center gap-2 md:w-80">
-                  <Select
-                    value={teacherPreference?.id ?? "none"}
-                    onValueChange={(next) => savePreferenceMutation.mutate(next === "none" ? "" : next)}
-                  >
-                    <SelectTrigger data-testid="select-teacher-preference"><SelectValue placeholder="No preference" /></SelectTrigger>
-                    <SelectContent className="max-h-72">
-                      <SelectItem value="none">No preference</SelectItem>
-                      {teacherOptions.map((option) => (
-                        <SelectItem key={option.id} value={option.id}>{option.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  {preferenceSaveState === "saving" && <span className="text-sm text-muted-foreground">Saving…</span>}
-                  {preferenceSaveState === "saved" && <span className="text-sm text-green-700">Saved</span>}
-                  {preferenceSaveState === "error" && <span className="text-sm text-destructive">Not saved</span>}
-                </div>
+                {placementSaveState === "saving" && <span className="text-sm text-muted-foreground">Saving…</span>}
+                {placementSaveState === "saved" && <span className="text-sm text-green-700">Requests saved</span>}
+                {placementSaveState === "error" && <span className="text-sm text-destructive">A request could not be saved</span>}
               </div>
+
+              <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] md:items-center">
+                <LearnerSelect students={students} value={placementStudentId} onChange={setPlacementStudentId} />
+                <Select value={placementTeacherId || undefined} onValueChange={setPlacementTeacherId}>
+                  <SelectTrigger data-testid="select-placement-teacher"><SelectValue placeholder="Select a teacher…" /></SelectTrigger>
+                  <SelectContent className="max-h-72">
+                    {teacherOptions.map((option) => (
+                      <SelectItem key={option.id} value={option.id}>{option.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Button
+                  size="sm"
+                  disabled={!placementStudentId || !placementTeacherId || addPlacementRequestMutation.isPending}
+                  onClick={() => addPlacementRequestMutation.mutate({
+                    studentId: placementStudentId,
+                    teacherId: placementTeacherId,
+                  })}
+                  data-testid="button-add-placement-request"
+                >
+                  {addPlacementRequestMutation.isPending ? "Saving…" : "Add request"}
+                </Button>
+              </div>
+
+              {placementRequests.length > 0 && (
+                <ul className="mt-3 space-y-1.5" data-testid="list-placement-requests">
+                  {placementRequests.map((request) => (
+                    <li
+                      key={request.id}
+                      className="flex items-center gap-2 rounded-md border px-3 py-2 text-sm"
+                      data-testid={`placement-request-${request.id}`}
+                    >
+                      <span className="min-w-0 flex-1 truncate font-medium">{request.studentName}</span>
+                      <span className="text-muted-foreground">→</span>
+                      <span className="min-w-0 flex-1 truncate font-medium">{request.teacherName}</span>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-6 w-6"
+                        onClick={() => removePlacementRequestMutation.mutate(request.id)}
+                        disabled={removePlacementRequestMutation.isPending}
+                        aria-label="Remove placement request"
+                        data-testid={`button-remove-placement-request-${request.id}`}
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
           </div>
         </section>

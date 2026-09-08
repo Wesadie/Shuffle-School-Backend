@@ -231,12 +231,39 @@ export const teachers = pgTable("teachers", {
   allocatedClass: text("allocated_class"),
   surveyStatus: text("survey_status").default("Not Sent"),
   surveyDate: text("survey_date"),
-  teacherPreference: varchar("teacher_preference", { length: 36 }),
 }, (table) => [index("teachers_account_id_idx").on(table.accountId)]);
 
 export const insertTeacherSchema = createInsertSchema(teachers).omit({ id: true, accountId: true });
 export type InsertTeacher = z.infer<typeof insertTeacherSchema>;
 export type Teacher = typeof teachers.$inferSelect;
+
+// Learner-to-teacher placement requests (e.g. submitted via teacher surveys)
+// recommending which teacher a learner should be placed with next year.
+export const placementRequests = pgTable("placement_requests", {
+  id: varchar("id", { length: 36 }).primaryKey(),
+  accountId: uuid("account_id").notNull().default(developmentAccountSql).references(() => accounts.id, { onDelete: "cascade" }),
+  studentId: varchar("student_id", { length: 36 }).notNull().references(() => students.id, { onDelete: "cascade" }),
+  teacherId: varchar("teacher_id", { length: 36 }).notNull().references(() => teachers.id, { onDelete: "cascade" }),
+  requestedByTeacherId: varchar("requested_by_teacher_id", { length: 36 }).notNull().references(() => teachers.id, { onDelete: "cascade" }),
+  createdAt: text("created_at").notNull(),
+}, (table) => [
+  index("placement_requests_account_id_idx").on(table.accountId),
+  unique("placement_requests_student_requester_unique").on(table.studentId, table.requestedByTeacherId),
+]);
+
+export const insertPlacementRequestSchema = createInsertSchema(placementRequests).omit({ id: true, accountId: true });
+export type InsertPlacementRequest = z.infer<typeof insertPlacementRequestSchema>;
+export type PlacementRequest = typeof placementRequests.$inferSelect;
+
+// API view of a placement request with names resolved for display.
+export interface PlacementRequestView {
+  id: string;
+  studentId: string;
+  studentName: string;
+  teacherId: string;
+  teacherName: string;
+  requestedByTeacherName: string;
+}
 
 // Frontend types for class generation result
 export interface GeneratedClass {

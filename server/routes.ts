@@ -34,6 +34,7 @@ import {
   type ConflictWarning,
   type ClassGenerationResult,
   type GeneratedClass,
+  type PlacementRequestView,
 } from "@shared/schema";
 import { CHARACTERISTIC_TYPES, characteristicValueToArray, defaultResponseColor, getStableResponseId, isCharacteristicApplicableToGrade, normalizeResponses } from "@shared/characteristics";
 import { z } from "zod";
@@ -92,17 +93,32 @@ export async function registerRoutes(
         (student) => student.currentClass?.trim().toLowerCase() === payload.className.trim().toLowerCase(),
       );
       const visibleCharacteristics = characteristics.filter((characteristic) => !characteristic.adminOnly);
-      const [rules, teachers] = await Promise.all([
+      const [rules, teachers, placementRequestRows] = await Promise.all([
         storage.getRules(payload.accountId),
         storage.getTeachers(payload.accountId),
+        storage.getPlacementRequests(payload.accountId),
       ]);
       const classStudentIds = new Set(classStudents.map((student) => student.id));
       const classRules = rules.filter(
         (rule) => classStudentIds.has(rule.studentId1) && classStudentIds.has(rule.studentId2),
       );
-      const preferredTeacher = teacher.teacherPreference
-        ? teachers.find((item) => item.id === teacher.teacherPreference)
-        : undefined;
+      const resolveTeacherName = (teacherId: string) => {
+        const item = teachers.find((entry) => entry.id === teacherId);
+        return item ? `${item.firstName} ${item.lastName}` : "Unknown teacher";
+      };
+      const teacherPlacementRequests: PlacementRequestView[] = placementRequestRows
+        .filter((request) => request.requestedByTeacherId === teacher.id)
+        .map((request) => {
+          const student = students.find((entry) => entry.id === request.studentId);
+          return {
+            id: request.id,
+            studentId: request.studentId,
+            studentName: student ? `${student.firstName} ${student.lastName}` : "Unknown learner",
+            teacherId: request.teacherId,
+            teacherName: resolveTeacherName(request.teacherId),
+            requestedByTeacherName: `${teacher.firstName} ${teacher.lastName}`,
+          };
+        });
       res.json({
         completed: false,
         teacherName: `${teacher.firstName} ${teacher.lastName}`,
@@ -110,12 +126,8 @@ export async function registerRoutes(
         students: classStudents,
         characteristics: visibleCharacteristics,
         requests: classRules,
-        teachers: teachers
-          .filter((item) => item.id !== teacher.id)
-          .map((item) => ({ id: item.id, name: `${item.firstName} ${item.lastName}` })),
-        teacherPreference: preferredTeacher
-          ? { id: preferredTeacher.id, name: `${preferredTeacher.firstName} ${preferredTeacher.lastName}` }
-          : null,
+        teachers: teachers.map((item) => ({ id: item.id, name: `${item.firstName} ${item.lastName}` })),
+        placementRequests: teacherPlacementRequests,
       });
     } catch (error) {
       res.status(500).json({ error: "Failed to load teacher survey" });
@@ -252,7 +264,11 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/public/teacher-surveys/:token/preference", async (req, res) => {
+  // Learner-to-teacher placement requests: a teacher recommends that a learner
+  // from their class be placed with a specific teacher next year. Multiple
+  // requests per teacher are allowed (one per learner); re-submitting for the
+  // same learner updates the recommended teacher.
+  app.post("/api/public/teacher-surveys/:token/placement-requests", async (req, res) => {
     try {
       const resolved = await resolvePublicTeacherSurvey(req.params.token);
       if (!resolved) return res.status(404).json({ error: "This survey link is invalid or has expired" });
@@ -261,20 +277,70 @@ export async function registerRoutes(
         return res.status(409).json({ error: "This survey has already been completed" });
       }
 
+      const studentId = typeof req.body?.studentId === "string" ? req.body.studentId : "";
       const teacherId = typeof req.body?.teacherId === "string" ? req.body.teacherId.trim() : "";
-      if (!teacherId) {
-        await storage.updateTeacher(payload.accountId, teacher.id, { teacherPreference: null });
-        return res.json({ teacherPreference: null });
+      if (!studentId || !teacherId) {
+        return res.status(400).json({ error: "Select a learner and a teacher" });
       }
-      const preferred = await storage.getTeacher(payload.accountId, teacherId);
-      if (!preferred || preferred.id === teacher.id) {
-        return res.status(400).json({ error: "Preferred teacher is not available" });
+
+      const students = await storage.getStudents(payload.accountId);
+      const student = students.find(
+        (entry) =>
+          entry.id === studentId &&
+          entry.currentClass?.trim().toLowerCase() === payload.className.trim().toLowerCase(),
+      );
+      if (!student) {
+        return res.status(400).json({ error: "Learner is not part of this survey class" });
       }
-      await storage.updateTeacher(payload.accountId, teacher.id, { teacherPreference: preferred.id });
-      res.json({ teacherPreference: { id: preferred.id, name: `${preferred.firstName} ${preferred.lastName}` } });
+      const recommended = await storage.getTeacher(payload.accountId, teacherId);
+      if (!recommended) {
+        return res.status(400).json({ error: "Recommended teacher is not available" });
+      }
+
+      const existingRequests = await storage.getPlacementRequests(payload.accountId);
+      const existing = existingRequests.find(
+        (request) => request.studentId === studentId && request.requestedByTeacherId === teacher.id,
+      );
+      const saved = existing
+        ? await storage.updatePlacementRequest(payload.accountId, existing.id, { teacherId })
+        : await storage.createPlacementRequest(payload.accountId, {
+            studentId,
+            teacherId,
+            requestedByTeacherId: teacher.id,
+            createdAt: new Date().toISOString(),
+          });
+      if (!saved) return res.status(500).json({ error: "Failed to save placement request" });
+
+      const request: PlacementRequestView = {
+        id: saved.id,
+        studentId,
+        studentName: `${student.firstName} ${student.lastName}`,
+        teacherId,
+        teacherName: `${recommended.firstName} ${recommended.lastName}`,
+        requestedByTeacherName: `${teacher.firstName} ${teacher.lastName}`,
+      };
+      res.status(existing ? 200 : 201).json({ request });
     } catch (error) {
-      console.error("[teacher-survey] preference save failed", error);
-      res.status(500).json({ error: "Failed to save teacher preference" });
+      console.error("[teacher-survey] placement request failed", error);
+      res.status(500).json({ error: "Failed to save placement request" });
+    }
+  });
+
+  app.delete("/api/public/teacher-surveys/:token/placement-requests/:requestId", async (req, res) => {
+    try {
+      const resolved = await resolvePublicTeacherSurvey(req.params.token);
+      if (!resolved) return res.status(404).json({ error: "This survey link is invalid or has expired" });
+      const { payload, teacher } = resolved;
+      const requests = await storage.getPlacementRequests(payload.accountId);
+      const request = requests.find(
+        (entry) => entry.id === req.params.requestId && entry.requestedByTeacherId === teacher.id,
+      );
+      if (!request) return res.status(404).json({ error: "Placement request not found" });
+      await storage.deletePlacementRequest(payload.accountId, request.id);
+      res.json({ deleted: true });
+    } catch (error) {
+      console.error("[teacher-survey] placement request delete failed", error);
+      res.status(500).json({ error: "Failed to remove placement request" });
     }
   });
 
@@ -655,6 +721,45 @@ export async function registerRoutes(
   });
 
   // Rules CRUD (protected)
+  // Learner-to-teacher placement requests (from teacher surveys) for admin review.
+  app.get("/api/placement-requests", isAuthenticated, async (req, res) => {
+    try {
+      const accountId = accountIdFor(req);
+      const [requests, students, teachers] = await Promise.all([
+        storage.getPlacementRequests(accountId),
+        storage.getStudents(accountId),
+        storage.getTeachers(accountId),
+      ]);
+      const studentName = (studentId: string) => {
+        const student = students.find((entry) => entry.id === studentId);
+        return student ? `${student.firstName} ${student.lastName}` : "Unknown learner";
+      };
+      const teacherName = (teacherId: string) => {
+        const teacher = teachers.find((entry) => entry.id === teacherId);
+        return teacher ? `${teacher.firstName} ${teacher.lastName}` : "Unknown teacher";
+      };
+      const views: PlacementRequestView[] = requests.map((request) => ({
+        id: request.id,
+        studentId: request.studentId,
+        studentName: studentName(request.studentId),
+        teacherId: request.teacherId,
+        teacherName: teacherName(request.teacherId),
+        requestedByTeacherName: teacherName(request.requestedByTeacherId),
+      }));
+      res.json(views);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to load placement requests" });
+    }
+  });
+
+  app.delete("/api/placement-requests/:id", isAuthenticated, requireWritableWorkspace, async (req, res) => {
+    const deleted = await storage.deletePlacementRequest(accountIdFor(req), req.params.id);
+    if (!deleted) {
+      return res.status(404).json({ error: "Placement request not found" });
+    }
+    res.status(204).send();
+  });
+
   app.get("/api/rules", isAuthenticated, async (req, res) => {
     const rules = await storage.getRules(accountIdFor(req));
     res.json(rules);

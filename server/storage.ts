@@ -14,6 +14,8 @@ import {
   type InsertPlacement,
   type Teacher,
   type InsertTeacher,
+  type PlacementRequest,
+  type InsertPlacementRequest,
   type Survey,
   type InsertSurvey,
   type Scenario,
@@ -26,6 +28,7 @@ import {
   classConfigs,
   placements,
   teachers,
+  placementRequests,
   surveys,
   scenarios,
   users,
@@ -157,6 +160,55 @@ export class DatabaseStorage {
   async deleteRule(accountId: string, id: string): Promise<boolean> {
     accountId = requireAccountId(accountId);
     const result = await db.delete(rules).where(and(eq(rules.accountId, accountId), eq(rules.id, id))).returning();
+    return result.length > 0;
+  }
+
+  async getPlacementRequests(accountId: string): Promise<PlacementRequest[]> {
+    accountId = requireAccountId(accountId);
+    return await db.select().from(placementRequests).where(eq(placementRequests.accountId, accountId));
+  }
+
+  async createPlacementRequest(accountId: string, insertRequest: InsertPlacementRequest): Promise<PlacementRequest> {
+    accountId = requireAccountId(accountId);
+    const [linkedStudent] = await db
+      .select({ id: students.id })
+      .from(students)
+      .where(and(eq(students.accountId, accountId), eq(students.id, insertRequest.studentId)));
+    const teacherIds = Array.from(new Set([insertRequest.teacherId, insertRequest.requestedByTeacherId]));
+    const linkedTeachers = await db
+      .select({ id: teachers.id })
+      .from(teachers)
+      .where(and(eq(teachers.accountId, accountId), inArray(teachers.id, teacherIds)));
+    if (!linkedStudent || linkedTeachers.length !== teacherIds.length) {
+      throw new Error("Placement request must reference learners and teachers of the current account");
+    }
+    const [request] = await db
+      .insert(placementRequests)
+      .values({ id: randomUUID(), accountId, ...insertRequest })
+      .returning();
+    return request;
+  }
+
+  async updatePlacementRequest(
+    accountId: string,
+    id: string,
+    updates: Partial<InsertPlacementRequest>,
+  ): Promise<PlacementRequest | undefined> {
+    accountId = requireAccountId(accountId);
+    const [updated] = await db
+      .update(placementRequests)
+      .set(updates)
+      .where(and(eq(placementRequests.accountId, accountId), eq(placementRequests.id, id)))
+      .returning();
+    return updated || undefined;
+  }
+
+  async deletePlacementRequest(accountId: string, id: string): Promise<boolean> {
+    accountId = requireAccountId(accountId);
+    const result = await db
+      .delete(placementRequests)
+      .where(and(eq(placementRequests.accountId, accountId), eq(placementRequests.id, id)))
+      .returning();
     return result.length > 0;
   }
 

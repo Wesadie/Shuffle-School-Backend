@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Check, ChevronsUpDown, Plus, Trash2, Link2, Unlink, Users } from "lucide-react";
+import { ArrowRight, Check, ChevronsUpDown, Plus, Trash2, Link2, Unlink, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import {
@@ -28,7 +28,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { cn } from "@/lib/utils";
-import type { Rule, InsertRule, Student } from "@shared/schema";
+import type { Rule, InsertRule, PlacementRequestView, Student } from "@shared/schema";
 
 function StudentPicker({
   students,
@@ -113,6 +113,21 @@ export default function RulesPage() {
 
   const { data: students = [], isLoading: studentsLoading } = useQuery<Student[]>({
     queryKey: ["/api/students"],
+  });
+
+  const { data: placementRequests = [] } = useQuery<PlacementRequestView[]>({
+    queryKey: ["/api/placement-requests"],
+  });
+
+  const deletePlacementRequestMutation = useMutation({
+    mutationFn: (id: string) => apiRequest("DELETE", `/api/placement-requests/${id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/placement-requests"] });
+      toast({ title: "Placement request removed" });
+    },
+    onError: () => {
+      toast({ title: "Failed to remove placement request", variant: "destructive" });
+    },
   });
 
   const createMutation = useMutation({
@@ -351,6 +366,47 @@ export default function RulesPage() {
             )}
           </TabsContent>
         </Tabs>
+      )}
+
+      {placementRequests.length > 0 && (
+        <div className="space-y-3">
+          <div>
+            <h2 className="text-xl font-semibold">Teacher placement requests</h2>
+            <p className="text-muted-foreground mt-1">
+              Learners teachers have recommended be placed with a specific teacher next year
+            </p>
+          </div>
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+            {placementRequests.map((request) => (
+              <Card key={request.id} data-testid={`card-placement-request-${request.id}`}>
+                <CardHeader className="pb-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <Badge variant="secondary" className="gap-1">
+                      <ArrowRight className="h-3 w-3" />
+                      Next year placement
+                    </Badge>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      onClick={() => deletePlacementRequestMutation.mutate(request.id)}
+                      data-testid={`button-delete-placement-request-${request.id}`}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1 text-sm font-medium truncate">{request.studentName}</div>
+                    <ArrowRight className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                    <div className="flex-1 text-sm font-medium truncate text-right">{request.teacherName}</div>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-2">Requested by {request.requestedByTeacherName}</p>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </div>
       )}
 
       <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
