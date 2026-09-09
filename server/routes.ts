@@ -26,6 +26,7 @@ import {
   insertSurveySchema,
   insertScenarioSchema,
   insertTeacherSchema,
+  type InsertRule,
   type Student,
   type Rule,
   type ClassConfig,
@@ -40,6 +41,7 @@ import {
 } from "@shared/schema";
 import { CHARACTERISTIC_TYPES, characteristicValueToArray, defaultResponseColor, getStableResponseId, isCharacteristicApplicableToGrade, normalizeResponses } from "@shared/characteristics";
 import { z } from "zod";
+import { isRuleMandatory } from "@shared/schema";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -221,6 +223,8 @@ export async function registerRoutes(
       }
 
       const type = req.body?.type === "pair" ? "pair" : req.body?.type === "separate" ? "separate" : "";
+      const importance = req.body?.importance === "important" ? "important" : "mandatory";
+      const comment = typeof req.body?.comment === "string" ? req.body.comment.trim().slice(0, 500) : "";
       const studentId1 = typeof req.body?.studentId1 === "string" ? req.body.studentId1 : "";
       const studentId2 = typeof req.body?.studentId2 === "string" ? req.body.studentId2 : "";
       if (!type) return res.status(400).json({ error: "Request type must be separation or together" });
@@ -243,11 +247,74 @@ export async function registerRoutes(
         studentId1,
         studentId2,
         reason: teacherSurveyRequestReason(teacher),
+        importance,
+        comment: comment || null,
       });
       res.status(201).json({ rule });
     } catch (error) {
       console.error("[teacher-survey] request save failed", error);
       res.status(500).json({ error: "Failed to save teacher request" });
+    }
+  });
+
+  // Edit a request this teacher created through the survey. The reason field
+  // stays the ownership marker, so changing the comment never revokes the
+  // teacher's ability to keep editing their own request.
+  app.patch("/api/public/teacher-surveys/:token/requests/:ruleId", async (req, res) => {
+    try {
+      const resolved = await resolvePublicTeacherSurvey(req.params.token);
+      if (!resolved) return res.status(404).json({ error: "This survey link is invalid or has expired" });
+      const { payload, teacher } = resolved;
+      if (teacher.surveyStatus === "Completed") {
+        return res.status(409).json({ error: "This survey has already been completed" });
+      }
+      const rule = await storage.getRule(payload.accountId, req.params.ruleId);
+      if (!rule || rule.reason !== teacherSurveyRequestReason(teacher)) {
+        return res.status(404).json({ error: "Request not found" });
+      }
+
+      const body = req.body || {};
+      const updates: Partial<InsertRule> = {};
+      if (body.type !== undefined) {
+        if (body.type !== "pair" && body.type !== "separate") {
+          return res.status(400).json({ error: "Request type must be separation or together" });
+        }
+        updates.type = body.type;
+      }
+      if (body.importance !== undefined) {
+        if (body.importance !== "mandatory" && body.importance !== "important") {
+          return res.status(400).json({ error: "Importance must be mandatory or important" });
+        }
+        updates.importance = body.importance;
+      }
+      if (body.comment !== undefined) {
+        if (typeof body.comment !== "string") return res.status(400).json({ error: "Comment must be text" });
+        updates.comment = body.comment.trim().slice(0, 500) || null;
+      }
+
+      const studentId1 = typeof body.studentId1 === "string" ? body.studentId1 : rule.studentId1;
+      const studentId2 = typeof body.studentId2 === "string" ? body.studentId2 : rule.studentId2;
+      if (studentId1 === studentId2) {
+        return res.status(400).json({ error: "Select two different learners" });
+      }
+      const students = await storage.getStudents(payload.accountId);
+      const isClassStudent = (studentId: string) => students.some(
+        (student) =>
+          student.id === studentId &&
+          student.currentClass?.trim().toLowerCase() === payload.className.trim().toLowerCase(),
+      );
+      if (!isClassStudent(studentId1) || !isClassStudent(studentId2)) {
+        return res.status(400).json({ error: "Both learners must be part of this survey class" });
+      }
+      updates.studentId1 = studentId1;
+      updates.studentId2 = studentId2;
+
+      const updated = await storage.updateRule(payload.accountId, rule.id, updates);
+      if (!updated) return res.status(404).json({ error: "Request not found" });
+      res.json({ rule: updated });
+    } catch (error) {
+      console.error("[teacher-survey] request update failed", error);
+      res.status(500).json({ error: "Failed to update teacher request" });
     }
   });
 
@@ -949,11 +1016,38 @@ export async function registerRoutes(
   });
 
   app.patch("/api/rules/:id", isAuthenticated, requireWritableWorkspace, async (req, res) => {
-    const rule = await storage.updateRule(accountIdFor(req), req.params.id, req.body);
-    if (!rule) {
-      return res.status(404).json({ error: "Rule not found" });
+    const body = req.body || {};
+    const updates: Partial<InsertRule> = {};
+    if (hasAnyField(body, ["type"])) {
+      if (body.type !== "pair" && body.type !== "separate") {
+        return res.status(400).json({ error: "Invalid rule type" });
+      }
+      updates.type = body.type;
     }
-    res.json(rule);
+    if (hasAnyField(body, ["importance"])) {
+      if (body.importance !== "mandatory" && body.importance !== "important") {
+        return res.status(400).json({ error: "Invalid rule importance" });
+      }
+      updates.importance = body.importance;
+    }
+    if (hasAnyField(body, ["studentId1"])) updates.studentId1 = body.studentId1;
+    if (hasAnyField(body, ["studentId2"])) updates.studentId2 = body.studentId2;
+    if (hasAnyField(body, ["reason"])) updates.reason = body.reason;
+    if (hasAnyField(body, ["comment"])) {
+      updates.comment = typeof body.comment === "string" && body.comment.trim() ? body.comment.trim().slice(0, 500) : null;
+    }
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({ error: "No valid fields to update" });
+    }
+    try {
+      const rule = await storage.updateRule(accountIdFor(req), req.params.id, updates);
+      if (!rule) {
+        return res.status(404).json({ error: "Rule not found" });
+      }
+      res.json(rule);
+    } catch (error) {
+      res.status(400).json({ error: "Invalid rule data" });
+    }
   });
 
   app.delete("/api/rules/:id", isAuthenticated, requireWritableWorkspace, async (req, res) => {
@@ -1336,10 +1430,11 @@ export async function registerRoutes(
         classStudents.set(config.id, students.filter(s => placementIds.includes(s.id)));
       }
 
-      // Build separation constraints
+      // Build separation constraints. Only mandatory rules block swaps;
+      // important requests are preferences that may be traded for balance.
       const separations: Map<string, Set<string>> = new Map();
       for (const rule of rules) {
-        if (rule.type === "separate") {
+        if (rule.type === "separate" && isRuleMandatory(rule)) {
           if (!separations.has(rule.studentId1)) separations.set(rule.studentId1, new Set());
           if (!separations.has(rule.studentId2)) separations.set(rule.studentId2, new Set());
           separations.get(rule.studentId1)!.add(rule.studentId2);
@@ -1347,10 +1442,10 @@ export async function registerRoutes(
         }
       }
 
-      // Build pairing constraints 
+      // Build pairing constraints
       const pairings: Map<string, Set<string>> = new Map();
       for (const rule of rules) {
-        if (rule.type === "pair") {
+        if (rule.type === "pair" && isRuleMandatory(rule)) {
           if (!pairings.has(rule.studentId1)) pairings.set(rule.studentId1, new Set());
           if (!pairings.has(rule.studentId2)) pairings.set(rule.studentId2, new Set());
           pairings.get(rule.studentId1)!.add(rule.studentId2);
@@ -1921,6 +2016,10 @@ async function checkConflicts(
   const classmates = placements.filter(p => p.classId === classId && p.studentId !== studentId);
   
   for (const rule of rules) {
+    // Important requests are preferences, not requirements — violations are
+    // not reported as conflicts.
+    if (!isRuleMandatory(rule)) continue;
+
     const isStudent1 = rule.studentId1 === studentId;
     const isStudent2 = rule.studentId2 === studentId;
     
@@ -2088,11 +2187,18 @@ async function generateBalancedClasses(
     classAssignments.set(config.id, []);
   });
 
+  // Mandatory rules are hard requirements: mandatory pairings keep learners in
+  // the same group and mandatory separations must never share a class.
+  // Important rules are preferences, scored last — after class size and
+  // characteristic balance — so they can never outweigh stronger requirements.
+  const mandatoryRules = rules.filter((rule) => isRuleMandatory(rule));
+  const importantRules = rules.filter((rule) => rule.importance === "important");
+
   // Build pairing and separation maps
   const pairings: Map<string, Set<string>> = new Map();
   const separations: Map<string, Set<string>> = new Map();
-  
-  for (const rule of rules) {
+
+  for (const rule of mandatoryRules) {
     if (rule.type === "pair") {
       if (!pairings.has(rule.studentId1)) pairings.set(rule.studentId1, new Set());
       if (!pairings.has(rule.studentId2)) pairings.set(rule.studentId2, new Set());
@@ -2105,6 +2211,44 @@ async function generateBalancedClasses(
       separations.get(rule.studentId2)!.add(rule.studentId1);
     }
   }
+
+  // Soft preference maps from important rules.
+  const softPairings: Map<string, Set<string>> = new Map();
+  const softSeparations: Map<string, Set<string>> = new Map();
+  for (const rule of importantRules) {
+    const map = rule.type === "pair" ? softPairings : softSeparations;
+    if (!map.has(rule.studentId1)) map.set(rule.studentId1, new Set());
+    if (!map.has(rule.studentId2)) map.set(rule.studentId2, new Set());
+    map.get(rule.studentId1)!.add(rule.studentId2);
+    map.get(rule.studentId2)!.add(rule.studentId1);
+  }
+
+  // Score how well placing a group into a class satisfies important requests:
+  // +1 when a soft pair partner is already in the class, -1 when the partner
+  // has already been placed elsewhere (so this placement breaks the request),
+  // and -1 for each soft separation that would share the class.
+  const placedStudentIds = new Set<string>();
+  const calculateImportantScore = (group: Student[], currentStudents: Student[]): number => {
+    const groupIds = new Set(group.map((student) => student.id));
+    let score = 0;
+    for (const student of group) {
+      const softPairs = softPairings.get(student.id);
+      if (softPairs) {
+        for (const partnerId of softPairs) {
+          if (groupIds.has(partnerId)) continue; // satisfied inside the group regardless of class
+          if (currentStudents.some((existing) => existing.id === partnerId)) score += 1;
+          else if (placedStudentIds.has(partnerId)) score -= 1;
+        }
+      }
+      const mustSoftSeparate = softSeparations.get(student.id);
+      if (mustSoftSeparate) {
+        for (const existing of currentStudents) {
+          if (mustSoftSeparate.has(existing.id)) score -= 1;
+        }
+      }
+    }
+    return score;
+  };
 
   // Group students by pairing requirements first
   const pairingGroups: Student[][] = [];
@@ -2155,13 +2299,18 @@ async function generateBalancedClasses(
   });
 
   for (const group of pairingGroups) {
-    // Find the best class for this group: separation rules first, then equal
-    // class sizes, then characteristic balance.
-    let bestClassId: string | null = null;
-    let bestSeparationViolations = Infinity;
-    let bestSizeOverflow = Infinity;
-    let bestBalanceScore = -Infinity;
-    
+    // Find the best class for this group: mandatory separation rules first
+    // (hard requirements — a class that would violate one is only considered
+    // when no class can avoid it), then equal class sizes, then characteristic
+    // balance, and finally important-request preferences.
+    const candidates: {
+      classId: string;
+      separationViolations: number;
+      sizeOverflow: number;
+      balanceScore: number;
+      importantScore: number;
+    }[] = [];
+
     for (const config of classConfigList) {
       const currentStudents = classAssignments.get(config.id)!;
       
@@ -2170,7 +2319,7 @@ async function generateBalancedClasses(
         continue;
       }
       
-      // Check separations
+      // Check mandatory separations
       let separationViolations = 0;
       for (const student of group) {
         const mustSeparate = separations.get(student.id);
@@ -2197,23 +2346,44 @@ async function generateBalancedClasses(
       const targetSize = targetClassSizes.get(config.id) ?? group.length;
       const sizeOverflow = Math.max(0, currentStudents.length + group.length - targetSize);
 
-      if (
-        bestClassId === null ||
-        separationViolations < bestSeparationViolations ||
-        (separationViolations === bestSeparationViolations && sizeOverflow < bestSizeOverflow) ||
-        (separationViolations === bestSeparationViolations && sizeOverflow === bestSizeOverflow && balanceScore > bestBalanceScore)
-      ) {
-        bestClassId = config.id;
-        bestSeparationViolations = separationViolations;
-        bestSizeOverflow = sizeOverflow;
-        bestBalanceScore = balanceScore;
+      candidates.push({
+        classId: config.id,
+        separationViolations,
+        sizeOverflow,
+        balanceScore,
+        importantScore: calculateImportantScore(group, currentStudents),
+      });
+    }
+
+    // Mandatory separations are hard requirements: never place a group in a
+    // class that violates one while a clean class is available. When every
+    // candidate violates (the requirements cannot all be satisfied), fall back
+    // to the fewest violations so the conflict is reported rather than ignored.
+    let pool = candidates;
+    const cleanClasses = candidates.filter((candidate) => candidate.separationViolations === 0);
+    if (cleanClasses.length > 0) pool = cleanClasses;
+
+    let targetClassId = classConfigList[0].id;
+    if (pool.length > 0) {
+      let best = pool[0];
+      for (const candidate of pool.slice(1)) {
+        if (
+          candidate.separationViolations < best.separationViolations ||
+          (candidate.separationViolations === best.separationViolations && candidate.sizeOverflow < best.sizeOverflow) ||
+          (candidate.separationViolations === best.separationViolations && candidate.sizeOverflow === best.sizeOverflow && candidate.balanceScore > best.balanceScore) ||
+          (candidate.separationViolations === best.separationViolations && candidate.sizeOverflow === best.sizeOverflow && candidate.balanceScore === best.balanceScore && candidate.importantScore > best.importantScore)
+        ) {
+          best = candidate;
+        }
       }
+      targetClassId = best.classId;
     }
 
     // Assign group to best class (fall back to the first class when every class
     // is already at capacity, matching the previous behaviour).
-    const targetClass = classAssignments.get(bestClassId ?? classConfigList[0].id)!;
+    const targetClass = classAssignments.get(targetClassId)!;
     targetClass.push(...group);
+    for (const student of group) placedStudentIds.add(student.id);
   }
 
   // Generate conflict warnings
@@ -2231,14 +2401,15 @@ async function generateBalancedClasses(
       });
     }
     
-    // Check separation violations
+    // Check separation violations (mandatory rules only — important requests
+    // are preferences and never surface as conflicts)
     for (let i = 0; i < classStudents.length; i++) {
       const student = classStudents[i];
       const mustSeparate = separations.get(student.id);
       if (mustSeparate) {
         for (let j = i + 1; j < classStudents.length; j++) {
           if (mustSeparate.has(classStudents[j].id)) {
-            const rule = rules.find(
+            const rule = mandatoryRules.find(
               r => r.type === "separate" &&
                 ((r.studentId1 === student.id && r.studentId2 === classStudents[j].id) ||
                  (r.studentId2 === student.id && r.studentId1 === classStudents[j].id))
@@ -2255,8 +2426,9 @@ async function generateBalancedClasses(
     }
   }
 
-  // Check pairing violations (students who should be together but aren't)
-  for (const rule of rules) {
+  // Check pairing violations (students who should be together but aren't).
+  // Mandatory pairings only — important pairings are preferences.
+  for (const rule of mandatoryRules) {
     if (rule.type === "pair") {
       let student1Class: string | null = null;
       let student2Class: string | null = null;

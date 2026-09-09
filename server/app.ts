@@ -212,15 +212,20 @@ app.use((req, res, next) => {
 });
 
 export const appReady = (async () => {
-  console.log("[appReady] step 1/4: importing routes module...");
+  console.log("[appReady] step 1/5: importing routes module...");
   const { registerRoutes } = await import("./routes");
-  console.log("[appReady] step 1/4 done: routes imported");
+  console.log("[appReady] step 1/5 done: routes imported");
 
-  console.log("[appReady] step 2/4: calling registerRoutes (setupAuth + handlers)...");
+  console.log("[appReady] step 2/5: ensuring database schema migrations...");
+  const { ensureSchemaMigrations } = await import("./schemaMigrations");
+  await ensureSchemaMigrations();
+  console.log("[appReady] step 2/5 done: schema migrations ensured");
+
+  console.log("[appReady] step 3/5: calling registerRoutes (setupAuth + handlers)...");
   await registerRoutes(httpServer, app);
-  console.log("[appReady] step 2/4 done: routes registered");
+  console.log("[appReady] step 3/5 done: routes registered");
 
-  console.log("[appReady] step 3/4: adding Express error handler...");
+  console.log("[appReady] step 4/5: adding Express error handler...");
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
     const message = err.message || "Internal Server Error";
@@ -236,16 +241,16 @@ export const appReady = (async () => {
       res.status(status).json({ message });
     }
   });
-  console.log("[appReady] step 3/4 done: error handler added");
+  console.log("[appReady] step 4/5 done: error handler added");
 
-  console.log("[appReady] step 4/4: static/vite setup...");
+  console.log("[appReady] step 5/5: static/vite setup...");
   if (process.env.NODE_ENV === "production") {
     serveStatic(app);
-    console.log("[appReady] step 4/4 done: production frontend configured");
+    console.log("[appReady] step 5/5 done: production frontend configured");
   } else {
     const { setupVite } = await import("./vite");
     await setupVite(httpServer, app);
-    console.log("[appReady] step 4/4 done: vite setup complete");
+    console.log("[appReady] step 5/5 done: vite setup complete");
   }
   console.log("[appReady] all steps complete");
 })();

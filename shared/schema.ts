@@ -153,6 +153,9 @@ export type InsertStudent = z.infer<typeof insertStudentSchema>;
 export type Student = typeof students.$inferSelect;
 
 // Rule model (pairing/separation)
+// importance: "mandatory" rules are hard solver requirements; "important" rules
+// are preferences the solver tries to satisfy after stronger requirements.
+// comment holds the free-text note; reason marks the rule's source/owner.
 export const rules = pgTable("rules", {
   id: varchar("id", { length: 36 }).primaryKey(),
   accountId: uuid("account_id").notNull().default(developmentAccountSql).references(() => accounts.id, { onDelete: "cascade" }),
@@ -160,11 +163,23 @@ export const rules = pgTable("rules", {
   studentId1: varchar("student_id_1", { length: 36 }).notNull(),
   studentId2: varchar("student_id_2", { length: 36 }).notNull(),
   reason: text("reason"),
+  importance: text("importance").notNull().default("mandatory"), // "mandatory" or "important"
+  comment: text("comment"),
 }, (table) => [index("rules_account_id_idx").on(table.accountId)]);
 
 export const insertRuleSchema = createInsertSchema(rules).omit({ id: true, accountId: true });
 export type InsertRule = z.infer<typeof insertRuleSchema>;
 export type Rule = typeof rules.$inferSelect;
+
+export type RuleImportance = "mandatory" | "important";
+
+export const RULE_IMPORTANCE_VALUES: RuleImportance[] = ["mandatory", "important"];
+
+// Anything that is not explicitly "important" is treated as mandatory so legacy
+// rows (and any unexpected value) keep the previous hard-requirement behaviour.
+export function isRuleMandatory(rule: Pick<Rule, "importance">): boolean {
+  return rule.importance !== "important";
+}
 
 export interface CharacteristicResponse {
   id: string;

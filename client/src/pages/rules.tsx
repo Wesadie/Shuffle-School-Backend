@@ -20,6 +20,13 @@ import {
   CommandList,
 } from "@/components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
@@ -95,6 +102,14 @@ function StudentPicker({
   );
 }
 
+function RuleImportanceBadge({ rule }: { rule: Rule }) {
+  return rule.importance === "important" ? (
+    <Badge variant="outline" className="border-amber-600/50 text-amber-700 dark:text-amber-400">Important</Badge>
+  ) : (
+    <Badge variant="secondary">Mandatory</Badge>
+  );
+}
+
 export default function RulesPage() {
   const { toast } = useToast();
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
@@ -105,6 +120,7 @@ export default function RulesPage() {
     studentId1: "",
     studentId2: "",
     reason: "",
+    importance: "mandatory",
   });
 
   const { data: rules = [], isLoading: rulesLoading } = useQuery<Rule[]>({
@@ -160,6 +176,7 @@ export default function RulesPage() {
       studentId1: "",
       studentId2: "",
       reason: "",
+      importance: "mandatory",
     });
   };
 
@@ -271,10 +288,13 @@ export default function RulesPage() {
                   <Card key={rule.id} data-testid={`card-rule-${rule.id}`}>
                     <CardHeader className="pb-3">
                       <div className="flex items-center justify-between gap-2">
-                        <Badge className="bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">
-                          <Link2 className="h-3 w-3 mr-1" />
-                          Pair Together
-                        </Badge>
+                        <div className="flex items-center gap-2">
+                          <Badge className="bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">
+                            <Link2 className="h-3 w-3 mr-1" />
+                            Pair Together
+                          </Badge>
+                          <RuleImportanceBadge rule={rule} />
+                        </div>
                         <Button
                           size="icon"
                           variant="ghost"
@@ -296,8 +316,8 @@ export default function RulesPage() {
                             {getStudentName(rule.studentId2)}
                           </div>
                         </div>
-                        {rule.reason && (
-                          <p className="text-xs text-muted-foreground">{rule.reason}</p>
+                        {(rule.comment || rule.reason) && (
+                          <p className="text-xs text-muted-foreground">{rule.comment || rule.reason}</p>
                         )}
                       </div>
                     </CardContent>
@@ -330,10 +350,13 @@ export default function RulesPage() {
                   <Card key={rule.id} data-testid={`card-rule-${rule.id}`}>
                     <CardHeader className="pb-3">
                       <div className="flex items-center justify-between gap-2">
-                        <Badge className="bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200">
-                          <Unlink className="h-3 w-3 mr-1" />
-                          Keep Apart
-                        </Badge>
+                        <div className="flex items-center gap-2">
+                          <Badge className="bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200">
+                            <Unlink className="h-3 w-3 mr-1" />
+                            Keep Apart
+                          </Badge>
+                          <RuleImportanceBadge rule={rule} />
+                        </div>
                         <Button
                           size="icon"
                           variant="ghost"
@@ -355,8 +378,8 @@ export default function RulesPage() {
                             {getStudentName(rule.studentId2)}
                           </div>
                         </div>
-                        {rule.reason && (
-                          <p className="text-xs text-muted-foreground">{rule.reason}</p>
+                        {(rule.comment || rule.reason) && (
+                          <p className="text-xs text-muted-foreground">{rule.comment || rule.reason}</p>
                         )}
                       </div>
                     </CardContent>
@@ -441,6 +464,28 @@ export default function RulesPage() {
                 onChange={(value) => setFormData({ ...formData, studentId2: value })}
                 testId="select-student-2"
               />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="importance">Importance</Label>
+              <Select
+                value={formData.importance ?? "mandatory"}
+                onValueChange={(value) =>
+                  setFormData({ ...formData, importance: value === "important" ? "important" : "mandatory" })
+                }
+              >
+                <SelectTrigger data-testid="select-rule-importance">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="mandatory">Mandatory — must be satisfied</SelectItem>
+                  <SelectItem value="important">Important — preference</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Mandatory rules are hard requirements for the solver. Important rules are preferences the solver
+                tries to satisfy after class size, characteristics, and mandatory rules.
+              </p>
             </div>
 
             <div className="space-y-2">

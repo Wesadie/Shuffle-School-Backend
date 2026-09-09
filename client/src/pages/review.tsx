@@ -484,6 +484,10 @@ export default function ReviewPage() {
     const warnings: ConflictWarning[] = [];
     
     rules.forEach((rule) => {
+      // Important requests are preferences the solver may trade off — only
+      // mandatory requirements surface as conflicts.
+      if (rule.importance === "important") return;
+
       const student1Placement = placements.find((p) => p.studentId === rule.studentId1);
       const student2Placement = placements.find((p) => p.studentId === rule.studentId2);
       
