@@ -114,9 +114,17 @@ export async function registerRoutes(
         );
       }
       const classStudentIds = new Set(classStudents.map((student) => student.id));
+      // Requests are visible when at least one learner is in this class, so
+      // cross-class requests (e.g. separated from a learner in another class)
+      // still show beside the class learner.
       const classRules = rules.filter(
-        (rule) => classStudentIds.has(rule.studentId1) && classStudentIds.has(rule.studentId2),
+        (rule) => classStudentIds.has(rule.studentId1) || classStudentIds.has(rule.studentId2),
       );
+      // Second-learner picker offers every learner in the same grade as this
+      // class, including learners from other classes.
+      const gradeKey = (student: Student) => (student.grade ?? "").toString().trim().toLowerCase();
+      const classGrades = new Set(classStudents.map(gradeKey));
+      const gradeStudents = students.filter((student) => classGrades.has(gradeKey(student)));
       const resolveTeacherName = (teacherId: string) => {
         const item = teachers.find((entry) => entry.id === teacherId);
         return item ? `${item.firstName} ${item.lastName}` : "Unknown teacher";
@@ -139,6 +147,7 @@ export async function registerRoutes(
         teacherName: `${teacher.firstName} ${teacher.lastName}`,
         className: payload.className,
         students: classStudents,
+        gradeStudents,
         characteristics: visibleCharacteristics,
         requests: classRules,
         teachers: teachers.map((item) => ({ id: item.id, name: `${item.firstName} ${item.lastName}` })),
@@ -213,6 +222,42 @@ export async function registerRoutes(
   const teacherSurveyRequestReason = (teacher: { firstName: string; lastName: string }) =>
     `Teacher survey request by ${teacher.firstName} ${teacher.lastName}`;
 
+  // Teacher survey requests must involve at least one learner from the
+  // teacher's own class; the other learner may be from any class as long as
+  // they are in the same grade (so teachers can request separation/pairing
+  // with learners in other classes of the grade).
+  const validateSurveyRequestLearners = (
+    allStudents: Student[],
+    className: string,
+    studentId1: string,
+    studentId2: string,
+  ): string | null => {
+    const classStudentIds = new Set(
+      allStudents
+        .filter((student) => student.currentClass?.trim().toLowerCase() === className.trim().toLowerCase())
+        .map((student) => student.id),
+    );
+    if (!classStudentIds.has(studentId1) && !classStudentIds.has(studentId2)) {
+      return "At least one learner must be part of this survey class";
+    }
+    const classGrades = new Set(
+      allStudents
+        .filter((student) => classStudentIds.has(student.id))
+        .map((student) => (student.grade ?? "").toString().trim().toLowerCase()),
+    );
+    for (const studentId of [studentId1, studentId2]) {
+      const student = allStudents.find((entry) => entry.id === studentId);
+      if (!student) return "Both learners must be part of this survey class";
+      if (
+        !classStudentIds.has(studentId) &&
+        !classGrades.has((student.grade ?? "").toString().trim().toLowerCase())
+      ) {
+        return "Learners must be in the same grade as this survey class";
+      }
+    }
+    return null;
+  };
+
   app.post("/api/public/teacher-surveys/:token/requests", async (req, res) => {
     try {
       const resolved = await resolvePublicTeacherSurvey(req.params.token);
@@ -233,13 +278,9 @@ export async function registerRoutes(
       }
 
       const students = await storage.getStudents(payload.accountId);
-      const isClassStudent = (studentId: string) => students.some(
-        (student) =>
-          student.id === studentId &&
-          student.currentClass?.trim().toLowerCase() === payload.className.trim().toLowerCase(),
-      );
-      if (!isClassStudent(studentId1) || !isClassStudent(studentId2)) {
-        return res.status(400).json({ error: "Both learners must be part of this survey class" });
+      const learnerError = validateSurveyRequestLearners(students, payload.className, studentId1, studentId2);
+      if (learnerError) {
+        return res.status(400).json({ error: learnerError });
       }
 
       const rule = await storage.createRule(payload.accountId, {
@@ -298,13 +339,9 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Select two different learners" });
       }
       const students = await storage.getStudents(payload.accountId);
-      const isClassStudent = (studentId: string) => students.some(
-        (student) =>
-          student.id === studentId &&
-          student.currentClass?.trim().toLowerCase() === payload.className.trim().toLowerCase(),
-      );
-      if (!isClassStudent(studentId1) || !isClassStudent(studentId2)) {
-        return res.status(400).json({ error: "Both learners must be part of this survey class" });
+      const learnerError = validateSurveyRequestLearners(students, payload.className, studentId1, studentId2);
+      if (learnerError) {
+        return res.status(400).json({ error: learnerError });
       }
       updates.studentId1 = studentId1;
       updates.studentId2 = studentId2;

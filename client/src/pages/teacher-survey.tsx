@@ -1,11 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { CheckCircle2, Link2, Loader2, Pencil, Unlink, X } from "lucide-react";
+import { Check, CheckCircle2, ChevronsUpDown, Link2, Loader2, Pencil, Unlink, X } from "lucide-react";
 import { apiUrl } from "@/lib/apiUrl";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   Dialog,
   DialogContent,
@@ -41,6 +50,7 @@ type SurveyData = {
   teacherName: string;
   className?: string;
   students?: Student[];
+  gradeStudents?: Student[];
   characteristics?: Characteristic[];
   requests?: Rule[];
   teachers?: SurveyTeacherOption[];
@@ -67,6 +77,16 @@ async function readJsonResponse<T>(response: Response): Promise<T> {
 }
 
 const importanceLabel = (rule: Rule) => (rule.importance === "important" ? "Important" : "Mandatory");
+
+// Full name plus a class suffix for learners who are not in the survey class.
+const learnerDisplayName = (learner: Student | undefined, classStudents: Student[]) =>
+  learner
+    ? `${learner.firstName} ${learner.lastName}${
+        learner.currentClass && !classStudents.some((entry) => entry.id === learner.id)
+          ? ` (${learner.currentClass})`
+          : ""
+      }`
+    : "Unknown learner";
 
 function RequestTypeBadge({ rule }: { rule: Rule }) {
   return rule.type === "separate" ? (
@@ -121,6 +141,90 @@ function LearnerSelect({
   );
 }
 
+// Searchable picker over every learner in the grade (including other classes),
+// used for the second learner of a request. Typing filters by name, student
+// ID, or class.
+function GradeStudentPicker({
+  students,
+  value,
+  onChange,
+  excludedId,
+  placeholder,
+  disabled,
+  testId,
+}: {
+  students: Student[];
+  value: string;
+  onChange: (value: string) => void;
+  excludedId?: string;
+  placeholder?: string;
+  disabled?: boolean;
+  testId?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const selected = students.find((student) => student.id === value) ?? null;
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          role="combobox"
+          aria-expanded={open}
+          disabled={disabled}
+          className="w-full justify-between font-normal"
+          data-testid={testId}
+        >
+          <span className="truncate">
+            {selected ? (
+              <>
+                {selected.firstName} {selected.lastName}
+                {selected.studentId ? <span className="text-muted-foreground"> · {selected.studentId}</span> : null}
+              </>
+            ) : (
+              <span className="text-muted-foreground">{placeholder ?? "Search learners…"}</span>
+            )}
+          </span>
+          <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start">
+        <Command>
+          <CommandInput placeholder="Search by name, ID, or class…" data-testid="input-grade-student-search" />
+          <CommandList>
+            <CommandEmpty>No learners found.</CommandEmpty>
+            <CommandGroup>
+              {students
+                .filter((student) => student.id !== excludedId)
+                .map((student) => (
+                  <CommandItem
+                    key={student.id}
+                    value={`${student.firstName} ${student.lastName} ${student.studentId ?? ""} ${student.currentClass ?? ""}`}
+                    onSelect={() => {
+                      onChange(student.id === value ? "" : student.id);
+                      setOpen(false);
+                    }}
+                    data-testid={`option-grade-student-${student.id}`}
+                  >
+                    <Check className={`mr-1 h-4 w-4 shrink-0 ${value === student.id ? "opacity-100" : "opacity-0"}`} />
+                    <span className="truncate">
+                      {student.firstName} {student.lastName}
+                    </span>
+                    <span className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
+                      {student.currentClass && <span className="max-w-24 truncate">{student.currentClass}</span>}
+                      {student.studentId && <span className="shrink-0">{student.studentId}</span>}
+                    </span>
+                  </CommandItem>
+                ))}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 // Editable input for one characteristic, shared by the class table and the
 // edit-learner dialog so both save through the same endpoint.
 function CharacteristicField({
@@ -158,6 +262,7 @@ function CharacteristicField({
 
 function RequestFormDialog({
   students,
+  gradeStudents,
   rule,
   prefill,
   readOnlyReason,
@@ -168,6 +273,7 @@ function RequestFormDialog({
   deletePending,
 }: {
   students: Student[];
+  gradeStudents: Student[];
   rule: Rule | null;
   prefill?: Partial<RequestDraftInput>;
   readOnlyReason: string | null;
@@ -226,11 +332,35 @@ function RequestFormDialog({
           </div>
           <div className="space-y-1.5">
             <Label>Learner 1</Label>
-            <LearnerSelect students={students} value={studentId1} excludedId={studentId2} onChange={setStudentId1} disabled={readOnly} />
+            <LearnerSelect
+              students={
+                students.some((student) => student.id === studentId1)
+                  ? students
+                  : [
+                      ...students,
+                      ...gradeStudents.filter((student) => student.id === studentId1),
+                    ]
+              }
+              value={studentId1}
+              excludedId={studentId2}
+              onChange={setStudentId1}
+              disabled={readOnly}
+            />
           </div>
           <div className="space-y-1.5">
             <Label>Learner 2</Label>
-            <LearnerSelect students={students} value={studentId2} excludedId={studentId1} onChange={setStudentId2} disabled={readOnly} />
+            <GradeStudentPicker
+              students={gradeStudents}
+              value={studentId2}
+              excludedId={studentId1}
+              onChange={setStudentId2}
+              placeholder="Search all learners in this grade…"
+              disabled={readOnly}
+              testId="select-request-learner-2"
+            />
+            <p className="text-xs text-muted-foreground">
+              Includes learners from other classes in the same grade.
+            </p>
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="request-comment">Comment (optional)</Label>
@@ -274,6 +404,7 @@ function RequestFormDialog({
 function EditLearnerDialog({
   student,
   students,
+  gradeStudents,
   characteristics,
   requests,
   requestNumberById,
@@ -288,6 +419,7 @@ function EditLearnerDialog({
 }: {
   student: Student;
   students: Student[];
+  gradeStudents: Student[];
   characteristics: Characteristic[];
   requests: Rule[];
   requestNumberById: Map<string, number>;
@@ -356,7 +488,7 @@ function EditLearnerDialog({
               <ul className="space-y-1.5" data-testid="list-learner-requests">
                 {learnerRequests.map(({ rule, number }) => {
                   const otherId = rule.studentId1 === student.id ? rule.studentId2 : rule.studentId1;
-                  const other = students.find((mate) => mate.id === otherId);
+                  const other = gradeStudents.find((mate) => mate.id === otherId);
                   const canModify = rule.reason === ownRequestReason;
                   return (
                     <li
@@ -368,6 +500,9 @@ function EditLearnerDialog({
                       <RequestTypeBadge rule={rule} />
                       <span className="min-w-0 flex-1 truncate font-medium">
                         {other ? `${other.firstName} ${other.lastName}` : "Unknown learner"}
+                        {other && !students.some((mate) => mate.id === other.id) && other.currentClass && (
+                          <span className="font-normal text-muted-foreground"> · {other.currentClass}</span>
+                        )}
                       </span>
                       <RequestImportanceBadge rule={rule} />
                       {rule.comment && (
@@ -461,6 +596,7 @@ function EditLearnerDialog({
 
 export default function TeacherSurveyPage({ token }: { token: string }) {
   const [students, setStudents] = useState<Student[]>([]);
+  const [gradeStudents, setGradeStudents] = useState<Student[]>([]);
   const [requests, setRequests] = useState<Rule[]>([]);
   const [teacherOptions, setTeacherOptions] = useState<SurveyTeacherOption[]>([]);
   const [placementRequests, setPlacementRequests] = useState<PlacementRequestView[]>([]);
@@ -488,6 +624,7 @@ export default function TeacherSurveyPage({ token }: { token: string }) {
 
   useEffect(() => {
     if (surveyQuery.data?.students) setStudents(surveyQuery.data.students);
+    if (surveyQuery.data?.gradeStudents) setGradeStudents(surveyQuery.data.gradeStudents);
     if (surveyQuery.data?.requests) setRequests(surveyQuery.data.requests);
     if (surveyQuery.data?.teachers) setTeacherOptions(surveyQuery.data.teachers);
     if (surveyQuery.data?.placementRequests) setPlacementRequests(surveyQuery.data.placementRequests);
@@ -778,15 +915,20 @@ export default function TeacherSurveyPage({ token }: { token: string }) {
                         <span className="truncate">{student.lastName}</span>
                         {(requestsByStudent.get(student.id) ?? []).map(({ rule, number }) => {
                           const otherId = rule.studentId1 === student.id ? rule.studentId2 : rule.studentId1;
-                          const other = students.find((mate) => mate.id === otherId);
+                          const other = gradeStudents.find((mate) => mate.id === otherId);
+                          const otherLabel = other
+                            ? `${other.firstName} ${other.lastName}${
+                                other.currentClass && other.currentClass.trim().toLowerCase() !== surveyQuery.data!.className?.trim().toLowerCase()
+                                  ? ` (${other.currentClass})`
+                                  : ""
+                              }`
+                            : "unknown learner";
                           return (
                             <button
                               key={rule.id}
                               type="button"
                               className={requestBadgeClassName(rule)}
-                              title={`${rule.type === "pair" ? "Together" : "Separate"} request #${number} with ${
-                                other ? `${other.firstName} ${other.lastName}` : "unknown learner"
-                              } · ${importanceLabel(rule)} — click to edit`}
+                              title={`${rule.type === "pair" ? "Together" : "Separate"} request #${number} with ${otherLabel} · ${importanceLabel(rule)} — click to edit`}
                               onClick={() => openRequestEditor({ mode: "edit", ruleId: rule.id })}
                               data-testid={`button-request-badge-${rule.id}`}
                             >
@@ -837,8 +979,8 @@ export default function TeacherSurveyPage({ token }: { token: string }) {
             <div>
               <h2 className="font-medium">Teacher requests</h2>
               <p className="text-sm text-muted-foreground">
-                Requests are numbered — the same number appears beside both learners in the class list. Click a
-                number to view or edit the request.
+                Requests are numbered — each involved learner in your class list shows the number beside their
+                name. The second learner can be from any class in the same grade.
               </p>
             </div>
             {requestSaveState === "saving" && <span className="text-sm text-muted-foreground">Saving…</span>}
@@ -857,7 +999,14 @@ export default function TeacherSurveyPage({ token }: { token: string }) {
                   </SelectContent>
                 </Select>
                 <LearnerSelect students={students} value={requestStudent1} excludedId={requestStudent2} onChange={setRequestStudent1} />
-                <LearnerSelect students={students} value={requestStudent2} excludedId={requestStudent1} onChange={setRequestStudent2} />
+                <GradeStudentPicker
+                  students={gradeStudents}
+                  value={requestStudent2}
+                  excludedId={requestStudent1}
+                  onChange={setRequestStudent2}
+                  placeholder="Search all learners in this grade…"
+                  testId="select-request-learner-2"
+                />
                 <Select
                   value={requestImportance}
                   onValueChange={(next) => setRequestImportance(next === "important" ? "important" : "mandatory")}
@@ -898,8 +1047,8 @@ export default function TeacherSurveyPage({ token }: { token: string }) {
             ) : (
               <ul className="space-y-1.5" data-testid="list-teacher-requests">
                 {requests.map((rule) => {
-                  const student1 = students.find((student) => student.id === rule.studentId1);
-                  const student2 = students.find((student) => student.id === rule.studentId2);
+                  const student1 = gradeStudents.find((student) => student.id === rule.studentId1);
+                  const student2 = gradeStudents.find((student) => student.id === rule.studentId2);
                   const canModify = rule.reason === ownRequestReason;
                   const number = requestNumberById.get(rule.id);
                   return (
@@ -911,9 +1060,9 @@ export default function TeacherSurveyPage({ token }: { token: string }) {
                       <span className={requestBadgeClassName(rule)}>{number}</span>
                       <RequestTypeBadge rule={rule} />
                       <span className="min-w-0 flex-1 truncate font-medium">
-                        {student1 ? `${student1.firstName} ${student1.lastName}` : "Unknown learner"}
+                        {learnerDisplayName(student1, students)}
                         {" "}{rule.type === "separate" ? "✕" : "↔"}{" "}
-                        {student2 ? `${student2.firstName} ${student2.lastName}` : "Unknown learner"}
+                        {learnerDisplayName(student2, students)}
                       </span>
                       <RequestImportanceBadge rule={rule} />
                       {(rule.comment || (!canModify && rule.reason)) && (
@@ -1024,6 +1173,7 @@ export default function TeacherSurveyPage({ token }: { token: string }) {
         <EditLearnerDialog
           student={editingStudent}
           students={students}
+          gradeStudents={gradeStudents}
           characteristics={characteristics}
           requests={requests}
           requestNumberById={requestNumberById}
@@ -1046,6 +1196,7 @@ export default function TeacherSurveyPage({ token }: { token: string }) {
               : `create-${requestEditor.prefill?.type ?? "separate"}-${requestEditor.prefill?.studentId1 ?? ""}`
           }
           students={students}
+          gradeStudents={gradeStudents}
           rule={requestEditor.mode === "edit" ? editingRule : null}
           prefill={requestEditor.mode === "create" ? requestEditor.prefill : undefined}
           readOnlyReason={
