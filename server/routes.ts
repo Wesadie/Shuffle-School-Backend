@@ -6,6 +6,7 @@ import { attachAccountContext, getAccountContext } from "./accountContext";
 import { authenticateSupabaseJwt, requireSupabaseUser } from "./supabaseAuth";
 import { onboardSupabaseUser } from "./onboarding";
 import { createAuthHandoff, exchangeAuthHandoff } from "./authHandoff";
+import { inviteAdministratorUser, removeInvitedAuthUser } from "./supabaseAdmin";
 import { createTeacherSurveyToken, sendTeacherSurveyEmail, verifyTeacherSurveyToken } from "./teacherSurvey";
 import {
   requireWritableWorkspace,
@@ -937,30 +938,42 @@ export async function registerRoutes(
   app.post("/api/administrators", isAuthenticated, requireWritableWorkspace, async (req, res) => {
     const context = await getPrimaryAdministratorContext(req, res);
     if (!context) return;
-    try {
-      const email = typeof req.body?.email === "string" ? req.body.email.trim().toLowerCase() : "";
-      const firstName = typeof req.body?.firstName === "string" ? req.body.firstName.trim() : "";
-      const lastName = typeof req.body?.lastName === "string" ? req.body.lastName.trim() : "";
-      if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-        return res.status(400).json({ error: "A valid email address is required" });
-      }
-      if (context.memberships.some((membership) => (membership.email ?? "").toLowerCase() === email)) {
-        return res.status(409).json({ error: "This person is already an administrator" });
-      }
 
-      // Reuse the person's existing profile when they already have a login;
-      // otherwise create a profile that is linked to their account at first
-      // sign-in (see the invited-membership reconciliation in onboarding).
+    const email = typeof req.body?.email === "string" ? req.body.email.trim().toLowerCase() : "";
+    const firstName = typeof req.body?.firstName === "string" ? req.body.firstName.trim() : "";
+    const lastName = typeof req.body?.lastName === "string" ? req.body.lastName.trim() : "";
+    if (!firstName || !lastName) {
+      return res.status(400).json({ error: "First name and last name are required" });
+    }
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ error: "A valid email address is required" });
+    }
+    if (context.memberships.some((membership) => (membership.email ?? "").toLowerCase() === email)) {
+      return res.status(409).json({ error: "This person is already an administrator" });
+    }
+
+    let invitedAuthUser: Awaited<ReturnType<typeof inviteAdministratorUser>> | undefined;
+    try {
       const existingProfile = await storage.findProfileByEmail(email);
-      const profile = existingProfile
-        ? existingProfile
-        : await storage.createProfile({ email, firstName: firstName || null, lastName: lastName || null });
+      invitedAuthUser = await inviteAdministratorUser({
+        email,
+        firstName,
+        lastName,
+        knownProfileId: existingProfile?.id,
+      });
+      const profile = await storage.upsertProfile({
+        id: invitedAuthUser.user.id,
+        email,
+        firstName,
+        lastName,
+      });
       const membership = await storage.createAccountMembership(context.accountId, {
         userId: profile.id,
         role: "admin",
-        status: existingProfile ? "active" : "invited",
+        status: "invited",
         invitedBy: context.userId,
-        acceptedAt: existingProfile ? new Date() : null,
+        invitedAt: new Date(),
+        acceptedAt: null,
       });
 
       const administrator: AdministratorView = {
@@ -975,8 +988,19 @@ export async function registerRoutes(
       };
       res.status(201).json(administrator);
     } catch (error) {
-      console.error("[administrators] add failed", error);
-      res.status(500).json({ error: "Failed to add administrator" });
+      if (invitedAuthUser?.created) {
+        await removeInvitedAuthUser(invitedAuthUser.user.id);
+      }
+      console.error("[administrators] add failed", {
+        email,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      const isConfigurationError = error instanceof Error && error.message.includes("not configured");
+      res.status(isConfigurationError ? 503 : 500).json({
+        error: isConfigurationError
+          ? "Administrator invitations are not configured. Please contact support."
+          : "The invitation could not be sent. Please try again.",
+      });
     }
   });
 

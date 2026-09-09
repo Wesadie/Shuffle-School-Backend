@@ -35,6 +35,7 @@ import LicenceBillingPage from "@/pages/licence-billing";
 import HelpPage from "@/pages/help";
 import TutorialsPage from "@/pages/tutorials";
 import AuthHandoffPage from "@/pages/auth-handoff";
+import AdminSetupPasswordPage from "@/pages/admin-setup-password";
 import PayfastReturnPage from "@/pages/payfast-return";
 import PayfastCancelPage from "@/pages/payfast-cancel";
 import TeacherSurveyPage from "@/pages/teacher-survey";
@@ -202,10 +203,13 @@ function AppContent() {
   const [importOpen, setImportOpen] = useState(false);
   const [location] = useLocation();
 
-  // Cross-domain auth handoff: runs before auth gate so unauthenticated
-  // users arriving from Lovable can establish a session.
+  // Authentication callback pages run before the normal auth gate because
+  // Supabase establishes the recipient's session from the emailed link.
   if (location.startsWith("/auth/handoff")) {
     return <AuthHandoffPage />;
+  }
+  if (location.startsWith("/admin/setup-password")) {
+    return <AdminSetupPasswordPage />;
   }
 
   if (location.startsWith("/teacher-survey/")) {

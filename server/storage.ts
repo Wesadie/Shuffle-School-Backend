@@ -253,7 +253,8 @@ export class DatabaseStorage {
     return profile ?? undefined;
   }
 
-  async createProfile(input: {
+  async upsertProfile(input: {
+    id: string;
     email: string;
     firstName?: string | null;
     lastName?: string | null;
@@ -261,10 +262,19 @@ export class DatabaseStorage {
     const [profile] = await db
       .insert(profiles)
       .values({
-        id: randomUUID(),
+        id: input.id,
         email: input.email,
         firstName: input.firstName ?? null,
         lastName: input.lastName ?? null,
+      })
+      .onConflictDoUpdate({
+        target: profiles.id,
+        set: {
+          email: input.email,
+          firstName: input.firstName ?? null,
+          lastName: input.lastName ?? null,
+          updatedAt: new Date(),
+        },
       })
       .returning();
     return profile;
@@ -276,7 +286,7 @@ export class DatabaseStorage {
 
   async createAccountMembership(
     accountId: string,
-    input: { userId: string; role: string; status: string; invitedBy?: string | null; acceptedAt?: Date | null },
+    input: { userId: string; role: string; status: string; invitedBy?: string | null; invitedAt?: Date | null; acceptedAt?: Date | null },
   ): Promise<AccountMembership> {
     accountId = requireAccountId(accountId);
     const [membership] = await db

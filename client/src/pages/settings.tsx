@@ -73,12 +73,15 @@ export default function SettingsPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/administrators"] });
       setIsAddAdminOpen(false);
       setAddAdminForm({ firstName: "", lastName: "", email: "" });
-      toast({ title: "Administrator added", description: "They can sign in with this email address." });
+      toast({
+        title: "Invitation sent",
+        description: "The administrator will remain pending until they create their password and activate their account.",
+      });
     },
     onError: (mutationError) => {
       toast({
-        title: "Failed to add administrator",
-        description: extractErrorMessage(mutationError, "Please check the email address and try again."),
+        title: "Failed to invite administrator",
+        description: extractErrorMessage(mutationError, "Please check the details and try again."),
         variant: "destructive",
       });
     },
@@ -335,7 +338,7 @@ export default function SettingsPage() {
                             ) : (
                               <Badge variant="secondary">Administrator</Badge>
                             )}
-                            {admin.status === "invited" && <Badge variant="outline">Invited</Badge>}
+                            {admin.status === "invited" && <Badge variant="outline">Invited / Pending</Badge>}
                           </div>
                           <p className="truncate text-sm text-muted-foreground">{admin.email}</p>
                         </div>
@@ -433,16 +436,16 @@ export default function SettingsPage() {
           <Dialog open={isAddAdminOpen} onOpenChange={setIsAddAdminOpen}>
             <DialogContent className="max-w-md">
               <DialogHeader>
-                <DialogTitle>Add Administrator</DialogTitle>
+                <DialogTitle>Invite Administrator</DialogTitle>
                 <DialogDescription>
-                  Additional administrators can manage this school's ShuffleSchool account. If they don't have a login
-                  yet, they'll be linked automatically when they first sign in with this email address.
+                  We'll email a secure invitation to this administrator. They will create their own password and join
+                  this school's existing ShuffleSchool account.
                 </DialogDescription>
               </DialogHeader>
               <div className="grid gap-4 py-4">
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-2">
-                    <Label htmlFor="admin-first-name">First name</Label>
+                    <Label htmlFor="admin-first-name">First name *</Label>
                     <Input
                       id="admin-first-name"
                       value={addAdminForm.firstName}
@@ -451,7 +454,7 @@ export default function SettingsPage() {
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="admin-last-name">Last name</Label>
+                    <Label htmlFor="admin-last-name">Last name *</Label>
                     <Input
                       id="admin-last-name"
                       value={addAdminForm.lastName}
@@ -475,10 +478,15 @@ export default function SettingsPage() {
                 <Button variant="outline" onClick={() => setIsAddAdminOpen(false)}>Cancel</Button>
                 <Button
                   onClick={() => addAdminMutation.mutate(addAdminForm)}
-                  disabled={!addAdminForm.email.trim() || addAdminMutation.isPending}
+                  disabled={
+                    !addAdminForm.firstName.trim() ||
+                    !addAdminForm.lastName.trim() ||
+                    !addAdminForm.email.trim() ||
+                    addAdminMutation.isPending
+                  }
                   data-testid="button-save-administrator"
                 >
-                  {addAdminMutation.isPending ? "Adding…" : "Add Administrator"}
+                  {addAdminMutation.isPending ? "Sending invitation…" : "Send Invitation"}
                 </Button>
               </DialogFooter>
             </DialogContent>

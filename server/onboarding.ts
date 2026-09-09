@@ -43,33 +43,37 @@ export async function ensureOnboardingAccount(user: NonNullable<Express.Request[
       [user.id, user.email ?? null, firstName, lastName, avatarUrl],
     );
 
-    // Administrator invites: when this sign-in's email matches an invited
-    // membership, link that membership to the real user id so the invited
-    // administrator joins the school's existing account instead of a new one.
+    // Activate an administrator invitation before looking for an existing
+    // account. New invitations already use the Supabase Auth user id; the email
+    // match also reconciles placeholder profiles created by the legacy flow.
     if (user.email) {
       const invited = await client.query<{ membership_id: string; invited_user_id: string }>(
         `SELECT am.id AS membership_id, am.user_id AS invited_user_id
          FROM account_memberships am
          JOIN profiles p ON p.id = am.user_id
-         WHERE lower(p.email) = lower($1) AND am.status = 'invited'
-         ORDER BY am.created_at ASC
-         LIMIT 1`,
-        [user.email],
+         WHERE am.status = 'invited'
+           AND (am.user_id = $1 OR lower(p.email) = lower($2))
+         ORDER BY CASE WHEN am.user_id = $1 THEN 0 ELSE 1 END, am.created_at ASC
+         LIMIT 1
+         FOR UPDATE OF am`,
+        [user.id, user.email],
       );
       const invite = invited.rows[0];
-      if (invite && invite.invited_user_id !== user.id) {
+      if (invite) {
         await client.query(
           `UPDATE account_memberships
            SET user_id = $1, status = 'active', accepted_at = NOW(), updated_at = NOW()
            WHERE id = $2`,
           [user.id, invite.membership_id],
         );
-        await client.query(
-          `DELETE FROM profiles p
-           WHERE p.id = $1 AND p.id <> $2
-             AND NOT EXISTS (SELECT 1 FROM account_memberships am WHERE am.user_id = p.id)`,
-          [invite.invited_user_id, user.id],
-        );
+        if (invite.invited_user_id !== user.id) {
+          await client.query(
+            `DELETE FROM profiles p
+             WHERE p.id = $1
+               AND NOT EXISTS (SELECT 1 FROM account_memberships am WHERE am.user_id = p.id)`,
+            [invite.invited_user_id],
+          );
+        }
       }
     }
 
