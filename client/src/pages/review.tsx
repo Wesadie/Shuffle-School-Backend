@@ -800,7 +800,8 @@ export default function ReviewPage() {
   const topSimilarMatches = useMemo(
     () => Array.from(similarityMatches.entries())
       .map(([studentId, score]) => ({ studentId, score }))
-      .sort((a, b) => b.score - a.score),
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 5),
     [similarityMatches],
   );
 
