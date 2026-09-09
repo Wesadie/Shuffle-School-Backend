@@ -381,9 +381,10 @@ export default function ReviewPage() {
   });
 
   const regenerateMutation = useMutation({
-    mutationFn: () => apiRequest("POST", "/api/generate-classes", {}),
-    onSuccess: () => {
-      setUndoStack([]);
+    mutationFn: (_variables: { historySnapshot: PlacementSnapshot }) =>
+      apiRequest("POST", "/api/generate-classes", {}),
+    onSuccess: (_data, variables) => {
+      setUndoStack((current) => [...current, variables.historySnapshot].slice(-20));
       queryClient.invalidateQueries({ queryKey: ["/api/placements"] });
       queryClient.invalidateQueries({ queryKey: ["/api/boost"] });
       queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
@@ -1077,7 +1078,9 @@ export default function ReviewPage() {
                 <Button
                   size="sm"
                   className="h-8 px-2 text-xs"
-                  onClick={() => regenerateMutation.mutate()}
+                  onClick={() => regenerateMutation.mutate({
+                    historySnapshot: placements.map(({ studentId, classId }) => ({ studentId, classId })),
+                  })}
                   disabled={regenerateMutation.isPending}
                   data-testid="button-rerun-solver"
                 >
