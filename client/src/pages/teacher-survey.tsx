@@ -225,6 +225,11 @@ function GradeStudentPicker({
   );
 }
 
+// Sentinel for the "Select…" clear option in category dropdowns. Radix Select
+// items cannot use an empty-string value, so choosing this option maps back to
+// "" and stores an empty value (never the literal text).
+const CLEAR_SELECTION = "__clear__";
+
 // Editable input for one characteristic, shared by the class table and the
 // edit-learner dialog so both save through the same endpoint.
 function CharacteristicField({
@@ -239,9 +244,13 @@ function CharacteristicField({
   const responses = characteristic.type === "category" ? normalizeResponses(characteristic) : [];
   if (responses.length > 0) {
     return (
-      <Select value={value || undefined} onValueChange={onChange}>
+      <Select
+        value={value || CLEAR_SELECTION}
+        onValueChange={(next) => onChange(next === CLEAR_SELECTION ? "" : next)}
+      >
         <SelectTrigger><SelectValue placeholder="Select…" /></SelectTrigger>
         <SelectContent>
+          <SelectItem value={CLEAR_SELECTION}>Select…</SelectItem>
           {responses.map((response) => (
             <SelectItem key={response.id} value={response.name}>{response.name}</SelectItem>
           ))}
