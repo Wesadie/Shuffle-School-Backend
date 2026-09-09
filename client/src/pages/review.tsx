@@ -15,6 +15,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Progress } from "@/components/ui/progress";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import {
   Select,
   SelectContent,
@@ -32,6 +33,7 @@ import { queryClient, apiRequest } from "@/lib/queryClient";
 import { downloadXlsx, type SpreadsheetCell, type SpreadsheetSheet } from "@/lib/xlsx-export";
 import { Link } from "wouter";
 import { characteristicValueToArray, isCharacteristicApplicableToGrade } from "@shared/characteristics";
+import { getStudentTargetGrade } from "@shared/grades";
 import type {
   ClassConfig, Student, Placement, Rule, Characteristic,
   ConflictWarning, BoostResponse, BoostSuggestion, Teacher
@@ -102,9 +104,8 @@ const normalizeGenderKey = (gender?: string | null) => {
 
 const normalizeSimilarityText = (value: string) => value.trim().toLowerCase();
 
-// "Find similar learners" fields. Gender acts as a matching requirement (e.g. a
-// selected boy matches other boys); race is deliberately excluded so swaps can
-// rebalance race without disturbing the other characteristics.
+// "Find similar learners" fields. Gender remains a matching requirement and
+// race participates in the weighted profile match alongside the other fields.
 const SIMILARITY_NUMERIC_FIELDS: { key: string; weight: number; aliases: string[] }[] = [
   { key: "aggregate", weight: 3, aliases: ["Aggregate %", "Aggregate"] },
   { key: "english", weight: 2, aliases: ["English %", "English"] },
@@ -113,10 +114,52 @@ const SIMILARITY_NUMERIC_FIELDS: { key: string; weight: number; aliases: string[
 ];
 
 const SIMILARITY_CATEGORY_FIELDS: { key: string; weight: number; aliases: string[] }[] = [
+  { key: "race", weight: 2, aliases: ["Race"] },
   { key: "secondLanguageChoice", weight: 3, aliases: ["2nd Language choice", "Second Language choice", "Afrikaans/Isizulu", "2nd Language", "Second Language"] },
   { key: "medication", weight: 1, aliases: ["Medication"] },
   { key: "learnerSupport", weight: 2, aliases: ["Learner Support", "Learning Support"] },
 ];
+
+type SimilarityComparisonField = {
+  key: string;
+  label: string;
+  aliases?: string[];
+  numeric?: boolean;
+  gender?: boolean;
+};
+
+const SIMILARITY_COMPARISON_FIELDS: SimilarityComparisonField[] = [
+  { key: "race", label: "Race", aliases: ["Race"] },
+  { key: "gender", label: "Gender", gender: true },
+  { key: "aggregate", label: "Aggregate", aliases: ["Aggregate %", "Aggregate"], numeric: true },
+  { key: "english", label: "English %", aliases: ["English %", "English"], numeric: true },
+  { key: "maths", label: "Maths %", aliases: ["Maths %", "Maths"], numeric: true },
+  { key: "secondLanguage", label: "2nd Language", aliases: ["2nd Language choice", "Second Language choice", "Afrikaans/Isizulu", "2nd Language", "Second Language"] },
+  { key: "secondLanguagePct", label: "2nd Language %", aliases: ["Afrikaans/Isizulu %", "2nd Language %", "Second Language %"], numeric: true },
+  { key: "medication", label: "Medication", aliases: ["Medication"] },
+  { key: "learnerSupport", label: "Learner Support", aliases: ["Learner Support", "Learning Support"] },
+];
+
+const getSimilarityDisplayValue = (student: Student, field: SimilarityComparisonField) => {
+  const value = field.gender ? student.gender || "" : getExportCharacteristic(student, field.aliases || []);
+  if (!value) return "—";
+  if (!field.numeric || value.includes("%")) return value;
+  return `${value}%`;
+};
+
+const getSimilarityComparison = (selected: Student, candidate: Student, field: SimilarityComparisonField) => {
+  const selectedValue = getSimilarityDisplayValue(selected, field);
+  const candidateValue = getSimilarityDisplayValue(candidate, field);
+  if (selectedValue === "—" || candidateValue === "—") return "Not set";
+  if (field.numeric) {
+    const selectedNumber = Number.parseFloat(selectedValue);
+    const candidateNumber = Number.parseFloat(candidateValue);
+    if (!Number.isFinite(selectedNumber) || !Number.isFinite(candidateNumber)) return "Not set";
+    const difference = Math.abs(selectedNumber - candidateNumber);
+    return difference === 0 ? "Match" : `Close (${difference.toFixed(difference % 1 === 0 ? 0 : 1)}%)`;
+  }
+  return normalizeSimilarityText(selectedValue) === normalizeSimilarityText(candidateValue) ? "Match" : "Different";
+};
 
 const computeSimilarityScore = (
   selected: Student,
@@ -1227,32 +1270,101 @@ export default function ReviewPage() {
 
         <main className="min-w-0 space-y-3">
           {selectedSimilarStudent && (
-            <Card className="border-primary/40" data-testid="card-similar-learners">
-              <CardContent className="p-2.5">
-                <div className="flex items-start justify-between gap-2">
+            <Card className="border-primary/40 bg-primary/[0.02]" data-testid="card-similar-learners">
+              <CardContent className="p-3">
+                <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <p className="text-xs font-semibold">Similar learners to {selectedSimilarStudent.firstName} {selectedSimilarStudent.lastName}</p>
-                    <p className="text-[10px] text-muted-foreground">Matched on gender, Aggregate, English %, Maths %, 2nd Language, Medication &amp; Learner Support — race excluded · {similarityMatches.size} match{similarityMatches.size === 1 ? "" : "es"} at 60%+</p>
+                    <p className="text-sm font-semibold">Similar learners to {selectedSimilarStudent.firstName} {selectedSimilarStudent.lastName}</p>
+                    <p className="text-[11px] text-muted-foreground">
+                      Matched on race, gender, Aggregate, English %, Maths %, 2nd Language, Medication &amp; Learner Support · {similarityMatches.size} match{similarityMatches.size === 1 ? "" : "es"} at 60%+
+                    </p>
                   </div>
-                  <Button size="icon" variant="ghost" className="h-6 w-6 shrink-0" onClick={() => setSelectedSimilarStudentId(null)} aria-label="Clear similar learners" data-testid="button-clear-similar"><X className="h-3.5 w-3.5" /></Button>
+                  <Button size="icon" variant="ghost" className="h-7 w-7 shrink-0" onClick={() => setSelectedSimilarStudentId(null)} aria-label="Clear similar learners" data-testid="button-clear-similar"><X className="h-4 w-4" /></Button>
                 </div>
+
+                <div className="mt-3 rounded-md border border-primary/25 bg-background p-2.5">
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
+                    <div className="flex min-w-52 items-center gap-2.5">
+                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
+                        {selectedSimilarStudent.firstName.charAt(0)}{selectedSimilarStudent.lastName.charAt(0)}
+                      </div>
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold">{selectedSimilarStudent.firstName} {selectedSimilarStudent.lastName}</p>
+                        <p className="text-[11px] text-muted-foreground">Current grade: {selectedSimilarStudent.grade} · New grade: {getStudentTargetGrade(selectedSimilarStudent) || "—"}</p>
+                      </div>
+                    </div>
+                    <div className="grid flex-1 grid-cols-2 gap-1.5 sm:grid-cols-3 xl:grid-cols-5">
+                      {SIMILARITY_COMPARISON_FIELDS.map((field) => (
+                        <div key={field.key} className="min-w-0 rounded-md bg-muted/50 px-2 py-1.5">
+                          <p className="truncate text-[9px] text-muted-foreground">{field.label}</p>
+                          <p className="truncate text-[11px] font-semibold" title={getSimilarityDisplayValue(selectedSimilarStudent, field)}>
+                            {getSimilarityDisplayValue(selectedSimilarStudent, field)}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
                 {topSimilarMatches.length > 0 ? (
-                  <div className="mt-2 space-y-0.5">
-                    {topSimilarMatches.slice(0, 8).map(({ studentId, score }) => {
-                      const match = students.find((s) => s.id === studentId);
-                      const matchClass = classesWithStudents.find(({ students: classStudents }) => classStudents.some((s) => s.id === studentId));
+                  <Accordion
+                    key={selectedSimilarStudent.id}
+                    type="single"
+                    collapsible
+                    defaultValue={topSimilarMatches[0]?.studentId}
+                    className="mt-2 space-y-1.5"
+                  >
+                    {topSimilarMatches.map(({ studentId, score }) => {
+                      const match = students.find((student) => student.id === studentId);
+                      const matchClass = classesWithStudents.find(({ students: classStudents }) => classStudents.some((student) => student.id === studentId));
                       if (!match || !matchClass) return null;
                       return (
-                        <div key={studentId} className="flex items-center gap-1.5 rounded border border-emerald-200 bg-emerald-50/60 px-1.5 py-1 text-[11px] dark:border-emerald-900 dark:bg-emerald-950/25" data-testid={`similar-match-${studentId}`}>
-                          <span className={`font-medium ${getGenderTextClass(match.gender)}`}>{match.lastName}, {match.firstName}</span>
-                          <span className="min-w-0 flex-1 truncate text-[10px] text-muted-foreground">{matchClass.config.name}</span>
-                          <span className="shrink-0 rounded bg-emerald-600 px-1 py-px text-[9px] font-semibold leading-4 text-white">{score}%</span>
-                        </div>
+                        <AccordionItem key={studentId} value={studentId} className="rounded-md border border-emerald-200 bg-background px-2 dark:border-emerald-900" data-testid={`similar-match-${studentId}`}>
+                          <AccordionTrigger className="py-2 text-xs hover:no-underline">
+                            <div className="flex min-w-0 flex-1 items-center gap-2 pr-2 text-left">
+                              <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-[10px] font-semibold text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
+                                {match.firstName.charAt(0)}{match.lastName.charAt(0)}
+                              </div>
+                              <span className={`truncate font-semibold ${getGenderTextClass(match.gender)}`}>{match.lastName}, {match.firstName}</span>
+                              <span className="truncate text-[10px] font-normal text-muted-foreground">{matchClass.config.name}</span>
+                              <Badge className="ml-auto shrink-0 bg-emerald-600 text-[10px] hover:bg-emerald-600">{score}% match</Badge>
+                            </div>
+                          </AccordionTrigger>
+                          <AccordionContent className="pb-2">
+                            <div className="overflow-x-auto rounded-md border">
+                              <table className="w-full min-w-[620px] text-left text-[11px]">
+                                <thead className="bg-muted/60">
+                                  <tr>
+                                    <th className="px-2 py-1.5 font-medium">Characteristic</th>
+                                    <th className="px-2 py-1.5 font-medium">{selectedSimilarStudent.firstName} {selectedSimilarStudent.lastName}</th>
+                                    <th className="px-2 py-1.5 font-medium">{match.firstName} {match.lastName}</th>
+                                    <th className="px-2 py-1.5 font-medium">Comparison</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {SIMILARITY_COMPARISON_FIELDS.map((field) => {
+                                    const comparison = getSimilarityComparison(selectedSimilarStudent, match, field);
+                                    return (
+                                      <tr key={field.key} className="border-t">
+                                        <td className="px-2 py-1 font-medium">{field.label}</td>
+                                        <td className="px-2 py-1">{getSimilarityDisplayValue(selectedSimilarStudent, field)}</td>
+                                        <td className="px-2 py-1">{getSimilarityDisplayValue(match, field)}</td>
+                                        <td className={comparison === "Different" ? "px-2 py-1 text-muted-foreground" : "px-2 py-1 text-emerald-700 dark:text-emerald-400"}>
+                                          {comparison}
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
+                            </div>
+                          </AccordionContent>
+                        </AccordionItem>
                       );
                     })}
-                  </div>
+                  </Accordion>
                 ) : (
-                  <p className="mt-1.5 text-[11px] text-muted-foreground">No similar learners found in other classes (learners need a 60%+ profile match).</p>
+                  <p className="mt-2 text-[11px] text-muted-foreground">No similar learners found in other classes (learners need a 60%+ profile match).</p>
                 )}
               </CardContent>
             </Card>
