@@ -1,11 +1,13 @@
 import { pool } from "./db";
 
-// Idempotent startup migrations for rules columns added after the original
-// table definition. Running these here keeps existing deployments working
-// without a manual `drizzle-kit push`; each statement is safe to re-run.
+// Idempotent startup migrations for columns added after the original table
+// definitions. Running these here keeps existing deployments working without
+// a manual `drizzle-kit push`; each statement is safe to re-run.
 const startupMigrations: string[] = [
   `ALTER TABLE rules ADD COLUMN IF NOT EXISTS importance text NOT NULL DEFAULT 'mandatory'`,
   `ALTER TABLE rules ADD COLUMN IF NOT EXISTS comment text`,
+  `ALTER TABLE teachers ADD COLUMN IF NOT EXISTS survey_message text`,
+  `ALTER TABLE teachers ADD COLUMN IF NOT EXISTS survey_settings jsonb`,
 ];
 
 export async function ensureSchemaMigrations(): Promise<void> {

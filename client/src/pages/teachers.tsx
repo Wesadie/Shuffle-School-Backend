@@ -35,11 +35,18 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { apiUrl } from "@/lib/apiUrl";
 import { queryClient, apiRequest, getAuthHeaders } from "@/lib/queryClient";
-import type { Teacher, InsertTeacher, Student } from "@shared/schema";
+import type { AppSettings, Teacher, InsertTeacher, Student, TeacherSurveySettings } from "@shared/schema";
 
 type SortField = "firstName" | "lastName" | "email" | "currentClass" | "surveyStatus";
 
 type SortDirection = "asc" | "desc";
+
+const defaultInviteMessage = "Hello,\n\nWe kindly ask you to complete the following survey by clicking the survey link below.";
+const defaultSurveySettings: TeacherSurveySettings = {
+  maxFriendNominations: 1,
+  allowTeacherStudentRequests: true,
+  allowTeacherTeacherRequests: true,
+};
 
 function parseCsv(text: string): string[][] {
   const firstLine = text.split(/\r?\n/, 1)[0] ?? "";
@@ -94,11 +101,13 @@ export default function TeachersPage() {
   const [isInviteDialogOpen, setIsInviteDialogOpen] = useState(false);
   const [showImportView, setShowImportView] = useState(false);
   const [editingTeacher, setEditingTeacher] = useState<Teacher | null>(null);
+  const [editingSurvey, setEditingSurvey] = useState<Teacher | null>(null);
+  const [surveyMessage, setSurveyMessage] = useState(defaultInviteMessage);
+  const [surveyClass, setSurveyClass] = useState("");
+  const [surveySettings, setSurveySettings] = useState<TeacherSurveySettings>(defaultSurveySettings);
   const [sortField, setSortField] = useState<SortField>("lastName");
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
-  const [inviteMessage, setInviteMessage] = useState(
-    "Hello,\n\nWe kindly ask you to complete the following survey by clicking the survey link below.",
-  );
+  const [inviteMessage, setInviteMessage] = useState(defaultInviteMessage);
   const [classTeacherAllocations, setClassTeacherAllocations] = useState<Record<string, string>>( {} );
 
   const [formData, setFormData] = useState<Partial<InsertTeacher>>({
@@ -118,6 +127,10 @@ export default function TeachersPage() {
 
   const { data: students = [] } = useQuery<Student[]>({
     queryKey: ["/api/students"],
+  });
+
+  const { data: appSettings } = useQuery<AppSettings>({
+    queryKey: ["/api/app-settings"],
   });
 
   const surveyClasses = useMemo(() => {
@@ -221,6 +234,32 @@ export default function TeachersPage() {
     },
   });
 
+  const updateSurveyMutation = useMutation({
+    mutationFn: ({ id, message, className, settings }: { id: string; message: string; className: string; settings: TeacherSurveySettings }) =>
+      apiRequest("PATCH", `/api/teachers/${id}/survey`, { message, className, settings }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["/api/teachers"] });
+      setEditingSurvey(null);
+      toast({ title: "Survey updated successfully" });
+    },
+    onError: (error: Error) => toast({ title: "Failed to update survey", description: error.message, variant: "destructive" }),
+  });
+
+  const resendSurveyMutation = useMutation({
+    mutationFn: (id: string) => apiRequest("POST", `/api/teachers/${id}/survey/resend`),
+    onSuccess: () => toast({ title: "Survey invitation resent" }),
+    onError: (error: Error) => toast({ title: "Failed to resend survey", description: error.message, variant: "destructive" }),
+  });
+
+  const closeSurveyMutation = useMutation({
+    mutationFn: (id: string) => apiRequest("POST", `/api/teachers/${id}/survey/close`),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["/api/teachers"] });
+      toast({ title: "Survey closed" });
+    },
+    onError: (error: Error) => toast({ title: "Failed to close survey", description: error.message, variant: "destructive" }),
+  });
+
   const autoAllocateTeachers = () => {
     const next: Record<string, string> = {};
     surveyClasses.forEach(({ name }) => {
@@ -233,8 +272,46 @@ export default function TeachersPage() {
   };
 
   const openInviteDialog = () => {
+    setInviteMessage(defaultInviteMessage);
     setClassTeacherAllocations({});
     setIsInviteDialogOpen(true);
+  };
+
+  const openNewSurvey = (teacher: Teacher) => {
+    const className = teacher.currentClass?.trim() || surveyClasses[0]?.name || "";
+    setInviteMessage(defaultInviteMessage);
+    setClassTeacherAllocations(className ? { [className]: teacher.id } : {});
+    setIsInviteDialogOpen(true);
+  };
+
+  const openUpdateSurvey = (teacher: Teacher) => {
+    setEditingSurvey(teacher);
+    setSurveyMessage(teacher.surveyMessage?.trim() || defaultInviteMessage);
+    setSurveyClass(teacher.allocatedClass?.trim() || teacher.currentClass?.trim() || "");
+    setSurveySettings(teacher.surveySettings || {
+      maxFriendNominations: appSettings?.maxFriendNominations ?? defaultSurveySettings.maxFriendNominations,
+      allowTeacherStudentRequests: appSettings?.allowTeacherStudentRequests ?? defaultSurveySettings.allowTeacherStudentRequests,
+      allowTeacherTeacherRequests: appSettings?.allowTeacherTeacherRequests ?? defaultSurveySettings.allowTeacherTeacherRequests,
+    });
+  };
+
+  const updateSurvey = () => {
+    if (!editingSurvey || !surveyMessage.trim() || !surveyClass) {
+      toast({ title: "Message and assigned class are required", variant: "destructive" });
+      return;
+    }
+    updateSurveyMutation.mutate({
+      id: editingSurvey.id,
+      message: surveyMessage.trim(),
+      className: surveyClass,
+      settings: surveySettings,
+    });
+  };
+
+  const closeSurvey = (teacher: Teacher) => {
+    if (window.confirm(`Close the survey for ${teacher.firstName} ${teacher.lastName}? They will no longer be able to make changes.`)) {
+      closeSurveyMutation.mutate(teacher.id);
+    }
   };
 
   const sendSurveyInvites = () => {
@@ -673,6 +750,7 @@ export default function TeachersPage() {
                       Survey Status
                     </TableHead>
                     <TableHead data-testid="header-survey-date">Survey Date</TableHead>
+                    <TableHead>Survey Actions</TableHead>
                     <TableHead className="w-24">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -695,6 +773,27 @@ export default function TeachersPage() {
                         {getSurveyStatusBadge(teacher.surveyStatus)}
                       </TableCell>
                       <TableCell data-testid={`text-survey-date-${teacher.id}`}>{teacher.surveyDate || "-"}</TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-1 whitespace-nowrap">
+                          {teacher.surveyStatus === "Sent" ? (
+                            <>
+                              <Button size="sm" variant="ghost" className="h-auto px-1 text-primary hover:text-primary" onClick={() => openUpdateSurvey(teacher)} data-testid={`button-edit-survey-${teacher.id}`}>
+                                Edit
+                              </Button>
+                              <Button size="sm" variant="ghost" className="h-auto px-1 text-primary hover:text-primary" onClick={() => resendSurveyMutation.mutate(teacher.id)} disabled={resendSurveyMutation.isPending} data-testid={`button-resend-survey-${teacher.id}`}>
+                                Resend
+                              </Button>
+                              <Button size="sm" variant="ghost" className="h-auto px-1 text-destructive hover:text-destructive" onClick={() => closeSurvey(teacher)} disabled={closeSurveyMutation.isPending} data-testid={`button-close-survey-${teacher.id}`}>
+                                Close
+                              </Button>
+                            </>
+                          ) : teacher.surveyStatus === "Not Sent" || !teacher.surveyStatus ? (
+                            <Button size="sm" variant="ghost" className="h-auto px-1 text-primary hover:text-primary" onClick={() => openNewSurvey(teacher)} data-testid={`button-new-survey-${teacher.id}`}>
+                              New
+                            </Button>
+                          ) : null}
+                        </div>
+                      </TableCell>
                       <TableCell>
                         <div className="flex items-center gap-1">
                           <Button
@@ -843,6 +942,80 @@ export default function TeachersPage() {
             <Button onClick={sendSurveyInvites} disabled={inviteMutation.isPending || surveyClasses.length === 0} data-testid="button-send-survey">
               <Mail className="mr-2 h-4 w-4" />
               {inviteMutation.isPending ? "Preparing..." : "Send Survey"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(editingSurvey)} onOpenChange={(open) => { if (!open) setEditingSurvey(null); }}>
+        <DialogContent className="max-w-xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Update Survey</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-6 py-2">
+            <div className="space-y-2">
+              <Label htmlFor="update-survey-message">Message</Label>
+              <Textarea
+                id="update-survey-message"
+                value={surveyMessage}
+                onChange={(event) => setSurveyMessage(event.target.value)}
+                rows={5}
+                data-testid="textarea-update-survey-message"
+              />
+              <p className="text-xs text-muted-foreground">This message will be used the next time the existing invitation is resent.</p>
+            </div>
+
+            <div className="space-y-3">
+              <h3 className="font-medium">Advanced Settings</h3>
+              <div className="space-y-2">
+                <Label htmlFor="update-survey-friends">Maximum friendship nominations</Label>
+                <Select
+                  value={String(surveySettings.maxFriendNominations)}
+                  onValueChange={(value) => setSurveySettings((current) => ({ ...current, maxFriendNominations: Number(value) }))}
+                >
+                  <SelectTrigger id="update-survey-friends" data-testid="select-update-survey-friends"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {[0, 1, 2, 3, 4, 5, 6, 7, 8].map((count) => <SelectItem key={count} value={String(count)}>{count}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <label className="flex items-center gap-3 rounded-md border p-3 text-sm">
+                <Checkbox
+                  checked={surveySettings.allowTeacherStudentRequests}
+                  onCheckedChange={(checked) => setSurveySettings((current) => ({ ...current, allowTeacherStudentRequests: checked === true }))}
+                  data-testid="checkbox-update-student-requests"
+                />
+                Allow teacher to add learner pairing and separation requests
+              </label>
+              <label className="flex items-center gap-3 rounded-md border p-3 text-sm">
+                <Checkbox
+                  checked={surveySettings.allowTeacherTeacherRequests}
+                  onCheckedChange={(checked) => setSurveySettings((current) => ({ ...current, allowTeacherTeacherRequests: checked === true }))}
+                  data-testid="checkbox-update-teacher-requests"
+                />
+                Allow teacher to add learner-to-teacher placement requests
+              </label>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="update-survey-class">Assigned Classes</Label>
+              <Select value={surveyClass || undefined} onValueChange={setSurveyClass}>
+                <SelectTrigger id="update-survey-class" data-testid="select-update-survey-class">
+                  <SelectValue placeholder="Select class" />
+                </SelectTrigger>
+                <SelectContent>
+                  {surveyClasses.map(({ name, studentCount }) => (
+                    <SelectItem key={name} value={name}>{name} · {studentCount} student{studentCount === 1 ? "" : "s"}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">Changing the class keeps all existing responses and requests intact.</p>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditingSurvey(null)}>Cancel</Button>
+            <Button onClick={updateSurvey} disabled={updateSurveyMutation.isPending} data-testid="button-update-survey">
+              {updateSurveyMutation.isPending ? "Updating..." : "Update Survey"}
             </Button>
           </DialogFooter>
         </DialogContent>

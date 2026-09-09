@@ -236,6 +236,12 @@ export type InsertPlacement = z.infer<typeof insertPlacementSchema>;
 export type Placement = typeof placements.$inferSelect;
 
 // Teacher model
+export interface TeacherSurveySettings {
+  maxFriendNominations: number;
+  allowTeacherStudentRequests: boolean;
+  allowTeacherTeacherRequests: boolean;
+}
+
 export const teachers = pgTable("teachers", {
   id: varchar("id", { length: 36 }).primaryKey(),
   accountId: uuid("account_id").notNull().default(developmentAccountSql).references(() => accounts.id, { onDelete: "cascade" }),
@@ -246,6 +252,8 @@ export const teachers = pgTable("teachers", {
   allocatedClass: text("allocated_class"),
   surveyStatus: text("survey_status").default("Not Sent"),
   surveyDate: text("survey_date"),
+  surveyMessage: text("survey_message"),
+  surveySettings: jsonb("survey_settings").$type<TeacherSurveySettings>(),
 }, (table) => [index("teachers_account_id_idx").on(table.accountId)]);
 
 export const insertTeacherSchema = createInsertSchema(teachers).omit({ id: true, accountId: true });

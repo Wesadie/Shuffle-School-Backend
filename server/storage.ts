@@ -569,7 +569,19 @@ export class DatabaseStorage {
 
   async createTeacher(accountId: string, insertTeacher: InsertTeacher): Promise<Teacher> {
     accountId = requireAccountId(accountId);
-    const [teacher] = await db.insert(teachers).values({ id: randomUUID(), accountId, firstName: insertTeacher.firstName, lastName: insertTeacher.lastName, email: insertTeacher.email, currentClass: insertTeacher.currentClass ?? null, allocatedClass: insertTeacher.allocatedClass ?? null, surveyStatus: insertTeacher.surveyStatus ?? "Not Sent", surveyDate: insertTeacher.surveyDate ?? null }).returning();
+    const [teacher] = await db.insert(teachers).values({
+      id: randomUUID(),
+      accountId,
+      firstName: insertTeacher.firstName,
+      lastName: insertTeacher.lastName,
+      email: insertTeacher.email,
+      currentClass: insertTeacher.currentClass ?? null,
+      allocatedClass: insertTeacher.allocatedClass ?? null,
+      surveyStatus: insertTeacher.surveyStatus ?? "Not Sent",
+      surveyDate: insertTeacher.surveyDate ?? null,
+      surveyMessage: insertTeacher.surveyMessage ?? null,
+      surveySettings: insertTeacher.surveySettings ?? null,
+    }).returning();
     return teacher;
   }
 

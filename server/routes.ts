@@ -39,10 +39,19 @@ import {
   type PlacementRequest,
   type PlacementRequestView,
   type AdministratorView,
+  type TeacherSurveySettings,
 } from "@shared/schema";
 import { CHARACTERISTIC_TYPES, characteristicValueToArray, defaultResponseColor, getStableResponseId, isCharacteristicApplicableToGrade, normalizeResponses } from "@shared/characteristics";
 import { z } from "zod";
 import { isRuleMandatory } from "@shared/schema";
+
+const defaultSurveyMessage = "Hello,\n\nWe kindly ask you to complete the following survey by clicking the survey link below.";
+
+const teacherSurveySettingsSchema = z.object({
+  maxFriendNominations: z.number().int().min(0).max(8),
+  allowTeacherStudentRequests: z.boolean(),
+  allowTeacherTeacherRequests: z.boolean(),
+});
 
 export async function registerRoutes(
   httpServer: Server,
@@ -62,6 +71,30 @@ export async function registerRoutes(
     if (!body || typeof body !== "object") return false;
     return fields.some((field) => Object.prototype.hasOwnProperty.call(body, field));
   };
+  const surveySettingsForTeacher = async (accountId: string, settings: TeacherSurveySettings | null) => {
+    if (settings) return settings;
+    const defaults = await storage.getAppSettings(accountId);
+    return {
+      maxFriendNominations: defaults.maxFriendNominations ?? 1,
+      allowTeacherStudentRequests: defaults.allowTeacherStudentRequests ?? true,
+      allowTeacherTeacherRequests: defaults.allowTeacherTeacherRequests ?? true,
+    };
+  };
+  const publicSurveyBaseUrl = (req: any) => {
+    const configuredSurveyUrl = (process.env.TEACHER_SURVEY_APP_URL || "").replace(/\/$/, "");
+    const requestHost = (req.get("host") || "").toLowerCase();
+    let sameOriginUrl = "";
+    const originHeader = typeof req.get("origin") === "string" ? req.get("origin")! : "";
+    if (originHeader && requestHost) {
+      try {
+        if (new URL(originHeader).host.toLowerCase() === requestHost) sameOriginUrl = originHeader.replace(/\/$/, "");
+      } catch {
+        sameOriginUrl = "";
+      }
+    }
+    const renderExternalUrl = (process.env.RENDER_EXTERNAL_URL || "").replace(/\/$/, "");
+    return configuredSurveyUrl || sameOriginUrl || renderExternalUrl || `${req.protocol}://${req.get("host")}`;
+  };
 
   // Setup authentication
   await setupAuth(app);
@@ -70,14 +103,10 @@ export async function registerRoutes(
     const payload = verifyTeacherSurveyToken(token);
     if (!payload) return null;
     const teacher = await storage.getTeacher(payload.accountId, payload.teacherId);
-    if (
-      !teacher ||
-      teacher.surveyDate !== payload.surveyDate ||
-      teacher.allocatedClass !== payload.className
-    ) {
+    if (!teacher || teacher.surveyDate !== payload.surveyDate || !teacher.allocatedClass) {
       return null;
     }
-    return { payload, teacher };
+    return { payload: { ...payload, className: teacher.allocatedClass }, teacher };
   };
 
   // Public teacher survey routes use signed, expiring links and must be registered before /api auth.
@@ -90,9 +119,10 @@ export async function registerRoutes(
         return res.json({ completed: true, teacherName: `${teacher.firstName} ${teacher.lastName}` });
       }
 
-      const [students, characteristics] = await Promise.all([
+      const [students, characteristics, surveySettings] = await Promise.all([
         storage.getStudents(payload.accountId),
         storage.getCharacteristics(payload.accountId),
+        surveySettingsForTeacher(payload.accountId, teacher.surveySettings),
       ]);
       const classStudents = students.filter(
         (student) => student.currentClass?.trim().toLowerCase() === payload.className.trim().toLowerCase(),
@@ -153,6 +183,7 @@ export async function registerRoutes(
         requests: classRules,
         teachers: teachers.map((item) => ({ id: item.id, name: `${item.firstName} ${item.lastName}` })),
         placementRequests: teacherPlacementRequests,
+        settings: surveySettings,
       });
     } catch (error) {
       res.status(500).json({ error: "Failed to load teacher survey" });
@@ -277,6 +308,14 @@ export async function registerRoutes(
       if (!studentId1 || !studentId2 || studentId1 === studentId2) {
         return res.status(400).json({ error: "Select two different learners" });
       }
+      const settings = await surveySettingsForTeacher(payload.accountId, teacher.surveySettings);
+      const isFriendship = type === "pair" && importance === "important" && !comment;
+      if (!isFriendship && !settings.allowTeacherStudentRequests) {
+        return res.status(403).json({ error: "Learner requests are disabled for this survey" });
+      }
+      if (isFriendship && settings.maxFriendNominations === 0) {
+        return res.status(403).json({ error: "Friendship nominations are disabled for this survey" });
+      }
 
       const students = await storage.getStudents(payload.accountId);
       const learnerError = validateSurveyRequestLearners(students, payload.className, studentId1, studentId2);
@@ -361,6 +400,9 @@ export async function registerRoutes(
       const resolved = await resolvePublicTeacherSurvey(req.params.token);
       if (!resolved) return res.status(404).json({ error: "This survey link is invalid or has expired" });
       const { payload, teacher } = resolved;
+      if (teacher.surveyStatus === "Completed") {
+        return res.status(409).json({ error: "This survey has already been completed" });
+      }
       const rule = await storage.getRule(payload.accountId, req.params.ruleId);
       if (!rule || rule.reason !== teacherSurveyRequestReason(teacher)) {
         return res.status(404).json({ error: "Request not found" });
@@ -395,6 +437,10 @@ export async function registerRoutes(
         return res.status(409).json({ error: "This survey has already been completed" });
       }
 
+      const settings = await surveySettingsForTeacher(payload.accountId, teacher.surveySettings);
+      if (!settings.allowTeacherTeacherRequests) {
+        return res.status(403).json({ error: "Teacher placement requests are disabled for this survey" });
+      }
       const studentId = typeof req.body?.studentId === "string" ? req.body.studentId : "";
       const teacherId = typeof req.body?.teacherId === "string" ? req.body.teacherId.trim() : "";
       if (!studentId || !teacherId) {
@@ -456,6 +502,9 @@ export async function registerRoutes(
       const resolved = await resolvePublicTeacherSurvey(req.params.token);
       if (!resolved) return res.status(404).json({ error: "This survey link is invalid or has expired" });
       const { payload, teacher } = resolved;
+      if (teacher.surveyStatus === "Completed") {
+        return res.status(409).json({ error: "This survey has already been completed" });
+      }
       const requests = await storage.getPlacementRequests(payload.accountId);
       const request = requests.find(
         (entry) => entry.id === req.params.requestId && entry.requestedByTeacherId === teacher.id,
@@ -1868,36 +1917,13 @@ export async function registerRoutes(
       }
 
       const replyTo = req.supabaseUser?.email || req.user?.claims?.email || req.user?.email;
-      // Resolve the public base URL for teacher survey links. The link MUST point
-      // at the deployment that serves this app (it owns the /teacher-survey/:token
-      // SPA route). The browser Origin header cannot be trusted blindly: when the
-      // invite is triggered from the marketing site (shuffleschool.co.za), the
-      // origin is that site, which has no /teacher-survey route and 404s. Only
-      // accept the origin when its host matches the host actually serving this
-      // request; otherwise use the Render deployment URL.
-      const configuredSurveyUrl = (process.env.TEACHER_SURVEY_APP_URL || "").replace(/\/$/, "");
-      const requestHost = (req.get("host") || "").toLowerCase();
-      let sameOriginUrl = "";
-      const originHeader = typeof req.get("origin") === "string" ? req.get("origin") : "";
-      if (originHeader && requestHost) {
-        try {
-          if (new URL(originHeader).host.toLowerCase() === requestHost) {
-            sameOriginUrl = originHeader.replace(/\/$/, "");
-          }
-        } catch {
-          sameOriginUrl = "";
-        }
-      }
-      const renderExternalUrl = (process.env.RENDER_EXTERNAL_URL || "").replace(/\/$/, "");
-      const publicBaseUrl = configuredSurveyUrl || sameOriginUrl || renderExternalUrl || `${req.protocol}://${req.get("host")}`;
-      console.log("[teacher-survey] survey link base resolved", {
-        publicBaseUrl,
-        hasConfiguredUrl: Boolean(configuredSurveyUrl),
-        usedSameOrigin: Boolean(sameOriginUrl),
-        usedRenderUrl: !configuredSurveyUrl && !sameOriginUrl && Boolean(renderExternalUrl),
-        requestHost,
-        originHeader: originHeader || "(none)",
-      });
+      const publicBaseUrl = publicSurveyBaseUrl(req);
+      const accountSettings = await storage.getAppSettings(accountId);
+      const surveySettings: TeacherSurveySettings = {
+        maxFriendNominations: accountSettings.maxFriendNominations ?? 1,
+        allowTeacherStudentRequests: accountSettings.allowTeacherStudentRequests ?? true,
+        allowTeacherTeacherRequests: accountSettings.allowTeacherTeacherRequests ?? true,
+      };
       const recipients: { id: string; email: string; className: string }[] = [];
 
       for (const allocation of allocations) {
@@ -1929,6 +1955,8 @@ export async function registerRoutes(
           allocatedClass: className,
           surveyStatus: "Sent",
           surveyDate,
+          surveyMessage: message,
+          surveySettings,
         });
         recipients.push({ id: teacher.id, email: teacher.email, className });
       }
@@ -1939,6 +1967,73 @@ export async function registerRoutes(
       console.error("[teacher-survey] invitation failed", { message });
       res.status(400).json({ error: message });
     }
+  });
+
+  app.patch("/api/teachers/:id/survey", isAuthenticated, requireWritableWorkspace, async (req, res) => {
+    try {
+      const accountId = accountIdFor(req);
+      const teacher = await storage.getTeacher(accountId, req.params.id);
+      if (!teacher) return res.status(404).json({ error: "Teacher not found" });
+      if (teacher.surveyStatus !== "Sent") {
+        return res.status(409).json({ error: "Only an open sent survey can be updated" });
+      }
+      const message = typeof req.body?.message === "string" ? req.body.message.trim() : "";
+      const className = typeof req.body?.className === "string" ? req.body.className.trim() : "";
+      const settings = teacherSurveySettingsSchema.safeParse(req.body?.settings);
+      if (!message || !className || !settings.success) {
+        return res.status(400).json({ error: "Message, assigned class, and valid advanced settings are required" });
+      }
+      const updated = await storage.updateTeacher(accountId, teacher.id, {
+        allocatedClass: className,
+        surveyMessage: message,
+        surveySettings: settings.data,
+      });
+      res.json(updated);
+    } catch (error) {
+      console.error("[teacher-survey] update failed", error);
+      res.status(400).json({ error: "Failed to update teacher survey" });
+    }
+  });
+
+  app.post("/api/teachers/:id/survey/resend", isAuthenticated, requireWritableWorkspace, async (req: any, res) => {
+    try {
+      const accountId = accountIdFor(req);
+      const teacher = await storage.getTeacher(accountId, req.params.id);
+      if (!teacher) return res.status(404).json({ error: "Teacher not found" });
+      if (teacher.surveyStatus !== "Sent" || !teacher.allocatedClass || !teacher.surveyDate) {
+        return res.status(409).json({ error: "Only an open sent survey can be resent" });
+      }
+      const token = createTeacherSurveyToken({
+        accountId,
+        teacherId: teacher.id,
+        className: teacher.allocatedClass,
+        surveyDate: teacher.surveyDate,
+        expiresAt: Date.now() + 14 * 24 * 60 * 60 * 1000,
+      });
+      await sendTeacherSurveyEmail({
+        to: teacher.email,
+        replyTo: req.supabaseUser?.email || req.user?.claims?.email || req.user?.email,
+        teacherName: `${teacher.firstName} ${teacher.lastName}`,
+        message: teacher.surveyMessage?.trim() || defaultSurveyMessage,
+        surveyUrl: `${publicSurveyBaseUrl(req)}/teacher-survey/${encodeURIComponent(token)}`,
+      });
+      res.json({ sent: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to resend teacher survey";
+      console.error("[teacher-survey] resend failed", { message });
+      res.status(400).json({ error: message });
+    }
+  });
+
+  app.post("/api/teachers/:id/survey/close", isAuthenticated, requireWritableWorkspace, async (req, res) => {
+    const accountId = accountIdFor(req);
+    const teacher = await storage.getTeacher(accountId, req.params.id);
+    if (!teacher) return res.status(404).json({ error: "Teacher not found" });
+    if (teacher.surveyStatus !== "Sent") {
+      return res.status(409).json({ error: "Only an open sent survey can be closed" });
+    }
+    const updated = await storage.updateTeacher(accountId, teacher.id, { surveyStatus: "Completed" });
+    res.json(updated);
   });
 
   app.get("/api/teachers/:id", isAuthenticated, async (req, res) => {
