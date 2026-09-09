@@ -115,7 +115,7 @@ function TopNavigation() {
     if (session) {
       await supabase.auth.signOut();
       queryClient.clear();
-      window.location.href = "https://shuffle-school.onrender.com/login";
+      window.location.href = "https://shuffleschool.co.za/";
     } else {
       window.location.href = "/api/logout";
     }
