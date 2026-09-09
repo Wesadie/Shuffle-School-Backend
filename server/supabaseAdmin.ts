@@ -5,11 +5,7 @@ const SUPABASE_PUBLISHABLE_KEY =
   process.env.SUPABASE_ANON_KEY ??
   process.env.SUPABASE_PUBLISHABLE_KEY ??
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFqc25udXhmdmZxZ2hnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM0Mjc1NDgsImV4cCI6MjA5OTAwMzU0OH0.5mE-xJlm_Dx8CYdAamFEUMczd_jS0wCpgPjAtBZjNAQ";
-const APP_ORIGIN = (
-  process.env.RENDER_EXTERNAL_URL ??
-  process.env.APP_BASE_URL ??
-  "https://shuffle-school.onrender.com"
-).replace(/\/$/, "");
+const ADMIN_PASSWORD_SETUP_URL = "https://shuffle-school.onrender.com/admin/setup-password";
 
 let adminClient: SupabaseClient | undefined;
 let publicClient: SupabaseClient | undefined;
@@ -56,7 +52,6 @@ export async function inviteAdministratorUser(input: {
   knownProfileId?: string;
 }): Promise<{ user: User; created: boolean }> {
   const admin = getAdminClient().auth.admin;
-  const redirectTo = `${APP_ORIGIN}/admin/setup-password`;
   const existingUser = await findAuthUserByEmail(input.email, input.knownProfileId);
   const invitationMetadata = { first_name: input.firstName, last_name: input.lastName };
 
@@ -66,14 +61,16 @@ export async function inviteAdministratorUser(input: {
     });
     if (error || !data.user) throw error ?? new Error("Failed to update the invited Supabase user");
 
-    const { error: emailError } = await getPublicClient().auth.resetPasswordForEmail(input.email, { redirectTo });
+    const { error: emailError } = await getPublicClient().auth.resetPasswordForEmail(input.email, {
+      redirectTo: ADMIN_PASSWORD_SETUP_URL,
+    });
     if (emailError) throw emailError;
     return { user: data.user, created: false };
   }
 
   const { data, error } = await admin.inviteUserByEmail(input.email, {
     data: invitationMetadata,
-    redirectTo,
+    redirectTo: ADMIN_PASSWORD_SETUP_URL,
   });
   if (error || !data.user) throw error ?? new Error("Supabase did not create the invited user");
   return { user: data.user, created: true };
