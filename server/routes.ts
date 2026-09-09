@@ -42,6 +42,7 @@ import {
   type TeacherSurveySettings,
 } from "@shared/schema";
 import { CHARACTERISTIC_TYPES, characteristicValueToArray, defaultResponseColor, getStableResponseId, isCharacteristicApplicableToGrade, normalizeResponses } from "@shared/characteristics";
+import { getStudentTargetGrade, normalizeGradeValue } from "@shared/grades";
 import { z } from "zod";
 import { isRuleMandatory } from "@shared/schema";
 
@@ -1461,26 +1462,53 @@ export async function registerRoutes(
     let reservedTrialUse = false;
 
     try {
-      const { grade } = req.body;
-      
+      const requestedGrade = typeof req.body?.grade === "string"
+        ? normalizeGradeValue(req.body.grade)
+        : "";
+
       const allStudents = await storage.getStudents(accountIdFor(req));
-      const students = grade ? allStudents.filter(s => s.grade === grade) : allStudents;
+      const students = requestedGrade
+        ? allStudents.filter((student) => getStudentTargetGrade(student) === requestedGrade)
+        : allStudents;
       const classConfigs = await storage.getClassConfigs(accountIdFor(req));
       const rules = await storage.getRules(accountIdFor(req));
       const characteristics = await storage.getCharacteristics(accountIdFor(req));
-
-      const targetConfigs = grade ? classConfigs.filter(c => c.grade === grade) : classConfigs;
+      const targetConfigs = requestedGrade
+        ? classConfigs.filter((config) => normalizeGradeValue(config.grade) === requestedGrade)
+        : classConfigs;
 
       if (targetConfigs.length === 0) {
-        return res.status(400).json({ error: "No class configurations found for the specified grade" });
+        return res.status(400).json({ error: "No class configurations found for the specified target grade" });
       }
 
       if (students.length === 0) {
-        return res.status(400).json({ error: "No students found for the specified grade" });
+        return res.status(400).json({ error: "No students found for the specified target grade" });
+      }
+
+      const studentsWithoutTargetGrade = students.filter((student) => !getStudentTargetGrade(student));
+      if (studentsWithoutTargetGrade.length > 0) {
+        return res.status(400).json({
+          error: `New Grade is required for ${studentsWithoutTargetGrade.length} learner${studentsWithoutTargetGrade.length === 1 ? "" : "s"}`,
+        });
       }
 
       if (characteristics.length > 50) {
         return res.status(400).json({ error: "A maximum of 50 active characteristics is supported" });
+      }
+
+      const targetGrades = Array.from(new Set(students.map(getStudentTargetGrade)));
+      for (const targetGrade of targetGrades) {
+        const learnerCount = students.filter((student) => getStudentTargetGrade(student) === targetGrade).length;
+        const gradeClasses = targetConfigs.filter((config) => normalizeGradeValue(config.grade) === targetGrade);
+        if (gradeClasses.length === 0) {
+          return res.status(400).json({ error: `No target classes are configured for Grade ${targetGrade}` });
+        }
+        const gradeCapacity = gradeClasses.reduce((total, config) => total + (config.capacity || 30), 0);
+        if (gradeCapacity < learnerCount) {
+          return res.status(400).json({
+            error: `Grade ${targetGrade} has capacity for ${gradeCapacity} learners but needs ${learnerCount}`,
+          });
+        }
       }
 
       const reservation = await reserveTrialSolverGeneration(context);
@@ -1489,13 +1517,40 @@ export async function registerRoutes(
       }
       reservedTrialUse = reservation === "reserved";
 
-      // Clear existing placements for regeneration
+      const generatedClasses: GeneratedClass[] = [];
+      const conflicts: ConflictWarning[] = [];
+      for (const targetGrade of targetGrades) {
+        const gradeStudents = students.filter((student) => getStudentTargetGrade(student) === targetGrade);
+        const gradeStudentIds = new Set(gradeStudents.map((student) => student.id));
+        const gradeClasses = targetConfigs.filter((config) => normalizeGradeValue(config.grade) === targetGrade);
+        const gradeRules = rules.filter(
+          (rule) => gradeStudentIds.has(rule.studentId1) && gradeStudentIds.has(rule.studentId2),
+        );
+        const gradeResult = await generateBalancedClasses(gradeStudents, gradeClasses, gradeRules, characteristics);
+        generatedClasses.push(...gradeResult.classes);
+        conflicts.push(...gradeResult.conflicts);
+      }
+
+      const invalidAssignments = generatedClasses.flatMap((generatedClass) =>
+        generatedClass.students
+          .filter((student) => getStudentTargetGrade(student) !== normalizeGradeValue(generatedClass.classConfig.grade))
+          .map((student) => `${student.firstName} ${student.lastName} → ${generatedClass.classConfig.name}`),
+      );
+      if (invalidAssignments.length > 0) {
+        return res.status(400).json({
+          error: `Invalid target-grade assignments: ${invalidAssignments.join(", ")}`,
+        });
+      }
+
+      const balanceScores = generatedClasses.flatMap((generatedClass) => Object.values(generatedClass.balanceScores));
+      const overallBalance = balanceScores.length > 0
+        ? balanceScores.reduce((total, score) => total + score, 0) / balanceScores.length
+        : 100;
+      const result: ClassGenerationResult = { classes: generatedClasses, conflicts, overallBalance };
+
+      // Replace persisted placements only after every generated assignment has
+      // passed the target-grade safety check.
       await storage.deleteAllPlacements(accountIdFor(req));
-
-      // Generate balanced class assignments
-      const result = await generateBalancedClasses(students, targetConfigs, rules, characteristics);
-
-      // Save placements
       for (const generatedClass of result.classes) {
         for (const student of generatedClass.students) {
           await storage.createPlacement(accountIdFor(req), {
@@ -1567,7 +1622,14 @@ export async function registerRoutes(
         .filter((char) => !char.tagOnly)
         .sort((a, b) => (b.priority || 0) - (a.priority || 0))
         .slice(0, 50);
-      const numericTargets = getNumericTargets(students, activeCharacteristics);
+      const classConfigById = new Map(classConfigs.map((config) => [config.id, config]));
+      const targetGrades = Array.from(new Set(students.map(getStudentTargetGrade).filter(Boolean)));
+      const numericTargetsByGrade = new Map(
+        targetGrades.map((grade) => [
+          grade,
+          getNumericTargets(students.filter((student) => getStudentTargetGrade(student) === grade), activeCharacteristics),
+        ]),
+      );
 
       // Optional single-characteristic boosting: reuse the same swap search but
       // score candidate swaps against one characteristic instead of the overall average.
@@ -1577,9 +1639,11 @@ export async function registerRoutes(
         : null;
       const scoreCharacteristics = targetCharacteristic ? [targetCharacteristic] : activeCharacteristics;
 
-      // Calculate balance score for a class using the same category/numeric model as generation.
-      const calculateClassBalance = (classStudentList: Student[]): number => {
+      // Calculate balance against the learner distribution for this target grade only.
+      const calculateClassBalance = (classId: string, classStudentList: Student[]): number => {
         if (scoreCharacteristics.length === 0 || classStudentList.length === 0) return 100;
+        const grade = normalizeGradeValue(classConfigById.get(classId)?.grade);
+        const numericTargets = numericTargetsByGrade.get(grade) ?? new Map();
         const totalScore = scoreCharacteristics.reduce(
           (sum, char) => sum + calculateCharacteristicScore(classStudentList, char, numericTargets),
           0,
@@ -1591,8 +1655,8 @@ export async function registerRoutes(
       const calculateOverallBalance = (): number => {
         let total = 0;
         let count = 0;
-        for (const [_, classList] of classStudents) {
-          total += calculateClassBalance(classList);
+        for (const [classId, classList] of classStudents) {
+          total += calculateClassBalance(classId, classList);
           count++;
         }
         return count > 0 ? total / count : 100;
@@ -1640,12 +1704,21 @@ export async function registerRoutes(
         for (let j = i + 1; j < classIds.length; j++) {
           const class1Id = classIds[i];
           const class2Id = classIds[j];
+          const class1Grade = normalizeGradeValue(classConfigById.get(class1Id)?.grade);
+          const class2Grade = normalizeGradeValue(classConfigById.get(class2Id)?.grade);
+          if (!class1Grade || class1Grade !== class2Grade) continue;
           const class1Students = classStudents.get(class1Id) || [];
           const class2Students = classStudents.get(class2Id) || [];
           
           // Try each pair of students
           for (const student1 of class1Students) {
             for (const student2 of class2Students) {
+              if (
+                getStudentTargetGrade(student1) !== class2Grade ||
+                getStudentTargetGrade(student2) !== class1Grade
+              ) {
+                continue;
+              }
               // Skip if either swap would violate rules
               if (wouldViolateRules(student1, class2Id) || wouldViolateRules(student2, class1Id)) {
                 continue;
@@ -1662,7 +1735,7 @@ export async function registerRoutes(
               
               let newTotal = 0;
               for (const [cid, classList] of tempClassStudents) {
-                newTotal += calculateClassBalance(classList);
+                newTotal += calculateClassBalance(cid, classList);
               }
               const newOverallBalance = newTotal / classIds.length;
               
@@ -1711,19 +1784,32 @@ export async function registerRoutes(
   app.post("/api/boost/apply", isAuthenticated, requireWritableWorkspace, async (req, res) => {
     try {
       const { student1Id, student1NewClassId, student2Id, student2NewClassId } = req.body;
-      
-      const placements = await storage.getPlacements(accountIdFor(req));
-      
+      const accountId = accountIdFor(req);
+      const [placements, students, classConfigs] = await Promise.all([
+        storage.getPlacements(accountId),
+        storage.getStudents(accountId),
+        storage.getClassConfigs(accountId),
+      ]);
       const placement1 = placements.find(p => p.studentId === student1Id);
       const placement2 = placements.find(p => p.studentId === student2Id);
-      
-      if (!placement1 || !placement2) {
-        return res.status(404).json({ error: "One or both students not found in placements" });
+      const student1 = students.find((student) => student.id === student1Id);
+      const student2 = students.find((student) => student.id === student2Id);
+      const class1 = classConfigs.find((config) => config.id === student1NewClassId);
+      const class2 = classConfigs.find((config) => config.id === student2NewClassId);
+
+      if (!placement1 || !placement2 || !student1 || !student2 || !class1 || !class2) {
+        return res.status(404).json({ error: "One or both students or target classes were not found" });
+      }
+      if (
+        getStudentTargetGrade(student1) !== normalizeGradeValue(class1.grade) ||
+        getStudentTargetGrade(student2) !== normalizeGradeValue(class2.grade)
+      ) {
+        return res.status(400).json({ error: "Boost cannot move a learner outside their New Grade" });
       }
       
       // Update both placements
-      await storage.updatePlacement(accountIdFor(req), placement1.id, { classId: student1NewClassId });
-      await storage.updatePlacement(accountIdFor(req), placement2.id, { classId: student2NewClassId });
+      await storage.updatePlacement(accountId, placement1.id, { classId: student1NewClassId });
+      await storage.updatePlacement(accountId, placement2.id, { classId: student2NewClassId });
       
       res.json({ success: true });
     } catch (error) {

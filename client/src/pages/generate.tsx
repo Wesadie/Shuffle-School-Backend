@@ -27,6 +27,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { getStudentTargetGrade, normalizeGradeValue } from "@shared/grades";
 import type { ClassConfig, InsertClassConfig, Student, Rule, Characteristic, Teacher } from "@shared/schema";
 
 export default function GeneratePage() {
@@ -211,9 +212,16 @@ export default function GeneratePage() {
     generateMutation.mutate();
   };
 
-  const grades = Array.from(new Set(students.map((s) => s.grade))).sort();
-  const totalCapacity = classConfigs.reduce((sum, c) => sum + (c.capacity || 30), 0);
-  const canGenerate = students.length > 0 && classConfigs.length > 0 && totalCapacity >= students.length;
+  const studentsWithoutTargetGrade = students.filter((student) => !getStudentTargetGrade(student));
+  const grades = Array.from(new Set(students.map(getStudentTargetGrade).filter(Boolean))).sort();
+  const gradeCapacityIssues = grades.flatMap((grade) => {
+    const learnerCount = students.filter((student) => getStudentTargetGrade(student) === grade).length;
+    const capacity = classConfigs
+      .filter((config) => normalizeGradeValue(config.grade) === grade)
+      .reduce((sum, config) => sum + (config.capacity || 30), 0);
+    return capacity < learnerCount ? [{ grade, learnerCount, capacity }] : [];
+  });
+  const canGenerate = students.length > 0 && studentsWithoutTargetGrade.length === 0 && gradeCapacityIssues.length === 0;
 
   const isLoading = configsLoading || studentsLoading;
   const accountContext = user?.accountContext;
@@ -321,13 +329,24 @@ export default function GeneratePage() {
         </Alert>
       )}
 
-      {totalCapacity < students.length && classConfigs.length > 0 && (
+      {studentsWithoutTargetGrade.length > 0 && (
+        <Alert variant="destructive">
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>New Grade required</AlertTitle>
+          <AlertDescription>
+            {studentsWithoutTargetGrade.length} learner{studentsWithoutTargetGrade.length === 1 ? " is" : "s are"} missing a valid New Grade.
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {gradeCapacityIssues.length > 0 && classConfigs.length > 0 && (
         <Alert variant="destructive">
           <AlertCircle className="h-4 w-4" />
           <AlertTitle>Insufficient capacity</AlertTitle>
           <AlertDescription>
-            Total class capacity ({totalCapacity}) is less than the number of students ({students.length}). 
-            Please add more classes or increase capacity.
+            {gradeCapacityIssues.map(({ grade, learnerCount, capacity }) =>
+              `Grade ${grade} needs ${learnerCount} places but has capacity for ${capacity}`,
+            ).join(". ")}. Please add target-grade classes or increase their capacity.
           </AlertDescription>
         </Alert>
       )}
