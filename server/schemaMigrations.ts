@@ -8,6 +8,8 @@ const startupMigrations: string[] = [
   `ALTER TABLE rules ADD COLUMN IF NOT EXISTS comment text`,
   `ALTER TABLE teachers ADD COLUMN IF NOT EXISTS survey_message text`,
   `ALTER TABLE teachers ADD COLUMN IF NOT EXISTS survey_settings jsonb`,
+  `ALTER TABLE account_subscriptions ADD COLUMN IF NOT EXISTS cancel_at_period_end boolean NOT NULL DEFAULT false`,
+  `ALTER TABLE account_subscriptions ADD COLUMN IF NOT EXISTS canceled_at timestamptz`,
 ];
 
 export async function ensureSchemaMigrations(): Promise<void> {

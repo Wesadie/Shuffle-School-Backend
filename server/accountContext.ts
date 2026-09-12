@@ -9,11 +9,14 @@ export interface AccountContext {
   accountId: string;
   accountStatus: string;
   workspaceMode: "demo" | "live";
+  accountRole: string;
   subscriptionStatus: string;
   licensedLearnerCount: number | null;
   trialEndsAt: string | null;
   trialExpired: boolean;
   licenseEndsAt: string | null;
+  cancelAtPeriodEnd: boolean;
+  canceledAt: string | null;
   successfulSolverGenerations: number;
 }
 
@@ -35,11 +38,14 @@ export async function resolveAccountContext(): Promise<AccountContext> {
     accountId: account?.id ?? DEVELOPMENT_ACCOUNT_ID,
     accountStatus: account?.status ?? "active",
     workspaceMode: account?.workspaceMode === "demo" ? "demo" : "live",
+    accountRole: "owner",
     subscriptionStatus: "active",
     licensedLearnerCount: null,
     trialEndsAt: null,
     trialExpired: false,
     licenseEndsAt: null,
+    cancelAtPeriodEnd: false,
+    canceledAt: null,
     successfulSolverGenerations: 0,
   };
 }

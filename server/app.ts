@@ -135,6 +135,13 @@ app.post(
       if (body.transactionType === "renewal" && payfastLearnerCount <= 0) {
         throw new Error("An existing licensed learner count is required before renewal");
       }
+      // Cancelled subscriptions are non-renewing: refuse to start a renewal
+      // payment. (renewLicense enforces the same guard for ITN callbacks.)
+      if (body.transactionType === "renewal" && accountContext.cancelAtPeriodEnd) {
+        return res.status(403).json({
+          error: "This subscription has been cancelled and will not renew automatically",
+        });
+      }
 
       console.log("[PayFast Route Entered]", {
         accountId,

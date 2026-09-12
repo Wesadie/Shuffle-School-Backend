@@ -6,11 +6,14 @@ interface OnboardingAccount {
   accountId: string;
   accountStatus: string;
   workspaceMode: "demo" | "live";
+  accountRole: string;
   subscriptionStatus: string;
   licensedLearnerCount: number | null;
   trialEndsAt: string | null;
   trialExpired: boolean;
   licenseEndsAt: string | null;
+  cancelAtPeriodEnd: boolean;
+  canceledAt: string | null;
   successfulSolverGenerations: number;
   isNewAccount: boolean;
 }
@@ -79,11 +82,14 @@ export async function ensureOnboardingAccount(user: NonNullable<Express.Request[
 
     const existing = await client.query<OnboardingAccount>(
       `SELECT a.id AS "accountId", a.status AS "accountStatus", a.workspace_mode AS "workspaceMode",
+              am.role AS "accountRole",
               COALESCE(s.status, 'trialing') AS "subscriptionStatus",
               s.licensed_learner_count AS "licensedLearnerCount",
               s.trial_ends_at AS "trialEndsAt",
               COALESCE(s.status, 'trialing') <> 'active' AND s.trial_ends_at IS NOT NULL AND s.trial_ends_at <= NOW() AS "trialExpired",
               s.license_ends_at AS "licenseEndsAt",
+              COALESCE(s.cancel_at_period_end, FALSE) AS "cancelAtPeriodEnd",
+              s.canceled_at AS "canceledAt",
               COALESCE(u.successful_solver_generations, 0) AS "successfulSolverGenerations",
               FALSE AS "isNewAccount"
        FROM account_memberships am
@@ -111,6 +117,7 @@ export async function ensureOnboardingAccount(user: NonNullable<Express.Request[
         licensedLearnerCount: account.licensedLearnerCount === null ? null : Number(account.licensedLearnerCount),
         trialEndsAt: account.trialEndsAt ? new Date(account.trialEndsAt).toISOString() : null,
         licenseEndsAt: account.licenseEndsAt ? new Date(account.licenseEndsAt).toISOString() : null,
+        canceledAt: account.canceledAt ? new Date(account.canceledAt).toISOString() : null,
         successfulSolverGenerations: Number(account.successfulSolverGenerations || 0),
         isNewAccount: false,
       };
@@ -154,10 +161,13 @@ export async function ensureOnboardingAccount(user: NonNullable<Express.Request[
     return {
       ...account.rows[0],
       subscriptionStatus: "trialing",
+      accountRole: "owner",
       licensedLearnerCount: null,
       trialEndsAt: trialEndsAt.toISOString(),
       trialExpired: false,
       licenseEndsAt: null,
+      cancelAtPeriodEnd: false,
+      canceledAt: null,
       successfulSolverGenerations: 0,
       isNewAccount: true,
     };

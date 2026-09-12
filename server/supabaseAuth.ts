@@ -66,20 +66,26 @@ async function resolveSupabaseAccountContext(userId: string): Promise<AccountCon
     accountId: string;
     accountStatus: string;
     workspaceMode: string;
+    accountRole: string;
     subscriptionStatus: string;
     licensedLearnerCount: number | null;
     trialEndsAt: Date | null;
     trialExpired: boolean;
     licenseEndsAt: Date | null;
+    cancelAtPeriodEnd: boolean;
+    canceledAt: Date | null;
     successfulSolverGenerations: number;
   }>(
 
     `SELECT a.id AS "accountId", a.status AS "accountStatus", a.workspace_mode AS "workspaceMode",
+            am.role AS "accountRole",
             COALESCE(s.status, 'trialing') AS "subscriptionStatus",
             s.licensed_learner_count AS "licensedLearnerCount",
             s.trial_ends_at AS "trialEndsAt",
             COALESCE(s.status, 'trialing') <> 'active' AND s.trial_ends_at IS NOT NULL AND s.trial_ends_at <= NOW() AS "trialExpired",
             s.license_ends_at AS "licenseEndsAt",
+            COALESCE(s.cancel_at_period_end, FALSE) AS "cancelAtPeriodEnd",
+            s.canceled_at AS "canceledAt",
             COALESCE(u.successful_solver_generations, 0)::int AS "successfulSolverGenerations"
 
      FROM account_memberships am
@@ -99,11 +105,14 @@ async function resolveSupabaseAccountContext(userId: string): Promise<AccountCon
     accountId: membership.accountId,
     accountStatus: membership.accountStatus,
     workspaceMode: membership.workspaceMode === "demo" ? "demo" : "live",
+    accountRole: membership.accountRole,
     subscriptionStatus: membership.subscriptionStatus,
     licensedLearnerCount: membership.licensedLearnerCount,
     trialEndsAt: membership.trialEndsAt ? membership.trialEndsAt.toISOString() : null,
     trialExpired: membership.subscriptionStatus === "active" ? false : membership.trialExpired,
     licenseEndsAt: membership.licenseEndsAt ? membership.licenseEndsAt.toISOString() : null,
+    cancelAtPeriodEnd: membership.cancelAtPeriodEnd,
+    canceledAt: membership.canceledAt ? membership.canceledAt.toISOString() : null,
     successfulSolverGenerations: membership.successfulSolverGenerations,
   };
 }

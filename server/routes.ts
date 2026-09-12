@@ -17,6 +17,7 @@ import {
   wouldExceedLearnerCapacity,
   learnerCapacityExceededResponse,
 } from "./accessControl";
+import { cancelSubscription } from "./licenseService";
 
 import {
   insertStudentSchema,
@@ -1101,6 +1102,50 @@ export async function registerRoutes(
     }
     await storage.updateProfileEmail(context.userId, email);
     res.json({ email });
+  });
+
+  // Subscription cancellation (PayFast licence model): marks the school's
+  // subscription as non-renewing while keeping the licence active until its
+  // existing expiry date. No learners, teachers, classes, reports, requests or
+  // payment history are removed, and no refund is issued.
+  app.post("/api/payments/subscription/cancel", isAuthenticated, async (req, res) => {
+    try {
+      if (req.body?.confirm !== true) {
+        return res.status(400).json({ error: "Confirmation is required to cancel the subscription" });
+      }
+      const accountId = accountIdFor(req);
+      const userId = (req.supabaseUser?.id ?? (req as any).user?.claims?.sub) as string | undefined;
+      if (!userId) {
+        return res.status(401).json({ error: "Authentication required" });
+      }
+      // Server-side authorisation: only account administrators (the Primary
+      // Administrator 'owner' or an 'admin') may cancel the subscription,
+      // using the same membership roles as administrator management.
+      const memberships = await storage.getAccountMembershipsWithProfiles(accountId);
+      const current = memberships.find((membership) => membership.userId === userId);
+      if (!current || (current.role !== "owner" && current.role !== "admin")) {
+        return res.status(403).json({ error: "Only an account administrator can cancel the subscription" });
+      }
+
+      const result = await cancelSubscription(accountId);
+      console.log("[subscription] cancellation recorded", {
+        accountId: result.accountId,
+        cancelledByUserId: userId,
+        canceledAt: result.canceledAt,
+        licenseEndsAt: result.licenseEndsAt,
+      });
+      res.json({
+        subscriptionStatus: result.subscriptionStatus,
+        cancelAtPeriodEnd: result.cancelAtPeriodEnd,
+        canceledAt: result.canceledAt,
+        licenseEndsAt: result.licenseEndsAt,
+      });
+    } catch (error) {
+      console.error("[subscription] cancellation failed", {
+        message: error instanceof Error ? error.message : String(error),
+      });
+      res.status(400).json({ error: error instanceof Error ? error.message : "Failed to cancel subscription" });
+    }
   });
 
   app.get("/api/rules", isAuthenticated, async (req, res) => {

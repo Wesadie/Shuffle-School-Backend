@@ -243,6 +243,104 @@ export async function addLearnerCapacity(
   }
 }
 
+export interface SubscriptionCancellationResult {
+  accountId: string;
+  subscriptionStatus: string;
+  planType: LicensePlanType | null;
+  licensedLearnerCount: number | null;
+  licenseStartedAt: string | null;
+  licenseEndsAt: string | null;
+  cancelAtPeriodEnd: boolean;
+  canceledAt: string | null;
+}
+
+/**
+ * Mark the school's subscription as cancelled / non-renewing.
+ *
+ * The licence itself is NOT disabled: status stays 'active' and access
+ * continues until the existing license_ends_at date. No payment records are
+ * deleted and no refund is issued. Idempotent — cancelling an already
+ * cancelled subscription returns its current state.
+ */
+export async function cancelSubscription(accountId: string): Promise<SubscriptionCancellationResult> {
+  const client = await pool.connect();
+  type SubscriptionRow = {
+    accountId: string;
+    subscriptionStatus: string;
+    planType: LicensePlanType | null;
+    licensedLearnerCount: number | null;
+    licenseStartedAt: Date | null;
+    licenseEndsAt: Date | null;
+    cancelAtPeriodEnd: boolean;
+    canceledAt: Date | null;
+  };
+  try {
+    await client.query("BEGIN");
+    await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`license-cancel:${accountId}`]);
+
+    const columns = `account_id AS "accountId",
+            status AS "subscriptionStatus",
+            plan_type AS "planType",
+            licensed_learner_count AS "licensedLearnerCount",
+            license_started_at AS "licenseStartedAt",
+            license_ends_at AS "licenseEndsAt",
+            COALESCE(cancel_at_period_end, FALSE) AS "cancelAtPeriodEnd",
+            canceled_at AS "canceledAt"`;
+
+    const cancelled = await client.query<SubscriptionRow>(
+      `UPDATE account_subscriptions
+       SET cancel_at_period_end = TRUE,
+           canceled_at = NOW(),
+           updated_at = NOW()
+       WHERE account_id = $1
+         AND status = 'active'
+         AND COALESCE(cancel_at_period_end, FALSE) = FALSE
+       RETURNING ${columns}`,
+      [accountId],
+    );
+
+    let row = cancelled.rows[0];
+    if (!row) {
+      // Already cancelled before this call (or concurrently): return the
+      // existing state so cancellation stays idempotent.
+      const existing = await client.query<SubscriptionRow>(
+        `SELECT ${columns}
+         FROM account_subscriptions
+         WHERE account_id = $1
+           AND COALESCE(cancel_at_period_end, FALSE) = TRUE`,
+        [accountId],
+      );
+      row = existing.rows[0];
+    }
+
+    await client.query("COMMIT");
+
+    if (!row) {
+      throw new Error("An active subscription is required before cancellation");
+    }
+
+    return {
+      accountId: row.accountId,
+      subscriptionStatus: row.subscriptionStatus,
+      planType: row.planType,
+      licensedLearnerCount: row.licensedLearnerCount,
+      licenseStartedAt: row.licenseStartedAt?.toISOString() ?? null,
+      licenseEndsAt: row.licenseEndsAt?.toISOString() ?? null,
+      cancelAtPeriodEnd: row.cancelAtPeriodEnd,
+      canceledAt: row.canceledAt?.toISOString() ?? null,
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    console.error("[licenseService] cancelSubscription failed", {
+      accountId,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 export async function renewLicense(
 
   accountId: string,
@@ -284,6 +382,7 @@ export async function renewLicense(
              updated_at = NOW()
          WHERE account_id = $1
            AND licensed_learner_count IS NOT NULL
+           AND COALESCE(cancel_at_period_end, FALSE) = FALSE
          RETURNING account_id, status, plan_type, licensed_learner_count, license_started_at, license_ends_at
        ), transaction AS (
          INSERT INTO account_payment_transactions (
@@ -305,6 +404,17 @@ export async function renewLicense(
     );
 
     if (!result.rows[0]) {
+      // A cancelled subscription must never renew, even if a (racing) PayFast
+      // renewal payment notification arrives after the cancellation.
+      const current = await client.query<{ cancelAtPeriodEnd: boolean }>(
+        `SELECT COALESCE(cancel_at_period_end, FALSE) AS "cancelAtPeriodEnd"
+         FROM account_subscriptions
+         WHERE account_id = $1`,
+        [accountId],
+      );
+      if (current.rows[0]?.cancelAtPeriodEnd) {
+        throw new Error("This subscription has been cancelled and will not renew automatically");
+      }
       throw new Error("An existing licensed learner count is required before renewal");
     }
 
