@@ -61,9 +61,6 @@ export function getPublicBaseUrl(): string {
   return url.origin;
 }
 
-/** Price per learner in cents (R25.00 = 2500 cents). */
-export const PRICE_PER_LEARNER_CENTS = 2500;
-
 /** Warn at startup if critical configuration is missing. */
 export function warnOnMissingConfig(): void {
   const missing: string[] = [];

@@ -6,6 +6,11 @@ import { attachAccountContext, getAccountContext } from "./accountContext";
 import { authenticateSupabaseJwt } from "./supabaseAuth";
 import { buildPayfastPaymentUrl } from "./payfast/initiate";
 import { handlePayfastItn } from "./payfast/itn";
+import {
+  LICENSE_PLAN_TYPES,
+  isLicensePlanType,
+  type LicensePlanType,
+} from "@shared/licence-pricing";
 import { z } from "zod";
 
 export const app = express();
@@ -116,7 +121,7 @@ app.post(
   (req, res) => {
     try {
       const body = z.object({
-        planType: z.enum(["teacher", "school"]),
+        planType: z.enum(LICENSE_PLAN_TYPES),
         transactionType: z.enum(["initial", "topup", "renewal"]).default("initial"),
         learnerCount: z.coerce.number().int().positive(),
       }).parse(req.body);
@@ -128,6 +133,18 @@ app.post(
         : body.transactionType === "renewal"
           ? currentLearnerCount
           : body.learnerCount;
+
+      // The backend determines the price from the plan type — never a price
+      // sent from the frontend. Top-ups and renewals always use the
+      // subscription's existing plan (and that plan's rate); only an initial
+      // purchase uses the client-selected plan.
+      let planType: LicensePlanType | null = body.planType;
+      if (body.transactionType !== "initial") {
+        planType = isLicensePlanType(accountContext.planType) ? accountContext.planType : null;
+      }
+      if (!planType) {
+        throw new Error("An existing subscription plan is required before topping up or renewing");
+      }
 
       if (body.transactionType === "topup" && payfastLearnerCount <= 0) {
         throw new Error("Top-up learner count must be greater than the current licensed learner count");
@@ -145,7 +162,8 @@ app.post(
 
       console.log("[PayFast Route Entered]", {
         accountId,
-        planType: body.planType,
+        requestedPlanType: body.planType,
+        pricedPlanType: planType,
         transactionType: body.transactionType,
         learnerCount: body.learnerCount,
 
@@ -155,6 +173,7 @@ app.post(
 
       const { paymentId, amountCents, redirectUrl } = buildPayfastPaymentUrl({
         ...body,
+        planType,
         learnerCount: payfastLearnerCount,
         accountId,
       });

@@ -14,6 +14,7 @@ type AuthUser = Partial<User> & {
     workspaceMode: "demo" | "live";
     accountRole?: string;
     subscriptionStatus: string;
+    planType?: string | null;
     licensedLearnerCount: number | null;
     trialEndsAt: string | null;
     trialExpired: boolean;

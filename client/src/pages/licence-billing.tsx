@@ -21,13 +21,20 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  LICENSE_PLAN_TYPES,
+  calculateLicenceAmountCents,
+  isLicensePlanType,
+  licensePlanLabel,
+  pricePerLearnerCents,
+  type LicensePlanType,
+} from "@shared/licence-pricing";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 
 const learnerOptions = [40, 80, 120, 160, 200, 240, 280, 320];
 const customLearnerValue = "custom";
-const pricePerLearnerCents = 2500;
 
 function formatDate(value: string | null | undefined) {
   if (!value) return "—";
@@ -64,6 +71,13 @@ export default function LicenceBillingPage() {
   const subscriptionCancelled = accountContext?.cancelAtPeriodEnd === true;
   const expiryDate = formatDate(accountContext?.licenseEndsAt);
 
+  // The subscription's plan drives top-up pricing; new purchases use the
+  // buyer's plan selection. Rates come from the central pricing config.
+  const currentPlanType = isLicensePlanType(accountContext?.planType) ? accountContext.planType : null;
+  const [planSelection, setPlanSelection] = useState<LicensePlanType>("school");
+  const selectedPlan: LicensePlanType = isLicensed && currentPlanType ? currentPlanType : planSelection;
+  const perLearnerCents = pricePerLearnerCents(selectedPlan);
+
   const [learnerSelection, setLearnerSelection] = useState("40");
   const [customLearnerCount, setCustomLearnerCount] = useState("40");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -87,7 +101,7 @@ export default function LicenceBillingPage() {
   const billableLearners = isLicensed
     ? Math.max(newLearnerLimit - currentLearnerLimit, 0)
     : Math.max(newLearnerLimit, 0);
-  const amountPayableCents = billableLearners * pricePerLearnerCents;
+  const amountPayableCents = calculateLicenceAmountCents(selectedPlan, billableLearners);
   const amountPayable = formatCurrency(amountPayableCents);
   const isInvalidUpgrade = isLicensed && newLearnerLimit <= currentLearnerLimit;
   const canSubmit = newLearnerLimit > 0 && !isInvalidUpgrade && amountPayableCents > 0 && !isSubmitting;
@@ -107,7 +121,7 @@ export default function LicenceBillingPage() {
     setIsSubmitting(true);
     try {
       const response = await apiRequest("POST", "/api/payments/payfast/initiate", {
-        planType: "school",
+        planType: selectedPlan,
         transactionType: isLicensed ? "topup" : "initial",
         learnerCount: newLearnerLimit,
       });
@@ -124,7 +138,7 @@ export default function LicenceBillingPage() {
       setIsSubmitting(false);
       toast({
         title: "Unable to start PayFast checkout",
-        description: error instanceof Error ? error.message : "Please try again.",
+        description: extractErrorMessage(error, "Please try again."),
         variant: "destructive",
       });
     }
@@ -170,7 +184,11 @@ export default function LicenceBillingPage() {
             <CheckCircle2 className="h-4 w-4" />
             {isLicensed ? "Active" : accountContext?.subscriptionStatus ?? "Not active"}
           </div>
-          <div className="grid gap-4 sm:grid-cols-2">
+          <div className="grid gap-4 sm:grid-cols-3">
+            <div className="space-y-1">
+              <p className="text-sm text-muted-foreground">Plan</p>
+              <p className="text-2xl font-semibold">{currentPlanType ? licensePlanLabel(currentPlanType) : "—"}</p>
+            </div>
             <div className="space-y-1">
               <p className="text-sm text-muted-foreground">Licensed learners</p>
               <p className="text-2xl font-semibold">{currentLearnerLimit || "—"}</p>
@@ -187,10 +205,35 @@ export default function LicenceBillingPage() {
         <CardHeader>
           <CardTitle>Upgrade Licence</CardTitle>
           <CardDescription>
-            Top-ups only charge for additional learners and do not change your licence expiry date.
+            Top-ups only charge for additional learners at your plan's rate and do not change your
+            licence expiry date.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-5">
+          <div className="space-y-2">
+            <Label htmlFor="plan-type">Plan</Label>
+            {isLicensed ? (
+              <p className="text-sm text-muted-foreground pt-1.5">
+                {currentPlanType
+                  ? `${licensePlanLabel(currentPlanType)} – ${formatCurrency(pricePerLearnerCents(currentPlanType))} per learner/year. Top-ups use your current plan's rate.`
+                  : "Your plan rate will be confirmed at checkout."}
+              </p>
+            ) : (
+              <Select value={planSelection} onValueChange={(value) => setPlanSelection(value as LicensePlanType)}>
+                <SelectTrigger id="plan-type" className="max-w-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {LICENSE_PLAN_TYPES.map((plan) => (
+                    <SelectItem key={plan} value={plan}>
+                      {licensePlanLabel(plan)} – {formatCurrency(pricePerLearnerCents(plan))} per learner/year
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+          </div>
+
           <div className="space-y-2">
             <Label htmlFor="learner-count">Learner limit</Label>
             <Select value={learnerSelection} onValueChange={handleLearnerSelectionChange}>
@@ -239,6 +282,12 @@ export default function LicenceBillingPage() {
             <div className="flex justify-between gap-4 text-sm">
               <span className="text-muted-foreground">Additional learners:</span>
               <span className="font-medium">{billableLearners}</span>
+            </div>
+            <div className="flex justify-between gap-4 text-sm">
+              <span className="text-muted-foreground">
+                Price per learner ({licensePlanLabel(selectedPlan)}):
+              </span>
+              <span className="font-medium">{formatCurrency(perLearnerCents)}</span>
             </div>
             <div className="flex justify-between gap-4 border-t pt-3 text-base">
               <span className="font-semibold">Amount payable:</span>

@@ -1,7 +1,10 @@
 import type { PoolClient } from "pg";
 import { pool } from "./db";
-
-export type LicensePlanType = "teacher" | "school";
+import {
+  LICENSE_PLAN_TYPES,
+  isLicensePlanType,
+  type LicensePlanType,
+} from "@shared/licence-pricing";
 
 export type PaymentTransactionType = "initial" | "topup" | "renewal";
 
@@ -37,8 +40,8 @@ function assertPaymentReference(paymentReference: string) {
 }
 
 export function assertLicensePlanType(planType: string): asserts planType is LicensePlanType {
-  if (planType !== "teacher" && planType !== "school") {
-    throw new Error("planType must be teacher or school");
+  if (!isLicensePlanType(planType)) {
+    throw new Error(`planType must be one of: ${LICENSE_PLAN_TYPES.join(", ")}`);
   }
 }
 
@@ -97,7 +100,7 @@ export async function activateInitialLicense(
   amountCents: number,
   paymentReference: string,
 ): Promise<LicenseOperationResult> {
-  if (planType !== "teacher" && planType !== "school") throw new Error("planType must be teacher or school");
+  assertLicensePlanType(planType);
   assertPositiveInteger(learnerCount, "learnerCount");
   assertValidAmount(amountCents);
   assertPaymentReference(paymentReference);

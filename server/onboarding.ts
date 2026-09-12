@@ -8,6 +8,7 @@ interface OnboardingAccount {
   workspaceMode: "demo" | "live";
   accountRole: string;
   subscriptionStatus: string;
+  planType: string | null;
   licensedLearnerCount: number | null;
   trialEndsAt: string | null;
   trialExpired: boolean;
@@ -84,6 +85,7 @@ export async function ensureOnboardingAccount(user: NonNullable<Express.Request[
       `SELECT a.id AS "accountId", a.status AS "accountStatus", a.workspace_mode AS "workspaceMode",
               am.role AS "accountRole",
               COALESCE(s.status, 'trialing') AS "subscriptionStatus",
+              s.plan_type AS "planType",
               s.licensed_learner_count AS "licensedLearnerCount",
               s.trial_ends_at AS "trialEndsAt",
               COALESCE(s.status, 'trialing') <> 'active' AND s.trial_ends_at IS NOT NULL AND s.trial_ends_at <= NOW() AS "trialExpired",
@@ -162,6 +164,7 @@ export async function ensureOnboardingAccount(user: NonNullable<Express.Request[
       ...account.rows[0],
       subscriptionStatus: "trialing",
       accountRole: "owner",
+      planType: null,
       licensedLearnerCount: null,
       trialEndsAt: trialEndsAt.toISOString(),
       trialExpired: false,

@@ -18,10 +18,14 @@
 
 import { randomUUID } from "crypto";
 import {
+  calculateLicenceAmountCents,
+  licensePlanLabel,
+  type LicensePlanType,
+} from "@shared/licence-pricing";
+import {
   payfastConfig,
   PAYFAST_PROCESS_URL,
   getPublicBaseUrl,
-  PRICE_PER_LEARNER_CENTS,
 } from "./config";
 import {
   generateSignature,
@@ -29,7 +33,7 @@ import {
 } from "./signature";
 
 export interface PayfastInitiationInput {
-  planType: "teacher" | "school";
+  planType: LicensePlanType;
   transactionType: "initial" | "topup" | "renewal";
   accountId: string;
   learnerCount: number;
@@ -58,11 +62,11 @@ export function buildPayfastPaymentUrl(input: PayfastInitiationInput): PayfastIn
     throw new Error("learnerCount must be a positive integer");
   }
 
-  const amountCents = learnerCount * PRICE_PER_LEARNER_CENTS;
+  const amountCents = calculateLicenceAmountCents(planType, learnerCount);
   const amount = (amountCents / 100).toFixed(2);
   const paymentId = `SSF-${randomUUID()}`;
   const baseUrl = getPublicBaseUrl();
-  const itemName = `${planType === "teacher" ? "Teacher" : "School"} licence - ${learnerCount} learner${learnerCount === 1 ? "" : "s"}`;
+  const itemName = `${licensePlanLabel(planType)} licence - ${learnerCount} learner${learnerCount === 1 ? "" : "s"}`;
 
   const fields: Record<string, string> = {
     merchant_id: payfastConfig.merchantId,

@@ -17,13 +17,17 @@
  */
 
 import type { Request, Response } from "express";
-import { payfastConfig, PAYFAST_VALIDATE_URL, PRICE_PER_LEARNER_CENTS } from "./config";
+import {
+  calculateLicenceAmountCents,
+  isLicensePlanType,
+  type LicensePlanType,
+} from "@shared/licence-pricing";
+import { payfastConfig, PAYFAST_VALIDATE_URL } from "./config";
 import { verifySignature } from "./signature";
 import {
   activateInitialLicense,
   addLearnerCapacity,
   renewLicense,
-  type LicensePlanType,
   type PaymentTransactionType,
 } from "../licenseService";
 
@@ -81,7 +85,7 @@ function parseLearnerCount(body: ItnBody): number {
 
 function parsePlanType(body: ItnBody): LicensePlanType {
   const value = body.custom_str1;
-  if (value !== "teacher" && value !== "school") {
+  if (!isLicensePlanType(value)) {
     throw new Error("Invalid plan type in ITN");
   }
   return value;
@@ -93,14 +97,14 @@ function parseTransactionType(body: ItnBody): PaymentTransactionType {
   return "initial";
 }
 
-/** Validate the gross amount against the expected learner × price calculation. */
-function validateAmount(body: ItnBody, learnerCount: number): number {
+/** Validate the gross amount against the expected learner × plan price calculation. */
+function validateAmount(body: ItnBody, learnerCount: number, planType: LicensePlanType): number {
   const gross = Number.parseFloat(body.amount_gross ?? body.amount ?? "");
   if (!Number.isFinite(gross) || gross < 0) {
     throw new Error("Invalid payment amount in ITN");
   }
   const amountCents = Math.round(gross * 100);
-  const expectedCents = learnerCount * PRICE_PER_LEARNER_CENTS;
+  const expectedCents = calculateLicenceAmountCents(planType, learnerCount);
   if (amountCents !== expectedCents) {
     throw new Error("Payment amount mismatch in ITN");
   }
@@ -184,7 +188,7 @@ export async function handlePayfastItn(req: Request, res: Response): Promise<voi
     const learnerCount = parseLearnerCount(body);
     const planType = parsePlanType(body);
     const transactionType = parseTransactionType(body);
-    const amountCents = validateAmount(body, learnerCount);
+    const amountCents = validateAmount(body, learnerCount, planType);
 
     console.log("[PayFast ITN Parsed]", {
       paymentReference: body.m_payment_id,

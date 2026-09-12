@@ -68,6 +68,7 @@ async function resolveSupabaseAccountContext(userId: string): Promise<AccountCon
     workspaceMode: string;
     accountRole: string;
     subscriptionStatus: string;
+    planType: string | null;
     licensedLearnerCount: number | null;
     trialEndsAt: Date | null;
     trialExpired: boolean;
@@ -80,6 +81,7 @@ async function resolveSupabaseAccountContext(userId: string): Promise<AccountCon
     `SELECT a.id AS "accountId", a.status AS "accountStatus", a.workspace_mode AS "workspaceMode",
             am.role AS "accountRole",
             COALESCE(s.status, 'trialing') AS "subscriptionStatus",
+            s.plan_type AS "planType",
             s.licensed_learner_count AS "licensedLearnerCount",
             s.trial_ends_at AS "trialEndsAt",
             COALESCE(s.status, 'trialing') <> 'active' AND s.trial_ends_at IS NOT NULL AND s.trial_ends_at <= NOW() AS "trialExpired",
@@ -107,6 +109,7 @@ async function resolveSupabaseAccountContext(userId: string): Promise<AccountCon
     workspaceMode: membership.workspaceMode === "demo" ? "demo" : "live",
     accountRole: membership.accountRole,
     subscriptionStatus: membership.subscriptionStatus,
+    planType: membership.planType,
     licensedLearnerCount: membership.licensedLearnerCount,
     trialEndsAt: membership.trialEndsAt ? membership.trialEndsAt.toISOString() : null,
     trialExpired: membership.subscriptionStatus === "active" ? false : membership.trialExpired,
