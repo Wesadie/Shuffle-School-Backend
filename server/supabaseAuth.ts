@@ -99,7 +99,7 @@ async function resolveSupabaseAccountContext(userId: string): Promise<AccountCon
      LEFT JOIN account_subscriptions s ON s.account_id = a.id
      LEFT JOIN account_usage u ON u.account_id = a.id
      WHERE am.user_id = $1 AND am.status = 'active'
-     ORDER BY am.created_at ASC
+     ORDER BY COALESCE(am.accepted_at, am.created_at) DESC, am.created_at DESC
      LIMIT 1`,
     [userId],
   );
