@@ -1,5 +1,5 @@
 import type { RequestHandler } from "express";
-import { createClient, type Session, type User as SupabaseUser } from "@supabase/supabase-js";
+import type { User as SupabaseUser } from "@supabase/supabase-js";
 import { pool } from "./db";
 import type { AccountContext } from "./accountContext";
 
@@ -21,12 +21,7 @@ function resolveSupabaseKey(): {
 
 const { key: SUPABASE_PUBLISHABLE_KEY, source: SUPABASE_KEY_SOURCE } = resolveSupabaseKey();
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
-  auth: {
-    persistSession: false,
-    autoRefreshToken: false,
-  },
-});
+const AUTH_API_BASE = `${SUPABASE_URL.replace(/\/$/, "")}/auth/v1`;
 
 declare global {
   namespace Express {
@@ -36,7 +31,11 @@ declare global {
       // Fresh session minted server-side from a caller's refresh token, set
       // when a signup/onboarding call arrived with a stale or rejected
       // access token. Consumers should prefer these tokens.
-      supabaseRefreshedSession?: Session;
+      supabaseRefreshedSession?: {
+        access_token: string;
+        refresh_token: string;
+        user: SupabaseUser;
+      };
     }
   }
 }
@@ -49,20 +48,44 @@ function bearerTokenFrom(req: Parameters<RequestHandler>[0]): string | undefined
   return token;
 }
 
+/**
+ * Validate a Supabase access token directly against the Supabase Auth API.
+ *
+ * This performs the same request supabase-js makes internally for
+ * getUser(jwt), but without any dependency on the client library's session
+ * state. The server build externalizes @supabase/supabase-js, so the
+ * production install resolves the version at deploy time — and that release
+ * routes getUser() through its (absent) session state on this sessionless
+ * server client, returning the client-side "Auth session missing!" error
+ * before the token ever reaches Supabase. Calling the Auth API directly
+ * makes validation deterministic: Supabase itself verifies the token against
+ * the configured project and key, and any failure is a genuine rejection.
+ */
 async function verifySupabaseToken(token: string): Promise<SupabaseUser | undefined> {
-  const { data, error } = await supabase.auth.getUser(token);
-  if (error || !data.user) {
+  const response = await fetch(`${AUTH_API_BASE}/user`, {
+    headers: {
+      apikey: SUPABASE_PUBLISHABLE_KEY,
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+  if (!response.ok) {
+    const body = (await response.json().catch(() => null)) as Record<string, unknown> | null;
     console.error("[supabaseAuth] token verification failed", {
-      message: error?.message,
-      status: (error as { status?: number } | undefined)?.status,
-      code: (error as { code?: string } | undefined)?.code,
+      message:
+        (typeof body?.error_description === "string" && body.error_description) ||
+        (typeof body?.error === "string" && body.error) ||
+        (typeof body?.msg === "string" && body.msg) ||
+        response.statusText,
+      status: response.status,
       supabaseUrl: SUPABASE_URL,
       keySource: SUPABASE_KEY_SOURCE,
-      keyLength: SUPABASE_PUBLISHABLE_KEY.length,
     });
     return undefined;
   }
-  return data.user;
+
+  const user = (await response.json().catch(() => null)) as SupabaseUser | null;
+  return user?.id ? user : undefined;
 }
 
 async function resolveSupabaseAccountContext(userId: string): Promise<AccountContext | undefined> {
@@ -140,11 +163,47 @@ export const requireSupabaseUser: RequestHandler = async (req, res, next) => {
     if (!user) {
       const refreshToken = typeof req.body?.refresh_token === "string" ? req.body.refresh_token : null;
       if (refreshToken) {
-        const { data, error } = await supabase.auth.refreshSession({ refresh_token: refreshToken });
-        if (!error && data.user && data.session) {
-          user = data.user;
-          req.supabaseRefreshedSession = data.session;
+        // Same wire request supabase-js uses internally for a token refresh —
+        // Supabase validates the refresh token server-side and returns a
+        // freshly verified user plus fresh tokens.
+        const refreshResponse = await fetch(`${AUTH_API_BASE}/token?grant_type=refresh_token`, {
+          method: "POST",
+          headers: {
+            apikey: SUPABASE_PUBLISHABLE_KEY,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ refresh_token: refreshToken }),
+        });
+
+        if (refreshResponse.ok) {
+          const session = (await refreshResponse.json().catch(() => null)) as {
+            access_token?: string;
+            refresh_token?: string;
+            user?: SupabaseUser;
+          } | null;
+          if (session?.user?.id && session.access_token && session.refresh_token) {
+            user = session.user;
+            req.supabaseRefreshedSession = {
+              access_token: session.access_token,
+              refresh_token: session.refresh_token,
+              user: session.user,
+            };
+          }
+        } else {
+          const body = (await refreshResponse.json().catch(() => null)) as Record<string, unknown> | null;
+          // Metadata only — token values are never logged.
+          console.warn("[supabaseAuth] refresh-token fallback rejected", {
+            status: refreshResponse.status,
+            code:
+              (typeof body?.error_code === "string" && body.error_code) ||
+              (typeof body?.error === "string" && body.error) ||
+              null,
+          });
         }
+      } else {
+        console.warn(
+          "[supabaseAuth] refresh-token fallback unavailable: request body contains no refresh_token",
+        );
       }
     }
 
