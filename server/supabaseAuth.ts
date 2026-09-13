@@ -1,5 +1,5 @@
 import type { RequestHandler } from "express";
-import { createClient, type User as SupabaseUser } from "@supabase/supabase-js";
+import { createClient, type Session, type User as SupabaseUser } from "@supabase/supabase-js";
 import { pool } from "./db";
 import type { AccountContext } from "./accountContext";
 
@@ -33,6 +33,10 @@ declare global {
     interface Request {
       supabaseUser?: SupabaseUser;
       supabaseAccountContext?: AccountContext;
+      // Fresh session minted server-side from a caller's refresh token, set
+      // when a signup/onboarding call arrived with a stale or rejected
+      // access token. Consumers should prefer these tokens.
+      supabaseRefreshedSession?: Session;
     }
   }
 }
@@ -122,11 +126,34 @@ async function resolveSupabaseAccountContext(userId: string): Promise<AccountCon
 
 export const requireSupabaseUser: RequestHandler = async (req, res, next) => {
   const token = bearerTokenFrom(req);
-  if (!token) return res.status(401).json({ message: "Supabase access token is required" });
 
   try {
-    const user = await verifySupabaseToken(token);
-    if (!user) return res.status(401).json({ message: "Invalid Supabase access token" });
+    let user = token ? await verifySupabaseToken(token) : undefined;
+
+    // New-user signup/onboarding calls (used only by /api/onboarding/supabase
+    // and /api/auth/handoff) can arrive with a stale, rotated or
+    // not-yet-established access token. These callers also provide their
+    // Supabase refresh token, so exchange it server-side: Supabase validates
+    // the credential and returns a freshly verified user plus fresh tokens.
+    // Identity is still verified entirely server-side — no client-supplied
+    // identity is trusted, and invalid credentials keep receiving a 401.
+    if (!user) {
+      const refreshToken = typeof req.body?.refresh_token === "string" ? req.body.refresh_token : null;
+      if (refreshToken) {
+        const { data, error } = await supabase.auth.refreshSession({ refresh_token: refreshToken });
+        if (!error && data.user && data.session) {
+          user = data.user;
+          req.supabaseRefreshedSession = data.session;
+        }
+      }
+    }
+
+    if (!user) {
+      return res.status(401).json({
+        message: token ? "Invalid Supabase access token" : "Supabase access token is required",
+      });
+    }
+
     req.supabaseUser = user;
     return next();
   } catch (error) {

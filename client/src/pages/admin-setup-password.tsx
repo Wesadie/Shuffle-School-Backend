@@ -55,7 +55,13 @@ export default function AdminSetupPasswordPage() {
       if (!data.session) throw new Error("Your invitation session has expired.");
       const response = await fetch(apiUrl("/api/onboarding/supabase"), {
         method: "POST",
-        headers: { Authorization: `Bearer ${data.session.access_token}` },
+        headers: {
+          Authorization: `Bearer ${data.session.access_token}`,
+          "Content-Type": "application/json",
+        },
+        // Sending the refresh token lets the server exchange it for a fresh
+        // access token if the cached one is stale after the password update.
+        body: JSON.stringify({ refresh_token: data.session.refresh_token }),
       });
       if (!response.ok) throw new Error("We could not activate your administrator access.");
 

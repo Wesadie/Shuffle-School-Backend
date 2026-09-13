@@ -37,10 +37,16 @@ export const createAuthHandoff: RequestHandler = async (req, res) => {
     return res.status(401).json({ message: "Authenticated Supabase user required" });
   }
 
+  // Prefer tokens freshly minted server-side (when the access token was
+  // stale and the caller's refresh token was exchanged) over the original
+  // caller-supplied values, so the handoff row always carries valid tokens.
   const refreshToken =
-    typeof req.body?.refresh_token === "string" ? req.body.refresh_token : null;
+    req.supabaseRefreshedSession?.refresh_token ??
+    (typeof req.body?.refresh_token === "string" ? req.body.refresh_token : null);
   const accessToken =
-    req.header("authorization")?.replace(/^Bearer\s+/i, "") ?? null;
+    req.supabaseRefreshedSession?.access_token ??
+    req.header("authorization")?.replace(/^Bearer\s+/i, "") ??
+    null;
 
   console.log("[authHandoff] create entered", {
     userId: req.supabaseUser.id,
