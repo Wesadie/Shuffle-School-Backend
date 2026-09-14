@@ -1678,15 +1678,24 @@ export async function registerRoutes(
 
       // Optional single-characteristic boosting: reuse the same swap search but
       // score candidate swaps against one characteristic instead of the overall average.
+      // "gender" selects the built-in gender balance criterion — Gender is a
+      // dedicated learner field and is never a configurable characteristic.
       const { characteristicId } = req.body || {};
-      const targetCharacteristic = characteristicId
+      const isGenderBoost = characteristicId === "gender";
+      const targetCharacteristic = characteristicId && !isGenderBoost
         ? activeCharacteristics.find((char) => char.id === characteristicId) || null
         : null;
       const scoreCharacteristics = targetCharacteristic ? [targetCharacteristic] : activeCharacteristics;
+      const genderSharesByGrade = isGenderBoost ? getGenderSharesByTargetGrade(students) : null;
 
       // Calculate balance against the learner distribution for this target grade only.
       const calculateClassBalance = (classId: string, classStudentList: Student[]): number => {
-        if (scoreCharacteristics.length === 0 || classStudentList.length === 0) return 100;
+        if (classStudentList.length === 0) return 100;
+        if (isGenderBoost) {
+          const grade = normalizeGradeValue(classConfigById.get(classId)?.grade);
+          return calculateGenderScore(classStudentList, genderSharesByGrade?.get(grade));
+        }
+        if (scoreCharacteristics.length === 0) return 100;
         const grade = normalizeGradeValue(classConfigById.get(classId)?.grade);
         const numericTargets = numericTargetsByGrade.get(grade) ?? new Map();
         const totalScore = scoreCharacteristics.reduce(
@@ -1803,7 +1812,7 @@ export async function registerRoutes(
                     currentClassId: class2Id,
                   },
                   improvement: Math.round(improvement * 10) / 10,
-                  reason: `Swapping these students would improve ${targetCharacteristic ? `${targetCharacteristic.name} balance` : "overall balance"} by ${improvement.toFixed(1)}%`,
+                  reason: `Swapping these students would improve ${isGenderBoost ? "gender balance" : targetCharacteristic ? `${targetCharacteristic.name} balance` : "overall balance"} by ${improvement.toFixed(1)}%`,
                 });
               }
             }
@@ -2338,6 +2347,57 @@ async function checkConflicts(
 }
 
 const isNumericCharacteristic = (char: Characteristic) => char.type === "scale" || char.type === "percentage";
+
+/**
+ * Built-in gender balance criterion. Gender is a dedicated learner field —
+ * never a configurable characteristic — so these helpers score a class by how
+ * closely its gender distribution matches the cohort's gender distribution for
+ * that target grade, using the same total-variation-distance model as category
+ * characteristics.
+ */
+const genderValueOf = (student: Student) => student.gender?.trim() || "Unset";
+
+function getGenderSharesByTargetGrade(students: Student[]): Map<string, Map<string, number>> {
+  const countsByGrade = new Map<string, Map<string, number>>();
+  const totalsByGrade = new Map<string, number>();
+  students.forEach((student) => {
+    const grade = getStudentTargetGrade(student);
+    if (!grade) return;
+    const value = genderValueOf(student);
+    const counts = countsByGrade.get(grade) ?? new Map<string, number>();
+    counts.set(value, (counts.get(value) || 0) + 1);
+    countsByGrade.set(grade, counts);
+    totalsByGrade.set(grade, (totalsByGrade.get(grade) || 0) + 1);
+  });
+
+  const sharesByGrade = new Map<string, Map<string, number>>();
+  countsByGrade.forEach((counts, grade) => {
+    const total = totalsByGrade.get(grade) || 0;
+    if (total === 0) return;
+    const shares = new Map<string, number>();
+    counts.forEach((count, value) => shares.set(value, count / total));
+    sharesByGrade.set(grade, shares);
+  });
+  return sharesByGrade;
+}
+
+function calculateGenderScore(
+  classStudents: Student[],
+  cohortShares: Map<string, number> | undefined,
+): number {
+  if (classStudents.length === 0 || !cohortShares || cohortShares.size === 0) return 100;
+  const distribution: Record<string, number> = {};
+  classStudents.forEach((student) => {
+    const value = genderValueOf(student);
+    distribution[value] = (distribution[value] || 0) + 1;
+  });
+  const valueNames = new Set<string>([...Object.keys(distribution), ...cohortShares.keys()]);
+  let deviation = 0;
+  valueNames.forEach((value) => {
+    deviation += Math.abs((distribution[value] || 0) / classStudents.length - (cohortShares.get(value) || 0));
+  });
+  return Math.max(0, Math.round(100 - (deviation / 2) * 100));
+}
 
 const getStudentCharacteristicValue = (student: Student, char: Characteristic) =>
   ((student.characteristics || {}) as Record<string, string | string[]>)[char.name];

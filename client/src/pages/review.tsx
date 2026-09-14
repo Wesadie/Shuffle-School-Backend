@@ -33,7 +33,7 @@ import { queryClient, apiRequest } from "@/lib/queryClient";
 import { downloadXlsx, type SpreadsheetCell, type SpreadsheetSheet } from "@/lib/xlsx-export";
 import { Link } from "wouter";
 import { characteristicValueToArray, isCharacteristicApplicableToGrade } from "@shared/characteristics";
-import { getStudentTargetGrade } from "@shared/grades";
+import { getStudentTargetGrade, normalizeGradeValue } from "@shared/grades";
 import type {
   ClassConfig, Student, Placement, Rule, Characteristic,
   ConflictWarning, BoostResponse, BoostSuggestion, Teacher
@@ -282,6 +282,105 @@ const computeCharacteristicClassScore = (
     deviation += Math.abs((distribution[value] || 0) / classTotal - (target.shares.get(value) || 0));
   });
   return Math.max(0, Math.round(100 - (deviation / 2) * 100));
+};
+
+// Built-in gender balance: Gender is a dedicated learner field, never a
+// configurable characteristic. These helpers mirror the category-characteristic
+// distribution math and /api/boost's gender scoring.
+const genderValueOf = (student: Student) => student.gender?.trim() || "Unset";
+
+const getGenderCohortShares = (cohort: Student[]) => {
+  const counts = new Map<string, number>();
+  let total = 0;
+  cohort.forEach((student) => {
+    const value = genderValueOf(student);
+    counts.set(value, (counts.get(value) || 0) + 1);
+    total += 1;
+  });
+  const shares = new Map<string, number>();
+  if (total > 0) counts.forEach((count, value) => shares.set(value, count / total));
+  return shares;
+};
+
+const getGenderSharesByTargetGrade = (students: Student[]) => {
+  const countsByGrade = new Map<string, Map<string, number>>();
+  const totalsByGrade = new Map<string, number>();
+  students.forEach((student) => {
+    const grade = getStudentTargetGrade(student);
+    if (!grade) return;
+    const value = genderValueOf(student);
+    const counts = countsByGrade.get(grade) ?? new Map<string, number>();
+    counts.set(value, (counts.get(value) || 0) + 1);
+    countsByGrade.set(grade, counts);
+    totalsByGrade.set(grade, (totalsByGrade.get(grade) || 0) + 1);
+  });
+  const sharesByGrade = new Map<string, Map<string, number>>();
+  countsByGrade.forEach((counts, grade) => {
+    const total = totalsByGrade.get(grade) || 0;
+    if (total === 0) return;
+    const shares = new Map<string, number>();
+    counts.forEach((count, value) => shares.set(value, count / total));
+    sharesByGrade.set(grade, shares);
+  });
+  return sharesByGrade;
+};
+
+const computeGenderClassScore = (classStudents: Student[], cohortShares: Map<string, number>) => {
+  if (classStudents.length === 0 || cohortShares.size === 0) return 100;
+  const distribution: Record<string, number> = {};
+  classStudents.forEach((student) => {
+    const value = genderValueOf(student);
+    distribution[value] = (distribution[value] || 0) + 1;
+  });
+  const valueNames = new Set<string>([...Object.keys(distribution), ...cohortShares.keys()]);
+  let deviation = 0;
+  valueNames.forEach((value) => {
+    deviation += Math.abs((distribution[value] || 0) / classStudents.length - (cohortShares.get(value) || 0));
+  });
+  return Math.max(0, Math.round(100 - (deviation / 2) * 100));
+};
+
+// Shared by the characteristic and gender boostability scans: returns whether
+// moving `student` into `targetClassId` would break a Together/Separate rule.
+const buildSwapRuleChecker = (classesWithStudents: ClassWithStudents[], rules: Rule[]) => {
+  const separations = new Map<string, Set<string>>();
+  const pairings = new Map<string, Set<string>>();
+  rules.forEach((rule) => {
+    const map = rule.type === "separate" ? separations : rule.type === "pair" ? pairings : null;
+    if (!map) return;
+    if (!map.has(rule.studentId1)) map.set(rule.studentId1, new Set());
+    if (!map.has(rule.studentId2)) map.set(rule.studentId2, new Set());
+    map.get(rule.studentId1)!.add(rule.studentId2);
+    map.get(rule.studentId2)!.add(rule.studentId1);
+  });
+
+  const classOfStudent = new Map<string, string>();
+  classesWithStudents.forEach(({ config, students: classStudents }) => {
+    classStudents.forEach((student) => classOfStudent.set(student.id, config.id));
+  });
+
+  return (student: Student, targetClassId: string): boolean => {
+    const targetStudents = classesWithStudents.find((c) => c.config.id === targetClassId)?.students ?? [];
+    const mustSeparate = separations.get(student.id);
+    if (mustSeparate) {
+      for (const other of targetStudents) {
+        if (mustSeparate.has(other.id)) return true;
+      }
+    }
+    const mustPair = pairings.get(student.id);
+    if (mustPair) {
+      const currentClassId = classOfStudent.get(student.id);
+      if (currentClassId) {
+        const currentStudents = classesWithStudents.find((c) => c.config.id === currentClassId)?.students ?? [];
+        for (const partnerId of mustPair) {
+          if (currentStudents.some((s) => s.id === partnerId) && !targetStudents.some((s) => s.id === partnerId)) {
+            return true;
+          }
+        }
+      }
+    }
+    return false;
+  };
 };
 
 export default function ReviewPage() {
@@ -685,44 +784,7 @@ export default function ReviewPage() {
       .slice(0, 50);
     if (activeCharacteristics.length === 0 || classesWithStudents.length < 2) return improvements;
 
-    const separations = new Map<string, Set<string>>();
-    const pairings = new Map<string, Set<string>>();
-    rules.forEach((rule) => {
-      const map = rule.type === "separate" ? separations : rule.type === "pair" ? pairings : null;
-      if (!map) return;
-      if (!map.has(rule.studentId1)) map.set(rule.studentId1, new Set());
-      if (!map.has(rule.studentId2)) map.set(rule.studentId2, new Set());
-      map.get(rule.studentId1)!.add(rule.studentId2);
-      map.get(rule.studentId2)!.add(rule.studentId1);
-    });
-
-    const classOfStudent = new Map<string, string>();
-    classesWithStudents.forEach(({ config, students: classStudents }) => {
-      classStudents.forEach((student) => classOfStudent.set(student.id, config.id));
-    });
-
-    const violatesRules = (student: Student, targetClassId: string): boolean => {
-      const targetStudents = classesWithStudents.find((c) => c.config.id === targetClassId)?.students ?? [];
-      const mustSeparate = separations.get(student.id);
-      if (mustSeparate) {
-        for (const other of targetStudents) {
-          if (mustSeparate.has(other.id)) return true;
-        }
-      }
-      const mustPair = pairings.get(student.id);
-      if (mustPair) {
-        const currentClassId = classOfStudent.get(student.id);
-        if (currentClassId) {
-          const currentStudents = classesWithStudents.find((c) => c.config.id === currentClassId)?.students ?? [];
-          for (const partnerId of mustPair) {
-            if (currentStudents.some((s) => s.id === partnerId) && !targetStudents.some((s) => s.id === partnerId)) {
-              return true;
-            }
-          }
-        }
-      }
-      return false;
-    };
+    const violatesRules = buildSwapRuleChecker(classesWithStudents, rules);
 
     const classCount = classesWithStudents.length;
     for (const char of activeCharacteristics) {
@@ -759,6 +821,67 @@ export default function ReviewPage() {
 
   const isCharacteristicBoostable = (characteristicId: string) =>
     (characteristicBoostImprovements.get(characteristicId) ?? 0) > 0.5;
+
+  // Built-in gender balance criterion (not a configurable characteristic):
+  // how closely each class's gender distribution matches the cohort's, plus the
+  // best improving legal swap — mirroring /api/boost's gender scoring,
+  // Together/Separate request checks, target-grade isolation and the 0.5%
+  // threshold so the Gender Boost button reflects what the server can apply.
+  const genderBalance = useMemo(() => {
+    if (classesWithStudents.length === 0) return { score: 100, boostImprovement: 0 };
+
+    const cohortShares = getGenderCohortShares(students);
+    const classScores = classesWithStudents.map(({ students: classStudents }) =>
+      computeGenderClassScore(classStudents, cohortShares));
+    const score = classScores.length === 0
+      ? 100
+      : Math.round(classScores.reduce((sum, value) => sum + value, 0) / classScores.length);
+
+    if (classesWithStudents.length < 2 || cohortShares.size === 0) {
+      return { score, boostImprovement: 0 };
+    }
+
+    const sharesByTargetGrade = getGenderSharesByTargetGrade(students);
+    const classGradeById = new Map(
+      classesWithStudents.map(({ config }) => [config.id, normalizeGradeValue(config.grade)]),
+    );
+    const scoreClass = (classId: string, classStudentList: Student[]) =>
+      computeGenderClassScore(classStudentList, sharesByTargetGrade.get(classGradeById.get(classId) || "") ?? new Map());
+
+    const violatesRules = buildSwapRuleChecker(classesWithStudents, rules);
+    const classCount = classesWithStudents.length;
+    const currentScores = classesWithStudents.map(({ config, students: classStudents }) =>
+      scoreClass(config.id, classStudents));
+
+    let best = 0;
+    scan: for (let i = 0; i < classesWithStudents.length; i++) {
+      for (let j = i + 1; j < classesWithStudents.length; j++) {
+        const { config: config1, students: class1Students } = classesWithStudents[i];
+        const { config: config2, students: class2Students } = classesWithStudents[j];
+        const class1Grade = classGradeById.get(config1.id);
+        const class2Grade = classGradeById.get(config2.id);
+        if (!class1Grade || class1Grade !== class2Grade) continue;
+        for (const student1 of class1Students) {
+          for (const student2 of class2Students) {
+            if (getStudentTargetGrade(student1) !== class2Grade || getStudentTargetGrade(student2) !== class1Grade) continue;
+            if (violatesRules(student1, config2.id) || violatesRules(student2, config1.id)) continue;
+            const newClass1 = class1Students.filter((s) => s.id !== student1.id).concat([student2]);
+            const newClass2 = class2Students.filter((s) => s.id !== student2.id).concat([student1]);
+            const gain = (scoreClass(config1.id, newClass1) + scoreClass(config2.id, newClass2))
+              - (currentScores[i] + currentScores[j]);
+            const improvement = gain / classCount;
+            if (improvement > best) best = improvement;
+            if (best > 0.5) break scan;
+          }
+        }
+      }
+    }
+    return { score, boostImprovement: best };
+  }, [classesWithStudents, rules, students]);
+
+  const isGenderBoostable = genderBalance.boostImprovement > 0.5;
+  const isGenderBoosting = characteristicBoostMutation.isPending
+    && characteristicBoostMutation.variables?.characteristicId === "gender";
 
   // Find similar learners: cohort value ranges for the numeric similarity fields.
   const similarityRanges = useMemo(() => {
@@ -1205,6 +1328,39 @@ export default function ReviewPage() {
                 <div className="grid grid-cols-2 gap-1.5 text-xs">
                   <div className="rounded border px-2 py-1.5"><Link2 className="mr-1 inline h-3 w-3" />Together <b className="float-right">{pairRequestCount}</b></div>
                   <div className="rounded border px-2 py-1.5"><Unlink className="mr-1 inline h-3 w-3" />Apart <b className="float-right">{separateRequestCount}</b></div>
+                </div>
+              </div>
+
+              <div className="border-t pt-2.5" data-testid="gender-balance-section">
+                <div className="mb-1.5 flex items-center justify-between text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  <span>Gender balance</span>
+                  <Badge variant="outline" className="px-1.5 py-0 text-[9px] font-medium normal-case tracking-normal">Built-in</Badge>
+                </div>
+                <div className="space-y-1">
+                  <div className="flex items-center gap-1.5 text-[11px]">
+                    <span className="min-w-0 flex-1 truncate">Gender</span>
+                    <span className="font-medium">{genderBalance.score}%</span>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          type="button"
+                          disabled={!isGenderBoostable || characteristicBoostMutation.isPending}
+                          onClick={() => characteristicBoostMutation.mutate({
+                            characteristicId: "gender",
+                            name: "Gender",
+                            historySnapshot: placements.map(({ studentId, classId }) => ({ studentId, classId })),
+                          })}
+                          className={`flex h-5 w-5 shrink-0 items-center justify-center rounded transition-colors ${isGenderBoostable ? "text-amber-500 hover:bg-amber-500/15 hover:text-amber-600" : "cursor-not-allowed text-muted-foreground/40"}`}
+                          aria-label="Boost Gender balance"
+                          data-testid="button-boost-gender"
+                        >
+                          {isGenderBoosting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Zap className="h-3 w-3" />}
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent><p>{isGenderBoostable ? "Boost Gender balance" : "Gender balance cannot be boosted further."}</p></TooltipContent>
+                    </Tooltip>
+                  </div>
+                  <Progress value={genderBalance.score} className="h-1" />
                 </div>
               </div>
 
