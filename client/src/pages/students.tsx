@@ -36,6 +36,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
+import { downloadXlsx, type SpreadsheetCell } from "@/lib/xlsx-export";
 import { characteristicValueToArray, formatCharacteristicValue, isCharacteristicApplicableToGrade, normalizeResponses } from "@shared/characteristics";
 import type { Student, InsertStudent, Characteristic, ClassConfig, CharacteristicResponse } from "@shared/schema";
 
@@ -594,6 +595,59 @@ export default function StudentsPage() {
     URL.revokeObjectURL(url);
   };
 
+  // Export the learners currently represented by the roster (respects the
+  // active Grade filter, special filters and search, in the roster's sort
+  // order) with their actual stored data — not the blank import template.
+  const handleExportStudents = () => {
+    if (filteredStudents.length === 0) {
+      toast({
+        title: "No students to export",
+        description: "No learners match the current filter.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const headers = [
+      "Student ID",
+      "First Name",
+      "Last Name",
+      "Gender",
+      "Current Grade",
+      "Current Class",
+      "Notes",
+      "Parent Requests",
+      "Parent Notes",
+      ...formCharacteristicColumns.map((characteristic) => characteristic.name),
+    ];
+
+    const rows: SpreadsheetCell[][] = [
+      headers,
+      ...filteredStudents.map((student) => {
+        const studentCharacteristics = getCharacteristics(student);
+        return [
+          student.studentId || formatCharacteristicValue(studentCharacteristics.studentId) || "",
+          student.firstName,
+          student.lastName,
+          student.gender || "",
+          student.grade || "",
+          student.currentClass || "",
+          student.notes || "",
+          student.parentRequests || "",
+          student.parentNotes || "",
+          ...formCharacteristicColumns.map((characteristic) => {
+            const value = studentCharacteristics[characteristic.name];
+            return value == null ? "" : characteristicValueToArray(value).join(", ");
+          }),
+        ];
+      }),
+    ];
+
+    downloadXlsx(`students-export-${new Date().toISOString().slice(0, 10)}`, [
+      { name: "Students", rows },
+    ]);
+  };
+
   if (showImportView) {
     return (
       <div className="p-6 space-y-6">
@@ -686,19 +740,7 @@ export default function StudentsPage() {
             <Upload className="h-4 w-4 mr-2" />
             Import Characteristics
           </Button>
-          <Button variant="outline" onClick={() => {
-            const csvHeaders = ["Student ID", "First Name", "Last Name", "Gender", "Current Grade", "Current Class", ...formCharacteristicColumns.map((characteristic) => characteristic.name)];
-            const csvContent = `${csvHeaders.map((header) => `"${header.replace(/"/g, '""')}"`).join(";")}\r\n`;
-            const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
-            const url = URL.createObjectURL(blob);
-            const link = document.createElement("a");
-            link.href = url;
-            link.download = "students_export.csv";
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            URL.revokeObjectURL(url);
-          }} data-testid="button-export-students">
+          <Button variant="outline" onClick={handleExportStudents} data-testid="button-export-students">
             <Download className="h-4 w-4 mr-2" />
             Export Students
           </Button>
