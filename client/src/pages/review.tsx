@@ -910,8 +910,12 @@ export default function ReviewPage() {
     const matches = new Map<string, number>();
     if (!selectedSimilarStudent) return matches;
     const selectedClassId = placements.find((p) => p.studentId === selectedSimilarStudent.id)?.classId;
+    // The Solver places year-ahead, so similarity is only comparable within the
+    // selected learner's target/New Grade — never across grades.
+    const selectedTargetGrade = getStudentTargetGrade(selectedSimilarStudent);
     students.forEach((candidate) => {
       if (candidate.id === selectedSimilarStudent.id) return;
+      if (getStudentTargetGrade(candidate) !== selectedTargetGrade) return;
       const candidateClassId = placements.find((p) => p.studentId === candidate.id)?.classId;
       if (!candidateClassId || candidateClassId === selectedClassId) return;
       const score = computeSimilarityScore(selectedSimilarStudent, candidate, similarityRanges);
