@@ -421,6 +421,7 @@ function EditLearnerDialog({
   busy,
   onClose,
   onUpdateResponse,
+  onSaveInfo,
   onEditRequest,
   onAddRequest,
   onRemoveRequest,
@@ -436,11 +437,34 @@ function EditLearnerDialog({
   busy: boolean;
   onClose: () => void;
   onUpdateResponse: (studentId: string, characteristic: string, value: string) => void;
+  onSaveInfo: (studentId: string, info: { notes: string; parentRequests: string; parentNotes: string }) => Promise<boolean>;
   onEditRequest: (ruleId: string) => void;
   onAddRequest: (prefill: Partial<RequestDraftInput>) => void;
   onRemoveRequest: (ruleId: string) => void;
   onToggleFriendship: (studentId: string, mateId: string, currentRule: Rule | null) => void;
 }) {
+  // Learner information (Notes / Parent Requests / Parent Notes) — the same
+  // learner fields used by the Students page editor, saved to the same record.
+  const [infoDraft, setInfoDraft] = useState({
+    notes: student.notes || "",
+    parentRequests: student.parentRequests || "",
+    parentNotes: student.parentNotes || "",
+  });
+  const [infoSaveState, setInfoSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const infoDirty =
+    infoDraft.notes !== (student.notes || "")
+    || infoDraft.parentRequests !== (student.parentRequests || "")
+    || infoDraft.parentNotes !== (student.parentNotes || "");
+
+  const handleSaveInfo = async () => {
+    setInfoSaveState("saving");
+    const saved = await onSaveInfo(student.id, infoDraft);
+    setInfoSaveState(saved ? "saved" : "error");
+    if (saved) {
+      window.setTimeout(() => setInfoSaveState("idle"), 2000);
+    }
+  };
+
   const learnerRequests = requests
     .filter((rule) => rule.studentId1 === student.id || rule.studentId2 === student.id)
     .map((rule) => ({ rule, number: requestNumberById.get(rule.id) ?? 0 }))
@@ -598,6 +622,63 @@ function EditLearnerDialog({
             </div>
           </TabsContent>
         </Tabs>
+
+        <div className="mt-4 space-y-3 border-t pt-4" data-testid="learner-information-fields">
+          <p className="text-sm font-medium">Learner information</p>
+          <div className="grid gap-1.5">
+            <Label htmlFor="survey-learner-notes" className="text-sm">Notes</Label>
+            <Textarea
+              id="survey-learner-notes"
+              rows={3}
+              value={infoDraft.notes}
+              disabled={infoSaveState === "saving"}
+              onChange={(event) => setInfoDraft((draft) => ({ ...draft, notes: event.target.value }))}
+              placeholder="Add any additional notes about this student..."
+              data-testid="textarea-learner-notes"
+            />
+          </div>
+          <div className="grid gap-1.5">
+            <Label htmlFor="survey-learner-parent-requests" className="text-sm">Parent Requests</Label>
+            <Textarea
+              id="survey-learner-parent-requests"
+              rows={3}
+              value={infoDraft.parentRequests}
+              disabled={infoSaveState === "saving"}
+              onChange={(event) => setInfoDraft((draft) => ({ ...draft, parentRequests: event.target.value }))}
+              placeholder="Document any parent placement requests (e.g., 'Please place with Sarah', 'Avoid being in same class as John')..."
+              data-testid="textarea-learner-parent-requests"
+            />
+          </div>
+          <div className="grid gap-1.5">
+            <Label htmlFor="survey-learner-parent-notes" className="text-sm">Parent Notes</Label>
+            <Textarea
+              id="survey-learner-parent-notes"
+              rows={2}
+              value={infoDraft.parentNotes}
+              disabled={infoSaveState === "saving"}
+              onChange={(event) => setInfoDraft((draft) => ({ ...draft, parentNotes: event.target.value }))}
+              placeholder="Additional notes from parent communications..."
+              data-testid="textarea-learner-parent-notes"
+            />
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              onClick={handleSaveInfo}
+              disabled={!infoDirty || infoSaveState === "saving"}
+              data-testid="button-save-learner-info"
+            >
+              {infoSaveState === "saving"
+                ? <><Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> Saving…</>
+                : infoSaveState === "saved"
+                  ? <><Check className="mr-1.5 h-3.5 w-3.5" /> Saved</>
+                  : "Save learner information"}
+            </Button>
+            {infoSaveState === "error" && (
+              <span className="text-xs text-destructive" data-testid="text-learner-info-error">Could not save. Please try again.</span>
+            )}
+          </div>
+        </div>
       </DialogContent>
     </Dialog>
   );
@@ -704,6 +785,31 @@ export default function TeacherSurveyPage({ token }: { token: string }) {
       saveTimers.current.delete(key);
       void saveResponse(studentId, characteristic, value);
     }, 600));
+  };
+
+  // Save learner information (Notes / Parent Requests / Parent Notes) from the
+  // edit-learner dialog to the same learner record the Students page uses.
+  const saveLearnerInfo = async (
+    studentId: string,
+    info: { notes: string; parentRequests: string; parentNotes: string },
+  ): Promise<boolean> => {
+    try {
+      const response = await fetch(
+        apiUrl(`/api/public/teacher-surveys/${encodeURIComponent(token)}/students/${studentId}`),
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(info),
+        },
+      );
+      await readJsonResponse(response);
+      setStudents((current) => current.map((student) =>
+        student.id === studentId ? { ...student, ...info } : student,
+      ));
+      return true;
+    } catch {
+      return false;
+    }
   };
 
   const completeMutation = useMutation({
@@ -1180,6 +1286,7 @@ export default function TeacherSurveyPage({ token }: { token: string }) {
 
       {editingStudent && (
         <EditLearnerDialog
+          key={editingStudent.id}
           student={editingStudent}
           students={students}
           gradeStudents={gradeStudents}
@@ -1190,6 +1297,7 @@ export default function TeacherSurveyPage({ token }: { token: string }) {
           busy={addRequestMutation.isPending || removeRequestMutation.isPending}
           onClose={() => setEditingStudentId(null)}
           onUpdateResponse={updateResponse}
+          onSaveInfo={saveLearnerInfo}
           onEditRequest={(ruleId) => openRequestEditor({ mode: "edit", ruleId })}
           onAddRequest={(prefill) => openRequestEditor({ mode: "create", prefill })}
           onRemoveRequest={(ruleId) => removeRequestMutation.mutate(ruleId)}

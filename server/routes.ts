@@ -29,6 +29,7 @@ import {
   insertScenarioSchema,
   insertTeacherSchema,
   type InsertRule,
+  type InsertStudent,
   type Student,
   type Rule,
   type ClassConfig,
@@ -210,6 +211,25 @@ export async function registerRoutes(
       if (!student || student.currentClass?.trim().toLowerCase() !== payload.className.trim().toLowerCase()) {
         return res.status(404).json({ error: "Student is not part of this survey class" });
       }
+
+      // Teacher-editable learner information: the same notes / parent requests /
+      // parent notes fields used by the Students page editor, saved to the same
+      // learner record. Only these three fields are accepted — nothing else.
+      const textFieldNames = ["notes", "parentRequests", "parentNotes"] as const;
+      const textUpdates: Partial<InsertStudent> = {};
+      for (const field of textFieldNames) {
+        const fieldValue = req.body?.[field];
+        if (typeof fieldValue !== "string") continue;
+        if (fieldValue.length > 5000) {
+          return res.status(400).json({ error: `${field} must be 5000 characters or fewer` });
+        }
+        (textUpdates as Record<string, string>)[field] = fieldValue;
+      }
+      if (Object.keys(textUpdates).length > 0) {
+        await storage.updateStudent(payload.accountId, student.id, textUpdates);
+        return res.json({ saved: true });
+      }
+
       const characteristic = characteristics.find(
         (item) => item.name === characteristicName && !item.adminOnly && isCharacteristicApplicableToGrade(item, student.grade),
       );
