@@ -19,6 +19,8 @@ import {
   type Profile,
   type AccountMembership,
   type InsertAccountMembership,
+  type AccountBillingDetails,
+  type InsertAccountBillingDetails,
   type Survey,
   type InsertSurvey,
   type Scenario,
@@ -34,6 +36,7 @@ import {
   placementRequests,
   profiles,
   accountMemberships,
+  accountBillingDetails,
   surveys,
   scenarios,
   users,
@@ -317,6 +320,59 @@ export class DatabaseStorage {
       .where(and(eq(accountMemberships.accountId, accountId), eq(accountMemberships.id, id)))
       .returning();
     return result.length > 0;
+  }
+
+  // ---- Account billing details (customer "bill to" record) ----
+
+  async getAccountBillingDetails(accountId: string): Promise<AccountBillingDetails | undefined> {
+    accountId = requireAccountId(accountId);
+    const [row] = await db
+      .select()
+      .from(accountBillingDetails)
+      .where(eq(accountBillingDetails.accountId, accountId));
+    return row || undefined;
+  }
+
+  /** Backfill billing details from signup; never overwrites an existing row. */
+  async insertAccountBillingDetailsIfAbsent(
+    accountId: string,
+    values: Omit<InsertAccountBillingDetails, "accountId">,
+  ): Promise<AccountBillingDetails | undefined> {
+    accountId = requireAccountId(accountId);
+    const inserted = await db
+      .insert(accountBillingDetails)
+      .values({ ...values, accountId })
+      .onConflictDoNothing({ target: accountBillingDetails.accountId })
+      .returning();
+    return inserted[0] || undefined;
+  }
+
+  async saveAccountBillingDetails(
+    accountId: string,
+    values: Omit<InsertAccountBillingDetails, "accountId">,
+  ): Promise<AccountBillingDetails> {
+    accountId = requireAccountId(accountId);
+    const [row] = await db
+      .insert(accountBillingDetails)
+      .values({ ...values, accountId })
+      .onConflictDoUpdate({
+        target: accountBillingDetails.accountId,
+        set: {
+          billingName: values.billingName,
+          organisationName: values.organisationName,
+          addressLine1: values.addressLine1,
+          addressLine2: values.addressLine2,
+          city: values.city,
+          province: values.province,
+          postalCode: values.postalCode,
+          country: values.country,
+          billingEmail: values.billingEmail,
+          phone: values.phone,
+          updatedAt: new Date(),
+        },
+      })
+      .returning();
+    return row;
   }
 
   async getCharacteristics(accountId: string): Promise<Characteristic[]> {

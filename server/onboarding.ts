@@ -1,7 +1,9 @@
 import type { RequestHandler } from "express";
 import { pool } from "./db";
 import { seedDemoData } from "./demoSeed";
+import { storage } from "./storage";
 import { normalizeLicensePlanType, type LicensePlanType } from "@shared/licence-pricing";
+import { billingDetailsSchema, type BillingDetailsInput } from "@shared/billing-details";
 
 interface OnboardingAccount {
   accountId: string;
@@ -44,9 +46,87 @@ function planTypeFromSignup(
   return null;
 }
 
+function firstString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) return value;
+  }
+  return undefined;
+}
+
+// Billing details collected on the public signup form. Like the plan type,
+// they may arrive explicitly in the handoff/onboarding request body (a
+// billingDetails object) or be stored in the Supabase signup metadata
+// (snake_case keys) — both are accepted. Everything is validated and
+// sanitised server-side; invalid or partial submissions are rejected
+// (logged) rather than persisted, and signup itself never fails because of
+// billing details.
+function billingDetailsFromSignup(
+  requested: unknown,
+  metadata: Record<string, unknown> | undefined,
+): BillingDetailsInput | null {
+  const nested =
+    requested && typeof requested === "object" && !Array.isArray(requested)
+      ? (requested as Record<string, unknown>)
+      : undefined;
+  const raw = {
+    billingName: firstString(nested?.billingName, nested?.billing_name, metadata?.billing_name, metadata?.billingName),
+    organisationName: firstString(
+      nested?.organisationName, nested?.organisation_name,
+      nested?.organizationName, nested?.organization_name,
+      metadata?.organisation_name, metadata?.organization_name,
+      metadata?.organisationName, metadata?.organizationName,
+      metadata?.school_name, metadata?.schoolName,
+    ),
+    addressLine1: firstString(
+      nested?.addressLine1, nested?.address_line1,
+      metadata?.billing_address_line1, metadata?.address_line1,
+      metadata?.billing_address, metadata?.billingAddress,
+    ),
+    addressLine2: firstString(
+      nested?.addressLine2, nested?.address_line2,
+      metadata?.billing_address_line2, metadata?.address_line2,
+    ),
+    city: firstString(nested?.city, metadata?.billing_city, metadata?.city),
+    province: firstString(nested?.province, metadata?.billing_province, metadata?.province),
+    postalCode: firstString(nested?.postalCode, nested?.postal_code, metadata?.billing_postal_code, metadata?.postal_code),
+    country: firstString(nested?.country, metadata?.billing_country, metadata?.country),
+    billingEmail: firstString(nested?.billingEmail, nested?.billing_email, metadata?.billing_email, metadata?.billingEmail),
+    phone: firstString(nested?.phone, metadata?.billing_phone, metadata?.phone),
+  };
+  if (Object.values(raw).every((value) => value === undefined)) return null;
+
+  const parsed = billingDetailsSchema.safeParse(raw);
+  if (!parsed.success) {
+    console.warn(
+      "[onboarding] signup billing details rejected (invalid or incomplete) — nothing saved:",
+      parsed.error.issues.map((issue) => `${issue.path.join(".") || "billing"}: ${issue.message}`).join("; "),
+    );
+    return null;
+  }
+  return parsed.data;
+}
+
+// Best-effort persistence of signup billing details. Runs after the main
+// onboarding transaction has committed and never fails the request: an
+// account without billing details (including every existing account) keeps
+// working exactly as before. Existing rows are never overwritten — details
+// submitted at signup only backfill accounts that have none yet.
+async function persistSignupBillingDetails(accountId: string, details: BillingDetailsInput | null): Promise<void> {
+  if (!details) return;
+  try {
+    await storage.insertAccountBillingDetailsIfAbsent(accountId, details);
+  } catch (error) {
+    console.warn(
+      "[onboarding] billing details could not be saved (has the migration been applied?)",
+      error instanceof Error ? error.message : error,
+    );
+  }
+}
+
 export async function ensureOnboardingAccount(
   user: NonNullable<Express.Request["supabaseUser"]>,
   requestedPlanType?: unknown,
+  requestedBillingDetails?: unknown,
 ): Promise<OnboardingAccount> {
   const client = await pool.connect();
 
@@ -56,6 +136,13 @@ export async function ensureOnboardingAccount(
 
     const { firstName, lastName, avatarUrl } = profileNameFromMetadata(user.user_metadata);
     const planType = planTypeFromSignup(requestedPlanType, user.user_metadata);
+    let billingDetails = billingDetailsFromSignup(requestedBillingDetails, user.user_metadata);
+    // The School plan bills an organisation, so its billing details must carry
+    // the school/organisation name (the signup form enforces the same rule).
+    if (billingDetails && planType === "school" && !billingDetails.organisationName) {
+      console.warn("[onboarding] signup billing details rejected: the School plan requires a school/organisation name");
+      billingDetails = null;
+    }
     await client.query(
       `INSERT INTO profiles (id, email, first_name, last_name, avatar_url)
        VALUES ($1, $2, $3, $4, $5)
@@ -147,6 +234,7 @@ export async function ensureOnboardingAccount(
       }
       await client.query("COMMIT");
       const account = existing.rows[0];
+      await persistSignupBillingDetails(account.accountId, billingDetails);
       return {
         ...account,
         licensedLearnerCount: account.licensedLearnerCount === null ? null : Number(account.licensedLearnerCount),
@@ -193,6 +281,7 @@ export async function ensureOnboardingAccount(
     );
 
     await client.query("COMMIT");
+    await persistSignupBillingDetails(accountId, billingDetails);
     return {
       ...account.rows[0],
       subscriptionStatus: "trialing",
@@ -222,7 +311,7 @@ export const onboardSupabaseUser: RequestHandler = async (req, res) => {
   }
 
   try {
-    const account = await ensureOnboardingAccount(req.supabaseUser, req.body?.planType);
+    const account = await ensureOnboardingAccount(req.supabaseUser, req.body?.planType, req.body?.billingDetails);
     const seed = account.isNewAccount ? await seedDemoData(account.accountId) : null;
 
     req.supabaseAccountContext = account;

@@ -114,6 +114,31 @@ export type AccountMembership = typeof accountMemberships.$inferSelect;
 export type InsertAccountMembership = typeof accountMemberships.$inferInsert;
 export type AccountSubscription = typeof accountSubscriptions.$inferSelect;
 export type InsertAccountSubscription = typeof accountSubscriptions.$inferInsert;
+
+// Customer billing details ("bill to" record) for an account. One row per
+// account, kept separate from subscription state so future invoices can
+// snapshot it exactly as captured. Every column is nullable: existing
+// accounts (including trials without billing details) keep working unchanged.
+export const accountBillingDetails = pgTable("account_billing_details", {
+  accountId: uuid("account_id")
+    .primaryKey()
+    .references(() => accounts.id, { onDelete: "cascade" }),
+  billingName: text("billing_name"),
+  organisationName: text("organisation_name"),
+  addressLine1: text("address_line1"),
+  addressLine2: text("address_line2"),
+  city: text("city"),
+  province: text("province"),
+  postalCode: text("postal_code"),
+  country: text("country"),
+  billingEmail: text("billing_email"),
+  phone: text("phone"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export type AccountBillingDetails = typeof accountBillingDetails.$inferSelect;
+export type InsertAccountBillingDetails = typeof accountBillingDetails.$inferInsert;
 export type AccountPaymentTransaction = typeof accountPaymentTransactions.$inferSelect;
 export type InsertAccountPaymentTransaction = typeof accountPaymentTransactions.$inferInsert;
 export type AccountUsage = typeof accountUsage.$inferSelect;

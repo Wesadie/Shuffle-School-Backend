@@ -44,6 +44,7 @@ import {
   type TeacherSurveySettings,
 } from "@shared/schema";
 import { CHARACTERISTIC_TYPES, characteristicValueToArray, defaultResponseColor, getStableResponseId, isCharacteristicApplicableToGrade, normalizeResponses } from "@shared/characteristics";
+import { billingDetailsSchema } from "@shared/billing-details";
 import { getStudentTargetGrade, normalizeGradeValue } from "@shared/grades";
 import { z } from "zod";
 import { isRuleMandatory } from "@shared/schema";
@@ -1165,6 +1166,70 @@ export async function registerRoutes(
         message: error instanceof Error ? error.message : String(error),
       });
       res.status(400).json({ error: error instanceof Error ? error.message : "Failed to cancel subscription" });
+    }
+  });
+
+  // Customer billing details (the account's "bill to" record used to build
+  // future invoices). Billing information is only ever exposed and updated
+  // through these authenticated endpoints, and only to authorised account
+  // administrators (the Primary Administrator 'owner' or an 'admin') — the
+  // same membership roles that manage the subscription. Nothing about
+  // billing is ever accepted from or exposed to public routes.
+  const getBillingAdministratorContext = async (req: any, res: any) => {
+    const accountId = accountIdFor(req);
+    const userId = (req.supabaseUser?.id ?? req.user?.claims?.sub) as string | undefined;
+    if (!userId) {
+      res.status(401).json({ error: "Authentication required" });
+      return null;
+    }
+    const memberships = await storage.getAccountMembershipsWithProfiles(accountId);
+    const current = memberships.find((membership) => membership.userId === userId);
+    if (!current || (current.role !== "owner" && current.role !== "admin")) {
+      res.status(403).json({ error: "Only an account administrator can manage billing details" });
+      return null;
+    }
+    return { accountId };
+  };
+
+  app.get("/api/account/billing-details", isAuthenticated, async (req, res) => {
+    try {
+      const context = await getBillingAdministratorContext(req, res);
+      if (!context) return;
+      const billingDetails = (await storage.getAccountBillingDetails(context.accountId)) ?? null;
+      res.json({ billingDetails });
+    } catch (error) {
+      console.error("[billing-details] fetch failed", {
+        message: error instanceof Error ? error.message : String(error),
+      });
+      res.status(500).json({ error: "Failed to load billing details" });
+    }
+  });
+
+  app.put("/api/account/billing-details", isAuthenticated, async (req, res) => {
+    const context = await getBillingAdministratorContext(req, res);
+    if (!context) return;
+    try {
+      // Validate and sanitise every submitted field server-side before it
+      // reaches the database.
+      const parsed = billingDetailsSchema.safeParse(req.body);
+      if (!parsed.success) {
+        const issue = parsed.error.issues[0];
+        const field = issue.path.length > 0 ? issue.path.join(".") : "billing details";
+        return res.status(400).json({ error: `Invalid ${field}: ${issue.message}` });
+      }
+      // Plan rule: the School plan bills an organisation, so the
+      // school/organisation name is required. It is optional for the Teacher
+      // and Head of Grade plans, matching the signup form behaviour.
+      if (getAccountContext(req).planType === "school" && !parsed.data.organisationName) {
+        return res.status(400).json({ error: "The School plan requires a school/organisation name" });
+      }
+      const billingDetails = await storage.saveAccountBillingDetails(context.accountId, parsed.data);
+      res.json({ billingDetails });
+    } catch (error) {
+      console.error("[billing-details] save failed", {
+        message: error instanceof Error ? error.message : String(error),
+      });
+      res.status(500).json({ error: "Failed to save billing details" });
     }
   });
 

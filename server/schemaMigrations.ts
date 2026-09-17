@@ -10,6 +10,24 @@ const startupMigrations: string[] = [
   `ALTER TABLE teachers ADD COLUMN IF NOT EXISTS survey_settings jsonb`,
   `ALTER TABLE account_subscriptions ADD COLUMN IF NOT EXISTS cancel_at_period_end boolean NOT NULL DEFAULT false`,
   `ALTER TABLE account_subscriptions ADD COLUMN IF NOT EXISTS canceled_at timestamptz`,
+  // Customer billing details ("bill to" record) for future invoices. Every
+  // column is nullable so existing accounts without billing details keep
+  // working unchanged.
+  `CREATE TABLE IF NOT EXISTS account_billing_details (
+     account_id uuid PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+     billing_name text,
+     organisation_name text,
+     address_line1 text,
+     address_line2 text,
+     city text,
+     province text,
+     postal_code text,
+     country text,
+     billing_email text,
+     phone text,
+     created_at timestamptz NOT NULL DEFAULT NOW(),
+     updated_at timestamptz NOT NULL DEFAULT NOW()
+   )`,
 ];
 
 export async function ensureSchemaMigrations(): Promise<void> {
