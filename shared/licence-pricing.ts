@@ -32,6 +32,13 @@ export function isLicensePlanType(value: unknown): value is LicensePlanType {
   return typeof value === "string" && (LICENSE_PLAN_TYPES as readonly string[]).includes(value);
 }
 
+/** Normalize a loosely-formatted plan value ("Head of Grade", "head-of-grade") to a plan id. */
+export function normalizeLicensePlanType(value: unknown): LicensePlanType | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase().replace(/[\s-]+/g, "_");
+  return isLicensePlanType(normalized) ? normalized : null;
+}
+
 export function licensePlanLabel(planType: LicensePlanType): string {
   return LICENSE_PLAN_LABELS[planType];
 }

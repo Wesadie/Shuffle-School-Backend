@@ -59,7 +59,7 @@ export const createAuthHandoff: RequestHandler = async (req, res) => {
   }
 
   try {
-    const account = await ensureOnboardingAccount(req.supabaseUser);
+    const account = await ensureOnboardingAccount(req.supabaseUser, req.body?.planType);
     if (account.isNewAccount) {
       await seedDemoData(account.accountId);
     }

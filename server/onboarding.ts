@@ -1,6 +1,7 @@
 import type { RequestHandler } from "express";
 import { pool } from "./db";
 import { seedDemoData } from "./demoSeed";
+import { normalizeLicensePlanType, type LicensePlanType } from "@shared/licence-pricing";
 
 interface OnboardingAccount {
   accountId: string;
@@ -27,7 +28,26 @@ function profileNameFromMetadata(metadata: Record<string, unknown> | undefined) 
   return { firstName, lastName, avatarUrl };
 }
 
-export async function ensureOnboardingAccount(user: NonNullable<Express.Request["supabaseUser"]>): Promise<OnboardingAccount> {
+// The plan chosen on the public pricing/signup flow. The signup page may send
+// it explicitly in the handoff/onboarding request body, or store it in the
+// Supabase signup metadata — both are accepted.
+function planTypeFromSignup(
+  requestedPlanType: unknown,
+  metadata: Record<string, unknown> | undefined,
+): LicensePlanType | null {
+  const explicit = normalizeLicensePlanType(requestedPlanType);
+  if (explicit) return explicit;
+  for (const key of ["plan", "plan_type", "planType", "selected_plan", "selectedPlan"]) {
+    const plan = normalizeLicensePlanType(metadata?.[key]);
+    if (plan) return plan;
+  }
+  return null;
+}
+
+export async function ensureOnboardingAccount(
+  user: NonNullable<Express.Request["supabaseUser"]>,
+  requestedPlanType?: unknown,
+): Promise<OnboardingAccount> {
   const client = await pool.connect();
 
   try {
@@ -35,6 +55,7 @@ export async function ensureOnboardingAccount(user: NonNullable<Express.Request[
     await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`supabase-onboarding:${user.id}`]);
 
     const { firstName, lastName, avatarUrl } = profileNameFromMetadata(user.user_metadata);
+    const planType = planTypeFromSignup(requestedPlanType, user.user_metadata);
     await client.query(
       `INSERT INTO profiles (id, email, first_name, last_name, avatar_url)
        VALUES ($1, $2, $3, $4, $5)
@@ -112,6 +133,18 @@ export async function ensureOnboardingAccount(user: NonNullable<Express.Request[
          ON CONFLICT (account_id) DO NOTHING`,
         [existing.rows[0].accountId],
       );
+      // Backfill the signup plan onto trial subscriptions created before the
+      // plan was captured. Paid licences are never touched: their plan is
+      // already set and their status is not 'trialing'.
+      if (planType && existing.rows[0].planType == null && existing.rows[0].subscriptionStatus !== "active") {
+        await client.query(
+          `UPDATE account_subscriptions
+           SET plan_type = $2, updated_at = NOW()
+           WHERE account_id = $1 AND plan_type IS NULL AND status <> 'active'`,
+          [existing.rows[0].accountId, planType],
+        );
+        existing.rows[0].planType = planType;
+      }
       await client.query("COMMIT");
       const account = existing.rows[0];
       return {
@@ -146,10 +179,10 @@ export async function ensureOnboardingAccount(user: NonNullable<Express.Request[
     );
 
     await client.query(
-      `INSERT INTO account_subscriptions (account_id, status, trial_started_at, trial_ends_at)
-       VALUES ($1, 'trialing', $2, $3)
-       ON CONFLICT (account_id) DO UPDATE SET status = 'trialing', trial_started_at = COALESCE(account_subscriptions.trial_started_at, EXCLUDED.trial_started_at), trial_ends_at = COALESCE(account_subscriptions.trial_ends_at, EXCLUDED.trial_ends_at), updated_at = NOW()`,
-      [accountId, now, trialEndsAt],
+      `INSERT INTO account_subscriptions (account_id, status, plan_type, trial_started_at, trial_ends_at)
+       VALUES ($1, 'trialing', $2, $3, $4)
+       ON CONFLICT (account_id) DO UPDATE SET status = 'trialing', plan_type = COALESCE(account_subscriptions.plan_type, EXCLUDED.plan_type), trial_started_at = COALESCE(account_subscriptions.trial_started_at, EXCLUDED.trial_started_at), trial_ends_at = COALESCE(account_subscriptions.trial_ends_at, EXCLUDED.trial_ends_at), updated_at = NOW()`,
+      [accountId, planType, now, trialEndsAt],
     );
 
     await client.query(
@@ -164,7 +197,7 @@ export async function ensureOnboardingAccount(user: NonNullable<Express.Request[
       ...account.rows[0],
       subscriptionStatus: "trialing",
       accountRole: "owner",
-      planType: null,
+      planType,
       licensedLearnerCount: null,
       trialEndsAt: trialEndsAt.toISOString(),
       trialExpired: false,
@@ -189,7 +222,7 @@ export const onboardSupabaseUser: RequestHandler = async (req, res) => {
   }
 
   try {
-    const account = await ensureOnboardingAccount(req.supabaseUser);
+    const account = await ensureOnboardingAccount(req.supabaseUser, req.body?.planType);
     const seed = account.isNewAccount ? await seedDemoData(account.accountId) : null;
 
     req.supabaseAccountContext = account;

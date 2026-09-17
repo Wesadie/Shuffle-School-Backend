@@ -9,6 +9,7 @@ import { handlePayfastItn } from "./payfast/itn";
 import {
   LICENSE_PLAN_TYPES,
   isLicensePlanType,
+  licensePlanLabel,
   type LicensePlanType,
 } from "@shared/licence-pricing";
 import { z } from "zod";
@@ -135,12 +136,20 @@ app.post(
           : body.learnerCount;
 
       // The backend determines the price from the plan type — never a price
-      // sent from the frontend. Top-ups and renewals always use the
-      // subscription's existing plan (and that plan's rate); only an initial
-      // purchase uses the client-selected plan.
-      let planType: LicensePlanType | null = body.planType;
-      if (body.transactionType !== "initial") {
-        planType = isLicensePlanType(accountContext.planType) ? accountContext.planType : null;
+      // sent from the frontend. The plan chosen at signup is the account's
+      // entitled plan: initial purchases may only use it, and top-ups and
+      // renewals always use the subscription's existing plan (and its rate).
+      const entitledPlan = isLicensePlanType(accountContext.planType) ? accountContext.planType : null;
+      let planType: LicensePlanType | null = null;
+      if (body.transactionType === "initial") {
+        if (entitledPlan && body.planType !== entitledPlan) {
+          return res.status(403).json({
+            error: `This account is signed up for the ${licensePlanLabel(entitledPlan)} plan`,
+          });
+        }
+        planType = body.planType;
+      } else {
+        planType = entitledPlan;
       }
       if (!planType) {
         throw new Error("An existing subscription plan is required before topping up or renewing");

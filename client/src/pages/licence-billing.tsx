@@ -71,11 +71,13 @@ export default function LicenceBillingPage() {
   const subscriptionCancelled = accountContext?.cancelAtPeriodEnd === true;
   const expiryDate = formatDate(accountContext?.licenseEndsAt);
 
-  // The subscription's plan drives top-up pricing; new purchases use the
-  // buyer's plan selection. Rates come from the central pricing config.
+  // The plan chosen at signup is the account's entitled plan — it drives all
+  // pricing (trials and paid licences alike). Only legacy accounts without a
+  // recorded plan can still choose one at first purchase. Rates come from the
+  // central pricing config; the server enforces the same rule.
   const currentPlanType = isLicensePlanType(accountContext?.planType) ? accountContext.planType : null;
   const [planSelection, setPlanSelection] = useState<LicensePlanType>("school");
-  const selectedPlan: LicensePlanType = isLicensed && currentPlanType ? currentPlanType : planSelection;
+  const selectedPlan: LicensePlanType = currentPlanType ?? planSelection;
   const perLearnerCents = pricePerLearnerCents(selectedPlan);
 
   const [learnerSelection, setLearnerSelection] = useState("40");
@@ -212,11 +214,13 @@ export default function LicenceBillingPage() {
         <CardContent className="space-y-5">
           <div className="space-y-2">
             <Label htmlFor="plan-type">Plan</Label>
-            {isLicensed ? (
-              <p className="text-sm text-muted-foreground pt-1.5">
-                {currentPlanType
-                  ? `${licensePlanLabel(currentPlanType)} – ${formatCurrency(pricePerLearnerCents(currentPlanType))} per learner/year. Top-ups use your current plan's rate.`
-                  : "Your plan rate will be confirmed at checkout."}
+            {currentPlanType ? (
+              <p className="text-sm text-muted-foreground pt-1.5" data-testid="text-account-plan">
+                {licensePlanLabel(currentPlanType)} – {formatCurrency(pricePerLearnerCents(currentPlanType))} per
+                learner/year.
+                {isLicensed
+                  ? " Top-ups use your current plan's rate."
+                  : " Your plan was selected when you signed up."}
               </p>
             ) : (
               <Select value={planSelection} onValueChange={(value) => setPlanSelection(value as LicensePlanType)}>
