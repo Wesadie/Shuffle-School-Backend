@@ -34,6 +34,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import { BillingDetailsCard } from "@/components/billing-details-card";
+import { InvoicesCard } from "@/components/invoices-card";
 
 const learnerOptions = [40, 80, 120, 160, 200, 240, 280, 320];
 const customLearnerValue = "custom";
@@ -213,6 +214,8 @@ export default function LicenceBillingPage() {
       </Card>
 
       <BillingDetailsCard canManage={canManageSubscription} planType={currentPlanType} />
+
+      <InvoicesCard canManage={canManageSubscription} />
 
       <Card>
         <CardHeader>

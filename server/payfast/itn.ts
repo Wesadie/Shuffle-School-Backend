@@ -28,8 +28,11 @@ import {
   activateInitialLicense,
   addLearnerCapacity,
   renewLicense,
+  type LicenseOperationResult,
   type PaymentTransactionType,
 } from "../licenseService";
+import { createPaidInvoiceForPayment } from "../invoiceService";
+import { sendInvoiceEmail } from "../invoiceEmail";
 
 type ItnBody = Record<string, string>;
 
@@ -122,17 +125,17 @@ async function applyLicenseOperation(
   transactionType: PaymentTransactionType,
   learnerCount: number,
   amountCents: number,
-): Promise<void> {
+): Promise<LicenseOperationResult> {
   const paymentReference = body.m_payment_id;
   if (!paymentReference) throw new Error("Missing payment reference");
 
   if (transactionType === "topup") {
-    await addLearnerCapacity(accountId, learnerCount, amountCents, paymentReference);
-  } else if (transactionType === "renewal") {
-    await renewLicense(accountId, amountCents, paymentReference);
-  } else {
-    await activateInitialLicense(accountId, planType, learnerCount, amountCents, paymentReference);
+    return addLearnerCapacity(accountId, learnerCount, amountCents, paymentReference);
   }
+  if (transactionType === "renewal") {
+    return renewLicense(accountId, amountCents, paymentReference);
+  }
+  return activateInitialLicense(accountId, planType, learnerCount, amountCents, paymentReference);
 }
 
 export async function handlePayfastItn(req: Request, res: Response): Promise<void> {
@@ -200,14 +203,38 @@ export async function handlePayfastItn(req: Request, res: Response): Promise<voi
       amountGross: body.amount_gross,
     });
 
-    await applyLicenseOperation(body, accountId, planType, transactionType, learnerCount, amountCents);
+    const licenseResult = await applyLicenseOperation(
+      body,
+      accountId,
+      planType,
+      transactionType,
+      learnerCount,
+      amountCents,
+    );
 
-    console.log("[PayFast ITN Processed] licence updated", {
+    // Only validated COMPLETE payments reach this point. Invoice creation is
+    // independently idempotent by PayFast reference, so a retried ITN returns
+    // the existing invoice rather than issuing another number.
+    const invoice = await createPaidInvoiceForPayment({
+      accountId,
+      payfastPaymentId: body.m_payment_id,
+      transactionId: licenseResult.transactionId,
+      transactionType,
+      planType,
+      learnerQuantity: learnerCount,
+      amountCents,
+      licencePeriodStart: licenseResult.licenseStartedAt,
+      licencePeriodEnd: licenseResult.licenseEndsAt,
+    });
+    await sendInvoiceEmail(invoice);
+
+    console.log("[PayFast ITN Processed] licence updated and invoice issued", {
       paymentReference: body.m_payment_id,
       accountId,
       transactionType,
       learnerCount,
       amountCents,
+      invoiceNumber: invoice.invoiceNumber,
     });
 
     res.status(200).send("OK");

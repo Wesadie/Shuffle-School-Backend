@@ -18,6 +18,8 @@ import {
   learnerCapacityExceededResponse,
 } from "./accessControl";
 import { cancelSubscription } from "./licenseService";
+import { getAccountInvoice, getAccountInvoices } from "./invoiceService";
+import { generateInvoicePdf } from "./invoicePdf";
 
 import {
   insertStudentSchema,
@@ -1230,6 +1232,46 @@ export async function registerRoutes(
         message: error instanceof Error ? error.message : String(error),
       });
       res.status(500).json({ error: "Failed to save billing details" });
+    }
+  });
+
+  // Issued invoices are scoped to the authenticated account and restricted to
+  // account administrators, matching access to billing details. There are no
+  // public invoice endpoints and invoice data never appears in query strings.
+  app.get("/api/account/invoices", isAuthenticated, async (req, res) => {
+    try {
+      const context = await getBillingAdministratorContext(req, res);
+      if (!context) return;
+      const invoiceRows = await getAccountInvoices(context.accountId);
+      res.setHeader("Cache-Control", "no-store");
+      res.json({ invoices: invoiceRows });
+    } catch (error) {
+      console.error("[invoices] list failed", {
+        message: error instanceof Error ? error.message : String(error),
+      });
+      res.status(500).json({ error: "Failed to load invoices" });
+    }
+  });
+
+  app.get("/api/account/invoices/:id/pdf", isAuthenticated, async (req, res) => {
+    try {
+      const context = await getBillingAdministratorContext(req, res);
+      if (!context) return;
+      const invoiceId = z.string().uuid().safeParse(req.params.id);
+      if (!invoiceId.success) return res.status(404).json({ error: "Invoice not found" });
+      const invoice = await getAccountInvoice(context.accountId, invoiceId.data);
+      if (!invoice) return res.status(404).json({ error: "Invoice not found" });
+
+      const pdf = await generateInvoicePdf(invoice);
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `attachment; filename="${invoice.invoiceNumber}.pdf"`);
+      res.setHeader("Cache-Control", "private, no-store");
+      res.send(Buffer.from(pdf));
+    } catch (error) {
+      console.error("[invoices] PDF generation failed", {
+        message: error instanceof Error ? error.message : String(error),
+      });
+      res.status(500).json({ error: "Failed to generate invoice PDF" });
     }
   });
 

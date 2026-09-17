@@ -139,6 +139,70 @@ export const accountBillingDetails = pgTable("account_billing_details", {
 
 export type AccountBillingDetails = typeof accountBillingDetails.$inferSelect;
 export type InsertAccountBillingDetails = typeof accountBillingDetails.$inferInsert;
+
+// Immutable copy of the customer's billing details taken when an invoice is
+// issued. Later edits to account_billing_details never change old invoices.
+export interface InvoiceBillingSnapshot {
+  billingName: string | null;
+  organisationName: string | null;
+  addressLine1: string | null;
+  addressLine2: string | null;
+  city: string | null;
+  province: string | null;
+  postalCode: string | null;
+  country: string | null;
+  billingEmail: string | null;
+  phone: string | null;
+}
+
+// Per-year invoice number sequence (SS-YYYY-00001).
+export const invoiceCounters = pgTable("invoice_counters", {
+  year: integer("year").primaryKey(),
+  lastNumber: integer("last_number").notNull(),
+});
+
+// Issued invoices. One row per successful, validated PayFast payment —
+// payfast_payment_id is unique so duplicate ITNs can never create a second
+// invoice. Amounts always come from the central pricing configuration and
+// are stored on the row so the PDF regenerates identically forever.
+export const invoices = pgTable(
+  "invoices",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => accounts.id, { onDelete: "cascade" }),
+    invoiceNumber: text("invoice_number").notNull(),
+    invoiceDate: timestamp("invoice_date", { withTimezone: true }).notNull().defaultNow(),
+    payfastPaymentId: text("payfast_payment_id").notNull(),
+    transactionId: uuid("transaction_id").references(() => accountPaymentTransactions.id, {
+      onDelete: "set null",
+    }),
+    transactionType: text("transaction_type").notNull(), // initial | topup | renewal
+    status: text("status").notNull().default("paid"),
+    planType: text("plan_type").notNull(),
+    learnerQuantity: integer("learner_quantity").notNull(),
+    pricePerLearnerCents: integer("price_per_learner_cents").notNull(),
+    subtotalCents: integer("subtotal_cents").notNull(),
+    vatCents: integer("vat_cents").notNull().default(0),
+    totalCents: integer("total_cents").notNull(),
+    currency: text("currency").notNull().default("ZAR"),
+    billingSnapshot: jsonb("billing_snapshot").$type<InvoiceBillingSnapshot>(),
+    licencePeriodStart: timestamp("licence_period_start", { withTimezone: true }),
+    licencePeriodEnd: timestamp("licence_period_end", { withTimezone: true }),
+    emailedAt: timestamp("emailed_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("invoices_account_id_idx").on(table.accountId),
+    unique("invoices_invoice_number_unique").on(table.invoiceNumber),
+    unique("invoices_payfast_payment_id_unique").on(table.payfastPaymentId),
+  ],
+);
+
+export type Invoice = typeof invoices.$inferSelect;
+export type InsertInvoice = typeof invoices.$inferInsert;
 export type AccountPaymentTransaction = typeof accountPaymentTransactions.$inferSelect;
 export type InsertAccountPaymentTransaction = typeof accountPaymentTransactions.$inferInsert;
 export type AccountUsage = typeof accountUsage.$inferSelect;
