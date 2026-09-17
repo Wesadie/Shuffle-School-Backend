@@ -10,6 +10,7 @@ import {
   LICENSE_PLAN_TYPES,
   isLicensePlanType,
   licensePlanLabel,
+  minimumLearnersForPlan,
   type LicensePlanType,
 } from "@shared/licence-pricing";
 import { z } from "zod";
@@ -153,6 +154,20 @@ app.post(
       }
       if (!planType) {
         throw new Error("An existing subscription plan is required before topping up or renewing");
+      }
+
+      // Plan eligibility minimums are enforced server-side at initial
+      // purchase (the cheaper plans require a minimum learner count; Teacher
+      // has none). Renewals and top-ups of an existing licence on the same
+      // plan are intentionally not re-checked, so licences purchased before
+      // these rules remain valid. No plan has a maximum learner limit.
+      if (body.transactionType === "initial") {
+        const minimumLearners = minimumLearnersForPlan(planType);
+        if (payfastLearnerCount < minimumLearners) {
+          return res.status(403).json({
+            error: `The ${licensePlanLabel(planType)} plan requires a minimum of ${minimumLearners} learners`,
+          });
+        }
       }
 
       if (body.transactionType === "topup" && payfastLearnerCount <= 0) {

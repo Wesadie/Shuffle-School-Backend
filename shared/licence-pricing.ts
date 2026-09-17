@@ -28,6 +28,26 @@ export const PRICE_PER_LEARNER_CENTS_BY_PLAN: Record<LicensePlanType, number> = 
   school: 2000, // R20.00
 };
 
+/**
+ * Minimum licensed learner count required to be eligible for each plan
+ * (0 = no minimum). These are MINIMUM eligibility thresholds only — no plan
+ * has a maximum learner limit.
+ */
+export const MINIMUM_LEARNERS_BY_PLAN: Record<LicensePlanType, number> = {
+  teacher: 0,
+  head_of_grade: 100,
+  school: 200,
+};
+
+export function minimumLearnersForPlan(planType: LicensePlanType): number {
+  const minimum = MINIMUM_LEARNERS_BY_PLAN[planType];
+  return minimum ?? 0;
+}
+
+export function meetsPlanMinimumLearners(planType: LicensePlanType, learnerCount: number): boolean {
+  return learnerCount >= minimumLearnersForPlan(planType);
+}
+
 export function isLicensePlanType(value: unknown): value is LicensePlanType {
   return typeof value === "string" && (LICENSE_PLAN_TYPES as readonly string[]).includes(value);
 }

@@ -26,6 +26,7 @@ import {
   calculateLicenceAmountCents,
   isLicensePlanType,
   licensePlanLabel,
+  minimumLearnersForPlan,
   pricePerLearnerCents,
   type LicensePlanType,
 } from "@shared/licence-pricing";
@@ -106,7 +107,11 @@ export default function LicenceBillingPage() {
   const amountPayableCents = calculateLicenceAmountCents(selectedPlan, billableLearners);
   const amountPayable = formatCurrency(amountPayableCents);
   const isInvalidUpgrade = isLicensed && newLearnerLimit <= currentLearnerLimit;
-  const canSubmit = newLearnerLimit > 0 && !isInvalidUpgrade && amountPayableCents > 0 && !isSubmitting;
+  // Plan eligibility minimums apply to new (initial) purchases. The server
+  // enforces the same rule; this only prevents an obvious rejected checkout.
+  const minimumLearners = minimumLearnersForPlan(selectedPlan);
+  const belowMinimumLearners = !isLicensed && newLearnerLimit < minimumLearners;
+  const canSubmit = newLearnerLimit > 0 && !isInvalidUpgrade && !belowMinimumLearners && amountPayableCents > 0 && !isSubmitting;
 
   const handleLearnerSelectionChange = (value: string) => {
     setLearnerSelection(value);
@@ -217,7 +222,11 @@ export default function LicenceBillingPage() {
             {currentPlanType ? (
               <p className="text-sm text-muted-foreground pt-1.5" data-testid="text-account-plan">
                 {licensePlanLabel(currentPlanType)} – {formatCurrency(pricePerLearnerCents(currentPlanType))} per
-                learner/year.
+                learner/year
+                {minimumLearnersForPlan(currentPlanType) > 0
+                  ? ` · minimum ${minimumLearnersForPlan(currentPlanType)} learners`
+                  : ""}
+                .
                 {isLicensed
                   ? " Top-ups use your current plan's rate."
                   : " Your plan was selected when you signed up."}
@@ -231,6 +240,7 @@ export default function LicenceBillingPage() {
                   {LICENSE_PLAN_TYPES.map((plan) => (
                     <SelectItem key={plan} value={plan}>
                       {licensePlanLabel(plan)} – {formatCurrency(pricePerLearnerCents(plan))} per learner/year
+                      {minimumLearnersForPlan(plan) > 0 ? ` · minimum ${minimumLearnersForPlan(plan)} learners` : ""}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -298,6 +308,13 @@ export default function LicenceBillingPage() {
               <span className="font-bold">{amountPayable}</span>
             </div>
           </div>
+
+          {belowMinimumLearners && (
+            <p className="text-sm text-destructive" data-testid="text-plan-minimum">
+              The {licensePlanLabel(selectedPlan)} plan requires a minimum of {minimumLearners} learners. Increase the
+              learner limit to continue.
+            </p>
+          )}
 
           <Button onClick={handleUpgrade} disabled={!canSubmit}>
             {isSubmitting ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <CreditCard className="h-4 w-4 mr-2" />}
