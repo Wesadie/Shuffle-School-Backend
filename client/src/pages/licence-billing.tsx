@@ -112,6 +112,9 @@ export default function LicenceBillingPage() {
   const minimumLearners = minimumLearnersForPlan(selectedPlan);
   const belowMinimumLearners = !isLicensed && newLearnerLimit < minimumLearners;
   const canSubmit = newLearnerLimit > 0 && !isInvalidUpgrade && !belowMinimumLearners && amountPayableCents > 0 && !isSubmitting;
+  // While the learner count is below the plan minimum the checkout is invalid:
+  // never present the calculated amount as a valid payable figure.
+  const displayAmount = belowMinimumLearners ? "—" : amountPayable;
 
   const handleLearnerSelectionChange = (value: string) => {
     setLearnerSelection(value);
@@ -305,20 +308,19 @@ export default function LicenceBillingPage() {
             </div>
             <div className="flex justify-between gap-4 border-t pt-3 text-base">
               <span className="font-semibold">Amount payable:</span>
-              <span className="font-bold">{amountPayable}</span>
+              <span className="font-bold" data-testid="text-amount-payable">{displayAmount}</span>
             </div>
           </div>
 
           {belowMinimumLearners && (
             <p className="text-sm text-destructive" data-testid="text-plan-minimum">
-              The {licensePlanLabel(selectedPlan)} plan requires a minimum of {minimumLearners} learners. Increase the
-              learner limit to continue.
+              The {licensePlanLabel(selectedPlan)} plan requires a minimum of {minimumLearners} learners.
             </p>
           )}
 
           <Button onClick={handleUpgrade} disabled={!canSubmit}>
             {isSubmitting ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <CreditCard className="h-4 w-4 mr-2" />}
-            Upgrade with PayFast – {amountPayable}
+            {belowMinimumLearners ? "Upgrade with PayFast" : `Upgrade with PayFast – ${amountPayable}`}
           </Button>
         </CardContent>
       </Card>
