@@ -67,9 +67,15 @@ export function warnOnMissingConfig(): void {
   if (!merchantId) missing.push("PAYFAST_MERCHANT_ID");
   if (!merchantKey) missing.push("PAYFAST_MERCHANT_KEY");
   if (!passphrase) missing.push("PAYFAST_PASSPHRASE");
+  if (!readEnv("APP_BASE_URL")) missing.push("APP_BASE_URL");
   if (missing.length > 0) {
     console.warn(
       `[startup] PayFast is missing required environment variables: ${missing.join(", ")}`,
     );
   }
+  // No credentials are logged — only the active mode and public endpoint, so a
+  // deployment can be verified as SANDBOX or LIVE from the Render logs.
+  console.log(
+    `[startup] PayFast mode: ${sandbox ? "SANDBOX" : "LIVE"} — process URL: ${PAYFAST_PROCESS_URL}`,
+  );
 }
