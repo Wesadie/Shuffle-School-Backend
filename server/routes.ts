@@ -1634,9 +1634,14 @@ export async function registerRoutes(
     let reservedTrialUse = false;
 
     try {
-      const requestedGrade = typeof req.body?.grade === "string"
-        ? normalizeGradeValue(req.body.grade)
-        : "";
+      const hasRequestedGrade = req.body && Object.prototype.hasOwnProperty.call(req.body, "grade");
+      if (hasRequestedGrade && typeof req.body.grade !== "string") {
+        return res.status(400).json({ error: "Grade must be a valid target grade" });
+      }
+      const requestedGrade = hasRequestedGrade ? normalizeGradeValue(req.body.grade) : "";
+      if (hasRequestedGrade && (!requestedGrade || requestedGrade.toLowerCase() === "all")) {
+        return res.status(400).json({ error: "Grade must be a valid target grade" });
+      }
 
       const allStudents = await storage.getStudents(accountIdFor(req));
       const students = requestedGrade
@@ -1650,7 +1655,9 @@ export async function registerRoutes(
         : classConfigs;
 
       if (targetConfigs.length === 0) {
-        return res.status(400).json({ error: "No class configurations found for the specified target grade" });
+        return res.status(400).json({ error: requestedGrade
+          ? `No target classes are configured for Grade ${requestedGrade}`
+          : "No class configurations found for the specified target grade" });
       }
 
       if (students.length === 0) {
@@ -1722,7 +1729,17 @@ export async function registerRoutes(
 
       // Replace persisted placements only after every generated assignment has
       // passed the target-grade safety check.
-      await storage.deleteAllPlacements(accountIdFor(req));
+      if (requestedGrade) {
+        const targetStudentIds = new Set(students.map((student) => student.id));
+        const existingPlacements = await storage.getPlacements(accountIdFor(req));
+        for (const placement of existingPlacements) {
+          if (targetStudentIds.has(placement.studentId)) {
+            await storage.deletePlacement(accountIdFor(req), placement.id);
+          }
+        }
+      } else {
+        await storage.deleteAllPlacements(accountIdFor(req));
+      }
       for (const generatedClass of result.classes) {
         for (const student of generatedClass.students) {
           await storage.createPlacement(accountIdFor(req), {

@@ -523,8 +523,8 @@ export default function ReviewPage() {
   });
 
   const regenerateMutation = useMutation({
-    mutationFn: (_variables: { historySnapshot: PlacementSnapshot }) =>
-      apiRequest("POST", "/api/generate-classes", {}),
+    mutationFn: (variables: { historySnapshot: PlacementSnapshot; grade?: string }) =>
+      apiRequest("POST", "/api/generate-classes", variables.grade ? { grade: variables.grade } : {}),
     onSuccess: (_data, variables) => {
       setUndoStack((current) => [...current, variables.historySnapshot].slice(-20));
       queryClient.invalidateQueries({ queryKey: ["/api/placements"] });
@@ -1249,9 +1249,18 @@ export default function ReviewPage() {
                 <Button
                   size="sm"
                   className="h-8 px-2 text-xs"
-                  onClick={() => regenerateMutation.mutate({
-                    historySnapshot: placements.map(({ studentId, classId }) => ({ studentId, classId })),
-                  })}
+                  onClick={() => {
+                    const grade = selectedGrade === "all" ? undefined : selectedGrade;
+                    const targetStudentIds = grade
+                      ? new Set(students.filter((student) => getStudentTargetGrade(student) === normalizeGradeValue(grade)).map((student) => student.id))
+                      : null;
+                    regenerateMutation.mutate({
+                      grade,
+                      historySnapshot: placements
+                        .filter(({ studentId }) => !targetStudentIds || targetStudentIds.has(studentId))
+                        .map(({ studentId, classId }) => ({ studentId, classId })),
+                    });
+                  }}
                   disabled={regenerateMutation.isPending}
                   data-testid="button-rerun-solver"
                 >
