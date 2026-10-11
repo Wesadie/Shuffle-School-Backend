@@ -203,7 +203,7 @@ export default function LicenceBillingPage() {
             </div>
             <div className="space-y-1">
               <p className="text-sm text-muted-foreground">Licensed learners</p>
-              <p className="text-2xl font-semibold">{currentLearnerLimit || "—"}</p>
+              <p className="text-2xl font-semibold">{accountContext?.hasUnlimitedLearners ? "Unlimited" : currentLearnerLimit || "—"}</p>
             </div>
             <div className="space-y-1">
               <p className="text-sm text-muted-foreground">Expires</p>
@@ -217,6 +217,14 @@ export default function LicenceBillingPage() {
 
       <InvoicesCard canManage={canManageSubscription} />
 
+      {accountContext?.hasUnlimitedLearners ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Unlimited learner capacity</CardTitle>
+            <CardDescription>This account is not subject to a licensed learner-count cap.</CardDescription>
+          </CardHeader>
+        </Card>
+      ) : (
       <Card>
         <CardHeader>
           <CardTitle>Upgrade Licence</CardTitle>
@@ -330,6 +338,7 @@ export default function LicenceBillingPage() {
           </Button>
         </CardContent>
       </Card>
+      )}
 
       {isLicensed && (
         <Card>

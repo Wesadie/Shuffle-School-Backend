@@ -13,6 +13,7 @@ type AuthUser = Partial<User> & {
     accountStatus: string;
     workspaceMode: "demo" | "live";
     accountRole?: string;
+    hasUnlimitedLearners?: boolean;
     subscriptionStatus: string;
     planType?: string | null;
     licensedLearnerCount: number | null;

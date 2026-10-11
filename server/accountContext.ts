@@ -10,6 +10,7 @@ export interface AccountContext {
   accountStatus: string;
   workspaceMode: "demo" | "live";
   accountRole: string;
+  hasUnlimitedLearners?: boolean;
   subscriptionStatus: string;
   planType: string | null;
   licensedLearnerCount: number | null;
@@ -40,6 +41,7 @@ export async function resolveAccountContext(): Promise<AccountContext> {
     accountStatus: account?.status ?? "active",
     workspaceMode: account?.workspaceMode === "demo" ? "demo" : "live",
     accountRole: "owner",
+    hasUnlimitedLearners: false,
     subscriptionStatus: "active",
     planType: null,
     licensedLearnerCount: null,

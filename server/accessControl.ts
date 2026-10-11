@@ -48,6 +48,7 @@ export const requireFinalExportAccess: RequestHandler = (req, res, next) => {
 };
 
 export function wouldExceedLearnerCapacity(context: AccountContext, currentLearners: number, learnersToAdd: number): boolean {
+  if (context.hasUnlimitedLearners === true) return false;
   return isSubscriptionActive(context)
     && context.licensedLearnerCount !== null
     && currentLearners + learnersToAdd > context.licensedLearnerCount;

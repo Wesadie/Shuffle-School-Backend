@@ -88,9 +88,10 @@ async function verifySupabaseToken(token: string): Promise<SupabaseUser | undefi
   return user?.id ? user : undefined;
 }
 
-async function resolveSupabaseAccountContext(userId: string): Promise<AccountContext | undefined> {
+async function resolveSupabaseAccountContext(user: SupabaseUser): Promise<AccountContext | undefined> {
   const result = await pool.query<{
     accountId: string;
+    createdBy: string | null;
     accountStatus: string;
     workspaceMode: string;
     accountRole: string;
@@ -105,7 +106,7 @@ async function resolveSupabaseAccountContext(userId: string): Promise<AccountCon
     successfulSolverGenerations: number;
   }>(
 
-    `SELECT a.id AS "accountId", a.status AS "accountStatus", a.workspace_mode AS "workspaceMode",
+    `SELECT a.id AS "accountId", a.created_by AS "createdBy", a.status AS "accountStatus", a.workspace_mode AS "workspaceMode",
             am.role AS "accountRole",
             COALESCE(s.status, 'trialing') AS "subscriptionStatus",
             s.plan_type AS "planType",
@@ -124,7 +125,7 @@ async function resolveSupabaseAccountContext(userId: string): Promise<AccountCon
      WHERE am.user_id = $1 AND am.status = 'active'
      ORDER BY COALESCE(am.accepted_at, am.created_at) DESC, am.created_at DESC
      LIMIT 1`,
-    [userId],
+    [user.id],
   );
 
   const membership = result.rows[0];
@@ -135,6 +136,10 @@ async function resolveSupabaseAccountContext(userId: string): Promise<AccountCon
     accountStatus: membership.accountStatus,
     workspaceMode: membership.workspaceMode === "demo" ? "demo" : "live",
     accountRole: membership.accountRole,
+    hasUnlimitedLearners: user.email?.trim().toLowerCase() === "wesadie1@gmail.com"
+      && Boolean(user.email_confirmed_at)
+      && membership.accountRole === "owner"
+      && membership.createdBy === user.id,
     subscriptionStatus: membership.subscriptionStatus,
     planType: membership.planType,
     licensedLearnerCount: membership.licensedLearnerCount,
@@ -230,7 +235,7 @@ export const authenticateSupabaseJwt: RequestHandler = async (req, res, next) =>
       return res.status(401).json({ message: "Invalid Supabase access token" });
     }
 
-    const accountContext = await resolveSupabaseAccountContext(user.id);
+    const accountContext = await resolveSupabaseAccountContext(user);
     if (!accountContext) {
       return res.status(403).json({ message: "No active account membership found" });
     }
