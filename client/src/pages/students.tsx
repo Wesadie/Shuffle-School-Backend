@@ -341,7 +341,7 @@ export default function StudentsPage() {
               cancelTextEdit();
             }
           }}
-          className="h-8 min-w-28 px-2"
+          className={`h-8 px-2 ${key === "firstName" || key === "lastName" ? "min-w-0 flex-1" : "min-w-28"}`}
         />
       );
     }
@@ -352,7 +352,7 @@ export default function StudentsPage() {
         disabled={isSaving}
         onClick={() => startTextEdit(student, key, value)}
         className={`block w-full rounded-sm text-left hover:bg-muted/60 focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-60 ${className}`}
-        title="Click to edit"
+        title={key === "firstName" || key === "lastName" ? value : "Click to edit"}
       >
         {isSaving ? "Saving…" : value}
       </button>
@@ -821,7 +821,7 @@ export default function StudentsPage() {
           </CardHeader>
           <CardContent className="min-h-0 min-w-0 flex-1 p-0 [&>div]:h-full [&>div]:max-w-full [&>div]:overflow-auto">
             <Table className="min-w-max">
-                <TableHeader className="sticky top-0 z-10 bg-background">
+                <TableHeader className="sticky top-0 z-20 bg-background">
                   <TableRow>
                     <TableHead rowSpan={2} className="w-12 align-middle bg-background">
                       <Checkbox
@@ -832,14 +832,14 @@ export default function StudentsPage() {
                     </TableHead>
                     <TableHead
                       rowSpan={2}
-                      className="cursor-pointer select-none whitespace-nowrap align-middle bg-background"
+                      className="sticky left-0 z-30 w-36 min-w-[144px] max-w-[144px] cursor-pointer select-none whitespace-nowrap align-middle bg-background px-2 shadow-[inset_-1px_0_0_hsl(var(--border))] sm:w-44 sm:min-w-[176px] sm:max-w-[176px]"
                       onClick={() => handleSort("firstName")}
                     >
                       First Name <SortIcon field="firstName" />
                     </TableHead>
                     <TableHead
                       rowSpan={2}
-                      className="cursor-pointer select-none whitespace-nowrap align-middle bg-background"
+                      className="sticky left-36 z-30 w-36 min-w-[144px] max-w-[144px] cursor-pointer select-none whitespace-nowrap align-middle bg-background px-2 shadow-[inset_-1px_0_0_hsl(var(--border))] sm:left-44 sm:w-44 sm:min-w-[176px] sm:max-w-[176px]"
                       onClick={() => handleSort("lastName")}
                     >
                       Last Name <SortIcon field="lastName" />
@@ -909,14 +909,15 @@ export default function StudentsPage() {
                           data-testid={`checkbox-student-${student.id}`}
                         />
                       </TableCell>
-                      <TableCell className="font-medium whitespace-nowrap">
-                        <div className="flex items-center gap-1">
+                      <TableCell className="sticky left-0 z-10 w-36 min-w-[144px] max-w-[144px] bg-background p-2 font-medium whitespace-nowrap shadow-[inset_-1px_0_0_hsl(var(--border))] sm:w-44 sm:min-w-[176px] sm:max-w-[176px]">
+                        <div className="flex w-32 min-w-0 items-center gap-1 sm:w-40">
                           {renderTextCell(
                             student,
                             "firstName",
                             student.firstName,
                             (value) => ({ firstName: value }),
                             true,
+                            "min-w-0 flex-1 truncate",
                           )}
                           <Button
                             type="button"
@@ -932,19 +933,20 @@ export default function StudentsPage() {
                           </Button>
                         </div>
                       </TableCell>
-                      <TableCell className="font-medium whitespace-nowrap">
-                        <div className="flex items-center gap-2">
+                      <TableCell className="sticky left-36 z-10 w-36 min-w-[144px] max-w-[144px] bg-background p-2 font-medium whitespace-nowrap shadow-[inset_-1px_0_0_hsl(var(--border))] sm:left-44 sm:w-44 sm:min-w-[176px] sm:max-w-[176px]">
+                        <div className="flex w-32 min-w-0 items-center gap-2 sm:w-40">
                           {renderTextCell(
                             student,
                             "lastName",
                             student.lastName,
                             (value) => ({ lastName: value }),
                             true,
+                            "min-w-0 flex-1 truncate",
                           )}
                           {student.parentRequests && (
                             <Tooltip>
                               <TooltipTrigger asChild>
-                                <MessageSquare className="h-4 w-4 text-muted-foreground" data-testid={`icon-parent-request-${student.id}`} />
+                                <MessageSquare className="h-4 w-4 shrink-0 text-muted-foreground" data-testid={`icon-parent-request-${student.id}`} />
                               </TooltipTrigger>
                               <TooltipContent>
                                 <p className="max-w-xs">Parent request on file</p>
