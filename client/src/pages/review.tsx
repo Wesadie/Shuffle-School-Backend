@@ -1574,21 +1574,21 @@ export default function ReviewPage() {
                           <Badge variant={classStudents.length > (config.capacity || 30) ? "destructive" : "secondary"} className="h-5 shrink-0 px-1.5 text-[10px]">{classStudents.length}/{config.capacity || 30}</Badge>
                         </div>
                       </div>
-                      {colourLegend.length > 0 && (
-                        <div className="mt-1.5 flex flex-wrap gap-1" data-testid={`class-colour-summary-${config.id}`}>
-                          {getClassColourCounts(classStudents).map((item) => (
-                            <span
-                              key={item.value}
-                              className="flex items-center gap-0.5 rounded bg-background px-1 py-px text-[9px] font-semibold leading-4"
-                              style={{ color: item.colour }}
-                              title={`${item.value}: ${item.count}`}
-                            >
-                              <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: item.colour }} />
-                              {item.count}
-                            </span>
-                          ))}
-                        </div>
-                      )}
+                      <div className="mt-1.5 flex flex-wrap gap-1" data-testid={`class-colour-summary-${config.id}`}>
+                        <span className="rounded bg-blue-100 px-1.5 py-px text-[9px] font-semibold leading-4 text-blue-700 dark:bg-blue-950 dark:text-blue-300" data-testid={`class-male-count-${config.id}`}>M {classStatistics.find((stat) => stat.classId === config.id)?.maleCount ?? 0}</span>
+                        <span className="rounded bg-pink-100 px-1.5 py-px text-[9px] font-semibold leading-4 text-pink-700 dark:bg-pink-950 dark:text-pink-300" data-testid={`class-female-count-${config.id}`}>F {classStatistics.find((stat) => stat.classId === config.id)?.femaleCount ?? 0}</span>
+                        {getClassColourCounts(classStudents).map((item) => (
+                          <span
+                            key={item.value}
+                            className="flex items-center gap-0.5 rounded bg-background px-1 py-px text-[9px] font-semibold leading-4"
+                            style={{ color: item.colour }}
+                            title={`${item.value}: ${item.count}`}
+                          >
+                            <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: item.colour }} />
+                            {item.count}
+                          </span>
+                        ))}
+                      </div>
                     </CardHeader>
                     <CardContent className="p-1.5">
                       <div className="space-y-0.5">
