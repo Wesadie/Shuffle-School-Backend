@@ -939,16 +939,13 @@ export default function ReviewPage() {
     return classesWithStudents.map(({ config, students: classStudents }) => {
       const averages: Record<string, number | null> = {};
       percentageFieldNames.forEach(fieldName => {
+        const aliases = fieldName === "Aggregate %" ? ["Aggregate %", "Aggregate"] : [fieldName];
         const values = classStudents
-          .map(s => {
-            const chars = s.characteristics as Record<string, string>;
-            const val = chars?.[fieldName];
-            return val ? parseFloat(val) : null;
-          })
-          .filter((v): v is number => v !== null && !isNaN(v));
-        
+          .map((student) => parseCharacteristicNumber(getExportCharacteristic(student, aliases)))
+          .filter((value): value is number => value !== null);
+
         averages[fieldName] = values.length > 0
-          ? Math.round(values.reduce((sum, v) => sum + v, 0) / values.length * 10) / 10
+          ? Math.round(values.reduce((sum, value) => sum + value, 0) / values.length * 10) / 10
           : null;
       });
 
@@ -1566,12 +1563,16 @@ export default function ReviewPage() {
             <div className="grid min-w-full grid-flow-col auto-cols-[minmax(215px,1fr)] gap-2.5">
               {visibleClassesWithStudents.map(({ config, students: classStudents }) => {
                 const teacherName = classToTeacher[config.name];
+                const classAverage = classStatistics.find((stat) => stat.classId === config.id)?.averages["Aggregate %"];
                 return (
                   <Card key={config.id} className={`overflow-hidden transition-colors ${dragOverClass === config.id ? "ring-2 ring-primary border-primary" : ""}`} onDragOver={(event) => handleDragOver(event, config.id)} onDragLeave={handleDragLeave} onDrop={(event) => handleDrop(event, config.id)} data-testid={`card-class-review-${config.id}`}>
                     <CardHeader className="border-b bg-muted/35 px-2.5 py-2">
                       <div className="flex items-start justify-between gap-1.5">
                         <div className="min-w-0"><CardTitle className="truncate text-xs font-semibold" data-testid={`text-class-name-${config.id}`}>{config.name}</CardTitle><CardDescription className="truncate text-[10px]">{teacherName || "No teacher assigned"} · Grade {config.grade}</CardDescription></div>
-                        <Badge variant={classStudents.length > (config.capacity || 30) ? "destructive" : "secondary"} className="h-5 shrink-0 px-1.5 text-[10px]">{classStudents.length}/{config.capacity || 30}</Badge>
+                        <div className="flex shrink-0 items-center gap-1.5">
+                          {classAverage !== null && classAverage !== undefined && <span className="text-[10px] font-medium text-muted-foreground" data-testid={`text-class-average-${config.id}`}>Avg: {classAverage}%</span>}
+                          <Badge variant={classStudents.length > (config.capacity || 30) ? "destructive" : "secondary"} className="h-5 shrink-0 px-1.5 text-[10px]">{classStudents.length}/{config.capacity || 30}</Badge>
+                        </div>
                       </div>
                       {colourLegend.length > 0 && (
                         <div className="mt-1.5 flex flex-wrap gap-1" data-testid={`class-colour-summary-${config.id}`}>
