@@ -2561,7 +2561,14 @@ const isNumericCharacteristic = (char: Characteristic) => char.type === "scale" 
  * that target grade, using the same total-variation-distance model as category
  * characteristics.
  */
-const genderValueOf = (student: Student) => student.gender?.trim() || "Unset";
+const normalizeGenderValue = (gender?: string | null) => {
+  const normalized = gender?.trim().toLowerCase() || "";
+  if (["male", "m", "boy"].includes(normalized)) return "male";
+  if (["female", "f", "girl"].includes(normalized)) return "female";
+  return normalized || "Unset";
+};
+
+const genderValueOf = (student: Student) => normalizeGenderValue(student.gender);
 
 function getGenderSharesByTargetGrade(students: Student[]): Map<string, Map<string, number>> {
   const countsByGrade = new Map<string, Map<string, number>>();
@@ -2732,6 +2739,7 @@ async function generateBalancedClasses(
     .sort((a, b) => (b.priority || 0) - (a.priority || 0))
     .slice(0, 50);
   const numericTargets = getNumericTargets(students, activeCharacteristics);
+  const genderSharesByTargetGrade = getGenderSharesByTargetGrade(students);
   const numClasses = classConfigs.length;
   const classAssignments: Map<string, Student[]> = new Map();
   
@@ -2854,13 +2862,14 @@ async function generateBalancedClasses(
   for (const group of pairingGroups) {
     // Find the best class for this group: mandatory separation rules first
     // (hard requirements — a class that would violate one is only considered
-    // when no class can avoid it), then equal class sizes, then characteristic
-    // balance, and finally important-request preferences.
+    // when no class can avoid it), then equal class sizes, characteristic and
+    // gender balance, and finally important-request preferences.
     const candidates: {
       classId: string;
       separationViolations: number;
       sizeOverflow: number;
       balanceScore: number;
+      genderScore: number;
       importantScore: number;
     }[] = [];
 
@@ -2892,6 +2901,11 @@ async function generateBalancedClasses(
       for (const char of activeCharacteristics) {
         balanceScore += calculateCandidateBalanceScore(candidateStudents, char, numericTargets);
       }
+      const targetGrade = getStudentTargetGrade(group[0]);
+      const genderScore = calculateGenderScore(
+        candidateStudents,
+        genderSharesByTargetGrade.get(targetGrade),
+      );
       
       // Equal class sizes are the primary goal: prefer classes that stay within
       // their target size; characteristics only decide between classes that are
@@ -2904,6 +2918,7 @@ async function generateBalancedClasses(
         separationViolations,
         sizeOverflow,
         balanceScore,
+        genderScore,
         importantScore: calculateImportantScore(group, currentStudents),
       });
     }
@@ -2924,7 +2939,8 @@ async function generateBalancedClasses(
           candidate.separationViolations < best.separationViolations ||
           (candidate.separationViolations === best.separationViolations && candidate.sizeOverflow < best.sizeOverflow) ||
           (candidate.separationViolations === best.separationViolations && candidate.sizeOverflow === best.sizeOverflow && candidate.balanceScore > best.balanceScore) ||
-          (candidate.separationViolations === best.separationViolations && candidate.sizeOverflow === best.sizeOverflow && candidate.balanceScore === best.balanceScore && candidate.importantScore > best.importantScore)
+          (candidate.separationViolations === best.separationViolations && candidate.sizeOverflow === best.sizeOverflow && candidate.balanceScore === best.balanceScore && candidate.genderScore > best.genderScore) ||
+          (candidate.separationViolations === best.separationViolations && candidate.sizeOverflow === best.sizeOverflow && candidate.balanceScore === best.balanceScore && candidate.genderScore === best.genderScore && candidate.importantScore > best.importantScore)
         ) {
           best = candidate;
         }
