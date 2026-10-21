@@ -961,6 +961,68 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/placement-requests", isAuthenticated, requireWritableWorkspace, async (req, res) => {
+    try {
+      const accountId = accountIdFor(req);
+      const userId = (req as any).supabaseUser?.id ?? (req as any).user?.claims?.sub;
+      if (!userId) {
+        return res.status(401).json({ error: "Authentication required" });
+      }
+      const memberships = await storage.getAccountMembershipsWithProfiles(accountId);
+      const current = memberships.find((membership) => membership.userId === userId);
+      if (!current || current.status !== "active" || (current.role !== "owner" && current.role !== "admin")) {
+        return res.status(403).json({ error: "Only an account administrator can create placement requests" });
+      }
+
+      const studentId = typeof req.body?.studentId === "string" ? req.body.studentId.trim() : "";
+      const teacherId = typeof req.body?.teacherId === "string" ? req.body.teacherId.trim() : "";
+      const requestedByTeacherId = typeof req.body?.requestedByTeacherId === "string"
+        ? req.body.requestedByTeacherId.trim()
+        : "";
+      if (!studentId || !teacherId || !requestedByTeacherId) {
+        return res.status(400).json({ error: "Select a learner, placement teacher, and requesting teacher" });
+      }
+
+      const [students, teachers, requests] = await Promise.all([
+        storage.getStudents(accountId),
+        storage.getTeachers(accountId),
+        storage.getPlacementRequests(accountId),
+      ]);
+      const student = students.find((entry) => entry.id === studentId);
+      const teacher = teachers.find((entry) => entry.id === teacherId);
+      const requestedByTeacher = teachers.find((entry) => entry.id === requestedByTeacherId);
+      if (!student || !teacher || !requestedByTeacher) {
+        return res.status(400).json({ error: "Select a learner and teachers from this account" });
+      }
+
+      const existing = requests.find(
+        (request) => request.studentId === studentId && request.requestedByTeacherId === requestedByTeacherId,
+      );
+      const saved = existing
+        ? await storage.updatePlacementRequest(accountId, existing.id, { teacherId })
+        : await storage.createPlacementRequest(accountId, {
+            studentId,
+            teacherId,
+            requestedByTeacherId,
+            createdAt: new Date().toISOString(),
+          });
+      if (!saved) return res.status(500).json({ error: "Failed to save placement request" });
+
+      const request: PlacementRequestView = {
+        id: saved.id,
+        studentId,
+        studentName: `${student.firstName} ${student.lastName}`,
+        teacherId,
+        teacherName: `${teacher.firstName} ${teacher.lastName}`,
+        requestedByTeacherName: `${requestedByTeacher.firstName} ${requestedByTeacher.lastName}`,
+      };
+      res.status(existing ? 200 : 201).json({ request });
+    } catch (error) {
+      console.error("[placement-requests] create failed", error);
+      res.status(500).json({ error: "Failed to create placement request" });
+    }
+  });
+
   app.delete("/api/placement-requests/:id", isAuthenticated, requireWritableWorkspace, async (req, res) => {
     const deleted = await storage.deletePlacementRequest(accountIdFor(req), req.params.id);
     if (!deleted) {

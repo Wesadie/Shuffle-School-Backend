@@ -33,9 +33,10 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/hooks/useAuth";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { cn } from "@/lib/utils";
-import type { Rule, InsertRule, PlacementRequestView, Student } from "@shared/schema";
+import type { Rule, InsertRule, PlacementRequestView, Student, Teacher } from "@shared/schema";
 
 function StudentPicker({
   students,
@@ -112,8 +113,16 @@ function RuleImportanceBadge({ rule }: { rule: Rule }) {
 
 export default function RulesPage() {
   const { toast } = useToast();
+  const { user } = useAuth();
+  const canCreatePlacementRequest = user?.accountContext?.accountRole === "owner" || user?.accountContext?.accountRole === "admin";
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
+  const [isPlacementDialogOpen, setIsPlacementDialogOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<"pair" | "separate">("pair");
+  const [placementFormData, setPlacementFormData] = useState({
+    studentId: "",
+    teacherId: "",
+    requestedByTeacherId: "",
+  });
 
   const [formData, setFormData] = useState<Partial<InsertRule>>({
     type: "pair",
@@ -131,8 +140,25 @@ export default function RulesPage() {
     queryKey: ["/api/students"],
   });
 
+  const { data: teachers = [] } = useQuery<Teacher[]>({
+    queryKey: ["/api/teachers"],
+  });
+
   const { data: placementRequests = [] } = useQuery<PlacementRequestView[]>({
     queryKey: ["/api/placement-requests"],
+  });
+
+  const createPlacementRequestMutation = useMutation({
+    mutationFn: (data: typeof placementFormData) => apiRequest("POST", "/api/placement-requests", data),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["/api/placement-requests"] });
+      setIsPlacementDialogOpen(false);
+      setPlacementFormData({ studentId: "", teacherId: "", requestedByTeacherId: "" });
+      toast({ title: "Teacher placement request added" });
+    },
+    onError: () => {
+      toast({ title: "Failed to add teacher placement request", variant: "destructive" });
+    },
   });
 
   const deletePlacementRequestMutation = useMutation({
@@ -391,14 +417,31 @@ export default function RulesPage() {
         </Tabs>
       )}
 
-      {placementRequests.length > 0 && (
-        <div className="space-y-3">
+      <div className="space-y-3">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <h2 className="text-xl font-semibold">Teacher placement requests</h2>
             <p className="text-muted-foreground mt-1">
               Learners teachers have recommended be placed with a specific teacher next year
             </p>
           </div>
+          {canCreatePlacementRequest && (
+            <Button
+              onClick={() => {
+                setPlacementFormData({ studentId: "", teacherId: "", requestedByTeacherId: "" });
+                setIsPlacementDialogOpen(true);
+              }}
+              disabled={students.length === 0 || teachers.length === 0}
+              data-testid="button-add-placement-request"
+            >
+              <Plus className="h-4 w-4 mr-2" />
+              Add Teacher Placement Request
+            </Button>
+          )}
+        </div>
+        {placementRequests.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No teacher placement requests yet.</p>
+        ) : (
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
             {placementRequests.map((request) => (
               <Card key={request.id} data-testid={`card-placement-request-${request.id}`}>
@@ -429,8 +472,92 @@ export default function RulesPage() {
               </Card>
             ))}
           </div>
-        </div>
-      )}
+        )}
+      </div>
+
+      <Dialog open={isPlacementDialogOpen} onOpenChange={setIsPlacementDialogOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Add Teacher Placement Request</DialogTitle>
+            <DialogDescription>
+              Record which learner should be placed with a teacher next year and which teacher requested it.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="placement-student">Learner</Label>
+              <Select
+                value={placementFormData.studentId}
+                onValueChange={(value) => setPlacementFormData({ ...placementFormData, studentId: value })}
+              >
+                <SelectTrigger id="placement-student" data-testid="select-placement-student">
+                  <SelectValue placeholder="Select a learner" />
+                </SelectTrigger>
+                <SelectContent>
+                  {students.map((student) => (
+                    <SelectItem key={student.id} value={student.id}>
+                      {student.firstName} {student.lastName} (Grade {student.grade})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="placement-teacher">Place with teacher</Label>
+              <Select
+                value={placementFormData.teacherId}
+                onValueChange={(value) => setPlacementFormData({ ...placementFormData, teacherId: value })}
+              >
+                <SelectTrigger id="placement-teacher" data-testid="select-placement-teacher">
+                  <SelectValue placeholder="Select a teacher" />
+                </SelectTrigger>
+                <SelectContent>
+                  {teachers.map((teacher) => (
+                    <SelectItem key={teacher.id} value={teacher.id}>
+                      {teacher.firstName} {teacher.lastName}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="placement-requester">Requested by teacher</Label>
+              <Select
+                value={placementFormData.requestedByTeacherId}
+                onValueChange={(value) => setPlacementFormData({ ...placementFormData, requestedByTeacherId: value })}
+              >
+                <SelectTrigger id="placement-requester" data-testid="select-placement-requester">
+                  <SelectValue placeholder="Select the requesting teacher" />
+                </SelectTrigger>
+                <SelectContent>
+                  {teachers.map((teacher) => (
+                    <SelectItem key={teacher.id} value={teacher.id}>
+                      {teacher.firstName} {teacher.lastName}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsPlacementDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => createPlacementRequestMutation.mutate(placementFormData)}
+              disabled={
+                createPlacementRequestMutation.isPending ||
+                !placementFormData.studentId ||
+                !placementFormData.teacherId ||
+                !placementFormData.requestedByTeacherId
+              }
+              data-testid="button-save-placement-request"
+            >
+              {createPlacementRequestMutation.isPending ? "Saving..." : "Add Request"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
         <DialogContent className="max-w-lg">
