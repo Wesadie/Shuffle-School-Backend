@@ -238,6 +238,16 @@ const getCharacteristicCohortTarget = (students: Student[], char: Characteristic
   return { average: 0, range: 0, shares };
 };
 
+const getCharacteristicClassAverage = (classStudents: Student[], char: Characteristic): number | null => {
+  if (!isNumericCharacteristic(char)) return null;
+  const values = classStudents
+    .filter((student) => isCharacteristicApplicableToGrade(char, student.grade))
+    .map((student) => parseCharacteristicNumber(getStudentCharacteristicValue(student, char)))
+    .filter((value): value is number => value !== null);
+  if (values.length === 0) return null;
+  return Math.round((values.reduce((sum, value) => sum + value, 0) / values.length) * 10) / 10;
+};
+
 // Mirrors the server's calculateCharacteristicScore so client-side boostability
 // checks agree with /api/boost suggestions.
 const computeCharacteristicClassScore = (
@@ -1031,6 +1041,15 @@ export default function ReviewPage() {
   );
   const colourCharacteristic = colourableCharacteristics.find((c) => c.id === selectedColourCharacteristic) ?? null;
 
+  const selectedCharacteristicAverages = useMemo(() => {
+    if (!colourCharacteristic) return new Map<string, number | null>();
+    const averages = new Map<string, number | null>();
+    classesWithStudents.forEach(({ config, students: classStudents }) => {
+      averages.set(config.id, getCharacteristicClassAverage(classStudents, colourCharacteristic));
+    });
+    return averages;
+  }, [colourCharacteristic, classesWithStudents]);
+
   const colourLegend: ColourLegendItem[] = useMemo(() => {
     if (!colourCharacteristic) return [];
     const counts = new Map<string, number>();
@@ -1563,14 +1582,20 @@ export default function ReviewPage() {
             <div className="grid min-w-full grid-flow-col auto-cols-[minmax(215px,1fr)] gap-2.5">
               {visibleClassesWithStudents.map(({ config, students: classStudents }) => {
                 const teacherName = classToTeacher[config.name];
-                const classAverage = classStatistics.find((stat) => stat.classId === config.id)?.averages["Aggregate %"];
+                const aggregateAverage = classStatistics.find((stat) => stat.classId === config.id)?.averages["Aggregate %"] ?? null;
+                const selectedAverage = colourCharacteristic ? (selectedCharacteristicAverages.get(config.id) ?? null) : null;
+                const showSelectedAverage = colourCharacteristic ? isNumericCharacteristic(colourCharacteristic) : false;
+                const classAverage = showSelectedAverage ? selectedAverage : aggregateAverage;
+                const averageLabel = showSelectedAverage && colourCharacteristic
+                  ? colourCharacteristic.name.replace(/\s*%\s*$/, "").trim()
+                  : "Avg";
                 return (
                   <Card key={config.id} className={`overflow-hidden transition-colors ${dragOverClass === config.id ? "ring-2 ring-primary border-primary" : ""}`} onDragOver={(event) => handleDragOver(event, config.id)} onDragLeave={handleDragLeave} onDrop={(event) => handleDrop(event, config.id)} data-testid={`card-class-review-${config.id}`}>
                     <CardHeader className="border-b bg-muted/35 px-2.5 py-2">
                       <div className="flex items-start justify-between gap-1.5">
                         <div className="min-w-0"><CardTitle className="truncate text-xs font-semibold" data-testid={`text-class-name-${config.id}`}>{config.name}</CardTitle><CardDescription className="truncate text-[10px]">{teacherName || "No teacher assigned"} · Grade {config.grade}</CardDescription></div>
                         <div className="flex shrink-0 items-center gap-1.5">
-                          {classAverage !== null && classAverage !== undefined && <span className="text-[10px] font-medium text-muted-foreground" data-testid={`text-class-average-${config.id}`}>Avg: {classAverage}%</span>}
+                          {classAverage !== null && classAverage !== undefined && <span className="text-[10px] font-medium text-muted-foreground" data-testid={`text-class-average-${config.id}`}>{averageLabel}: {classAverage}%</span>}
                           <Badge variant={classStudents.length > (config.capacity || 30) ? "destructive" : "secondary"} className="h-5 shrink-0 px-1.5 text-[10px]">{classStudents.length}/{config.capacity || 30}</Badge>
                         </div>
                       </div>
