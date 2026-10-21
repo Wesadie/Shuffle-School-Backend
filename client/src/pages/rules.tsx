@@ -486,21 +486,12 @@ export default function RulesPage() {
           <div className="grid gap-4 py-4">
             <div className="space-y-2">
               <Label htmlFor="placement-student">Learner</Label>
-              <Select
+              <StudentPicker
+                students={students}
                 value={placementFormData.studentId}
-                onValueChange={(value) => setPlacementFormData({ ...placementFormData, studentId: value })}
-              >
-                <SelectTrigger id="placement-student" data-testid="select-placement-student">
-                  <SelectValue placeholder="Select a learner" />
-                </SelectTrigger>
-                <SelectContent>
-                  {students.map((student) => (
-                    <SelectItem key={student.id} value={student.id}>
-                      {student.firstName} {student.lastName} (Grade {student.grade})
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                onChange={(value) => setPlacementFormData({ ...placementFormData, studentId: value })}
+                testId="select-placement-student"
+              />
             </div>
             <div className="space-y-2">
               <Label htmlFor="placement-teacher">Place with teacher</Label>
