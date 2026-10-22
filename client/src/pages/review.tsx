@@ -95,6 +95,11 @@ const getExportCharacteristic = (student: Student, aliases: string[]) => {
   return Array.isArray(match[1]) ? match[1].join(", ") : match[1];
 };
 
+const isAcademicResultsColumn = (header: string): boolean => {
+  const lower = header.toLowerCase();
+  return lower.includes("%") || lower.includes("marks") || lower.includes("score") || lower.includes("aggregate");
+};
+
 const normalizeGenderKey = (gender?: string | null) => {
   const normalized = (gender || "").toLowerCase().trim();
   if (["female", "f", "girl"].includes(normalized)) return "f";
@@ -1128,29 +1133,49 @@ export default function ReviewPage() {
 
     const sheets: SpreadsheetSheet[] = [
       { name: "Summary", rows: summaryRows },
-      ...classesWithStudents.map(({ config, students: classStudents }) => ({
-        name: config.name,
-        rows: [
-          exportHeader,
-          ...classStudents.map((student): SpreadsheetCell[] => [
-            config.name,
-            config.grade,
-            classToTeacher[config.name] ?? "",
-            student.firstName,
-            student.lastName,
-            student.studentId ?? "",
-            student.gender ?? "",
-            getExportCharacteristic(student, ["aggregate %", "aggregate"]),
-            getExportCharacteristic(student, ["english %", "english"]),
-            getExportCharacteristic(student, ["maths %", "maths"]),
-            getExportCharacteristic(student, ["afrikaans/isizulu %", "2nd language %", "second language %"]),
-            getExportCharacteristic(student, ["2nd language choice", "second language choice", "afrikaans/isizulu", "2nd language", "second language"]),
-            getExportCharacteristic(student, ["medication"]),
-            getExportCharacteristic(student, ["learner support", "learning support"]),
-            getExportCharacteristic(student, ["race"]),
-          ]),
-        ],
-      })),
+      ...classesWithStudents.map(({ config, students: classStudents }) => {
+        const studentRows = classStudents.map((student): SpreadsheetCell[] => [
+          config.name,
+          config.grade,
+          classToTeacher[config.name] ?? "",
+          student.firstName,
+          student.lastName,
+          student.studentId ?? "",
+          student.gender ?? "",
+          getExportCharacteristic(student, ["aggregate %", "aggregate"]),
+          getExportCharacteristic(student, ["english %", "english"]),
+          getExportCharacteristic(student, ["maths %", "maths"]),
+          getExportCharacteristic(student, ["afrikaans/isizulu %", "2nd language %", "second language %"]),
+          getExportCharacteristic(student, ["2nd language choice", "second language choice", "afrikaans/isizulu", "2nd language", "second language"]),
+          getExportCharacteristic(student, ["medication"]),
+          getExportCharacteristic(student, ["learner support", "learning support"]),
+          getExportCharacteristic(student, ["race"]),
+        ]);
+
+        const classAverageRow: SpreadsheetCell[] = exportHeader.map((header, colIndex) => {
+          if (colIndex === 0) return "Class Average";
+          if (!isAcademicResultsColumn(header)) return "";
+          const values = studentRows
+            .map((row) => {
+              const cell = row[colIndex];
+              if (cell == null) return null;
+              const num = Number.parseFloat(String(cell).replace("%", "").trim());
+              return Number.isFinite(num) ? num : null;
+            })
+            .filter((value): value is number => value !== null);
+          if (values.length === 0) return "—";
+          return Math.round((values.reduce((sum, value) => sum + value, 0) / values.length) * 10) / 10;
+        });
+
+        return {
+          name: config.name,
+          rows: [
+            exportHeader,
+            ...studentRows,
+            classAverageRow,
+          ],
+        };
+      }),
     ];
 
     downloadXlsx(`shuffleschool-classes-${new Date().toISOString().slice(0, 10)}`, sheets);
