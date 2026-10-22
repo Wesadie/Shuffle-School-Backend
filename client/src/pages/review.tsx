@@ -1150,7 +1150,12 @@ export default function ReviewPage() {
           getExportCharacteristic(student, ["medication"]),
           getExportCharacteristic(student, ["learner support", "learning support"]),
           getExportCharacteristic(student, ["race"]),
-        ]);
+        ]).map((row) => row.map((cell, colIndex) => {
+          if (!isAcademicResultsColumn(exportHeader[colIndex]) || typeof cell !== "string" || !cell.trim()) return cell;
+          const value = cell.trim().replace(/%$/, "");
+          const numericValue = Number(value);
+          return Number.isFinite(numericValue) ? numericValue : cell;
+        }));
 
         const classAverageRow: SpreadsheetCell[] = exportHeader.map((header, colIndex) => {
           if (colIndex === 0) return "Class Average";
