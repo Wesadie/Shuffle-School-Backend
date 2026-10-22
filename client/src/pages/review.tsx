@@ -32,11 +32,12 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { downloadXlsx, type SpreadsheetCell, type SpreadsheetSheet } from "@/lib/xlsx-export";
+import { StudentFormFields } from "@/components/student-form-fields";
 import { Link } from "wouter";
 import { characteristicValueToArray, isCharacteristicApplicableToGrade } from "@shared/characteristics";
 import { getStudentTargetGrade, normalizeGradeValue } from "@shared/grades";
 import type {
-  ClassConfig, Student, Placement, Rule, Characteristic,
+  ClassConfig, Student, InsertStudent, Placement, Rule, Characteristic,
   ConflictWarning, BoostResponse, BoostSuggestion, Teacher
 } from "@shared/schema";
 
@@ -411,6 +412,18 @@ export default function ReviewPage() {
   const [undoStack, setUndoStack] = useState<PlacementSnapshot[]>([]);
   const [selectedSimilarStudentId, setSelectedSimilarStudentId] = useState<string | null>(null);
   const [isAddLearnerOpen, setIsAddLearnerOpen] = useState(false);
+  const [isCreatingLearner, setIsCreatingLearner] = useState(false);
+  const [newLearnerFormData, setNewLearnerFormData] = useState<Partial<InsertStudent>>({
+    firstName: "",
+    lastName: "",
+    grade: "",
+    currentClass: "",
+    gender: "",
+    notes: "",
+    characteristics: {},
+    parentRequests: "",
+    parentNotes: "",
+  });
   const [newLearnerId, setNewLearnerId] = useState("");
   const [newLearnerClassId, setNewLearnerClassId] = useState("");
   const [removingLearner, setRemovingLearner] = useState<{ student: Student; className: string; placementId: string } | null>(null);
@@ -500,6 +513,27 @@ export default function ReviewPage() {
     },
     onError: (error: Error) => {
       toast({ title: "Failed to add learner", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const createLearnerMutation = useMutation({
+    mutationFn: async (data: InsertStudent) => {
+      const response = await apiRequest("POST", "/api/students", data);
+      return response.json() as Promise<Student>;
+    },
+    onSuccess: (student) => {
+      queryClient.setQueryData<Student[]>(["/api/students"], (current = []) =>
+        current.some((existing) => existing.id === student.id) ? current : [...current, student],
+      );
+      queryClient.invalidateQueries({ queryKey: ["/api/students"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/boost"] });
+      setNewLearnerId(student.id);
+      setNewLearnerClassId("");
+      setIsCreatingLearner(false);
+      toast({ title: "Learner saved", description: "Review the recommended class before placing them." });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Failed to add student", description: error.message, variant: "destructive" });
     },
   });
 
@@ -1373,7 +1407,7 @@ export default function ReviewPage() {
             {conflicts.length === 0 ? <><CheckCircle className="h-3.5 w-3.5" /> No conflicts</> : <><AlertTriangle className="h-3.5 w-3.5" /> {conflicts.length} conflict{conflicts.length !== 1 ? "s" : ""}</>}
           </Badge>
           <Badge variant="outline" className="h-7 gap-1 text-xs"><BarChart3 className="h-3.5 w-3.5" /> {overallBalance}% balance</Badge>
-          <Button variant="outline" size="sm" className="h-7 px-2.5 text-xs" onClick={() => { setNewLearnerId(""); setNewLearnerClassId(""); setIsAddLearnerOpen(true); }} disabled={unplacedStudents.length === 0} data-testid="button-add-learner"><Plus className="mr-1 h-3.5 w-3.5" /> Add learner</Button>
+          <Button variant="outline" size="sm" className="h-7 px-2.5 text-xs" onClick={() => { setNewLearnerId(""); setNewLearnerClassId(""); setIsCreatingLearner(false); setIsAddLearnerOpen(true); }} data-testid="button-add-learner"><Plus className="mr-1 h-3.5 w-3.5" /> Add learner</Button>
           <Button variant={showBoostPanel ? "default" : "outline"} size="sm" className="h-7 px-2.5 text-xs" onClick={() => setShowBoostPanel(!showBoostPanel)} data-testid="button-toggle-boost"><Zap className="mr-1 h-3.5 w-3.5" /> Boost</Button>
         </div>
       </div>
@@ -1812,23 +1846,89 @@ export default function ReviewPage() {
           )}
         </main>
 
-        <Dialog open={isAddLearnerOpen} onOpenChange={setIsAddLearnerOpen}>
+        <Dialog
+          open={isAddLearnerOpen}
+          onOpenChange={(open) => {
+            if (!open && createLearnerMutation.isPending) return;
+            setIsAddLearnerOpen(open);
+            if (!open) {
+              setIsCreatingLearner(false);
+              setNewLearnerId("");
+              setNewLearnerClassId("");
+            }
+          }}
+        >
           <DialogContent>
             <DialogHeader>
-              <DialogTitle>Add learner to class</DialogTitle>
-              <DialogDescription>Select an unplaced learner. Review the recommended class before adding them; current placements will not be changed.</DialogDescription>
+              <DialogTitle>{isCreatingLearner ? "Add New Student" : "Add learner to class"}</DialogTitle>
+              <DialogDescription>
+                {isCreatingLearner
+                  ? "Save the learner to the student roster first. You can review and approve their class placement next."
+                  : "Select an unplaced learner or create a new student. Review the recommended class before adding them; current placements will not be changed."}
+              </DialogDescription>
             </DialogHeader>
-            <div className="space-y-4 py-2">
-              <div className="space-y-2">
-                <label className="text-sm font-medium">Learner</label>
-                <Select value={newLearnerId} onValueChange={(value) => { setNewLearnerId(value); setNewLearnerClassId(""); }}>
-                  <SelectTrigger data-testid="select-new-learner"><SelectValue placeholder="Select an unplaced learner" /></SelectTrigger>
-                  <SelectContent>
-                    {unplacedStudents.map((student) => <SelectItem key={student.id} value={student.id}>{student.firstName} {student.lastName} · Grade {getStudentTargetGrade(student) || "Unknown"}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-              </div>
-              {learnerForPlacement && (
+            {isCreatingLearner ? (
+              <>
+                <div className="max-h-[65vh] overflow-y-auto px-1">
+                  <StudentFormFields
+                    formData={newLearnerFormData}
+                    setFormData={setNewLearnerFormData}
+                    characteristics={characteristics.filter((characteristic) => !["studentId", "newGrade"].includes(characteristic.name))}
+                  />
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setIsCreatingLearner(false)} disabled={createLearnerMutation.isPending}>Back</Button>
+                  <Button
+                    onClick={() => {
+                      if (createLearnerMutation.isPending) return;
+                      if (!newLearnerFormData.firstName?.trim() || !newLearnerFormData.lastName?.trim() || !newLearnerFormData.grade) {
+                        toast({ title: "Please fill in required fields", variant: "destructive" });
+                        return;
+                      }
+                      createLearnerMutation.mutate(newLearnerFormData as InsertStudent);
+                    }}
+                    disabled={createLearnerMutation.isPending}
+                    data-testid="button-save-new-learner"
+                  >
+                    {createLearnerMutation.isPending ? "Saving…" : "Save learner"}
+                  </Button>
+                </DialogFooter>
+              </>
+            ) : (
+              <>
+                <div className="space-y-4 py-2">
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Learner</label>
+                    <Select value={newLearnerId} onValueChange={(value) => { setNewLearnerId(value); setNewLearnerClassId(""); }}>
+                      <SelectTrigger data-testid="select-new-learner"><SelectValue placeholder="Select an unplaced learner" /></SelectTrigger>
+                      <SelectContent>
+                        {unplacedStudents.map((student) => <SelectItem key={student.id} value={student.id}>{student.firstName} {student.lastName} · Grade {getStudentTargetGrade(student) || "Unknown"}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className="h-auto p-0 text-sm"
+                      onClick={() => {
+                        setNewLearnerFormData({
+                          firstName: "",
+                          lastName: "",
+                          grade: "",
+                          currentClass: "",
+                          gender: "",
+                          notes: "",
+                          characteristics: {},
+                          parentRequests: "",
+                          parentNotes: "",
+                        });
+                        setIsCreatingLearner(true);
+                      }}
+                      data-testid="button-create-new-learner"
+                    >
+                      <Plus className="mr-1 h-3.5 w-3.5" /> Create a new learner
+                    </Button>
+                  </div>
+                  {learnerForPlacement && (
                 <div className="space-y-2">
                   <label className="text-sm font-medium">Class</label>
                   <Select
@@ -1853,20 +1953,22 @@ export default function ReviewPage() {
                   )}
                 </div>
               )}
-            </div>
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setIsAddLearnerOpen(false)}>Cancel</Button>
-              <Button
-                onClick={() => {
-                  const classId = newLearnerClassId || placementRecommendation?.config.id;
-                  if (newLearnerId && classId) addPlacementMutation.mutate({ studentId: newLearnerId, classId });
-                }}
-                disabled={!newLearnerId || !(newLearnerClassId || placementRecommendation?.config.id) || addPlacementMutation.isPending}
-                data-testid="button-confirm-add-learner"
-              >
-                {addPlacementMutation.isPending ? "Adding…" : "Add to class"}
-              </Button>
-            </DialogFooter>
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setIsAddLearnerOpen(false)}>Cancel</Button>
+                  <Button
+                    onClick={() => {
+                      const classId = newLearnerClassId || placementRecommendation?.config.id;
+                      if (newLearnerId && classId) addPlacementMutation.mutate({ studentId: newLearnerId, classId });
+                    }}
+                    disabled={!newLearnerId || !(newLearnerClassId || placementRecommendation?.config.id) || addPlacementMutation.isPending}
+                    data-testid="button-confirm-add-learner"
+                  >
+                    {addPlacementMutation.isPending ? "Adding…" : "Add to class"}
+                  </Button>
+                </DialogFooter>
+              </>
+            )}
           </DialogContent>
         </Dialog>
 
