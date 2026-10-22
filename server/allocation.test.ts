@@ -166,18 +166,42 @@ test("honors a teacher placement preference when it does not conflict with stron
   assert.equal(result.conflicts.some((conflict) => conflict.type === "teacher-placement"), false);
 });
 
-test("reports a teacher placement preference that cannot fit within class capacity", async () => {
-  const students = [makeStudent("blocker", "male"), makeStudent("requested", "female")];
+test("reports a teacher placement preference blocked by mandatory-pair capacity", async () => {
+  const students = [makeStudent("requested", "female"), makeStudent("partner", "male")];
   const result = await generateBalancedClasses(
     students,
     [makeClass("A", 1), makeClass("B", 1)],
-    [],
+    [makeRule("pair", "requested", "partner")],
     [],
     [{ studentId: "requested", classId: "A" }],
   );
 
-  assert.equal(classForStudent(result, "requested")?.classConfig.id, "B");
+  assert.equal(classForStudent(result, "requested"), undefined);
+  assert.deepEqual(new Set(result.unassignedStudentIds), new Set(["requested", "partner"]));
+  assert.equal(result.conflicts.some((conflict) => conflict.type === "capacity"), true);
   assert.equal(result.conflicts.some((conflict) => conflict.type === "teacher-placement"), true);
+});
+
+test("moves Ryan to Kyle's requested class when a gender-neutral swap is feasible", async () => {
+  const students = [
+    makeStudent("male1", "male"),
+    makeStudent("male2", "male"),
+    makeStudent("male3", "male"),
+    { ...makeStudent("ryan", "female"), firstName: "Ryan", lastName: "Ekerold" },
+  ];
+  const kyleClass = { ...makeClass("kyle", 2), name: "5BA" };
+  const ruthClass = { ...makeClass("ruth", 2), name: "5A" };
+  const result = await generateBalancedClasses(
+    students,
+    [kyleClass, ruthClass],
+    [],
+    [],
+    [{ studentId: "ryan", classId: kyleClass.id }],
+  );
+
+  assert.equal(classForStudent(result, "ryan")?.classConfig.id, kyleClass.id);
+  assert.equal(result.conflicts.some((conflict) => conflict.type === "teacher-placement"), false);
+  assert.ok(result.classes.every((generatedClass) => generatedClass.students.length <= generatedClass.classConfig.capacity!));
 });
 
 test("keeps mandatory pairs together and separations apart", async () => {

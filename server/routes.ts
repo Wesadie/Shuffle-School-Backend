@@ -2767,7 +2767,6 @@ export async function generateBalancedClasses(
     .slice(0, 50);
   const numericTargets = getNumericTargets(students, activeCharacteristics);
   const genderSharesByTargetGrade = getGenderSharesByTargetGrade(students);
-  const numClasses = classConfigs.length;
   const classAssignments: Map<string, Student[]> = new Map();
   
   // Initialize empty classes
@@ -2956,7 +2955,6 @@ export async function generateBalancedClasses(
       const currentStudents = classAssignments.get(config.id)!;
       if (currentStudents.length + group.length > (config.capacity || 30)) continue;
 
-      const groupIds = new Set(group.map((student) => student.id));
       let separationViolations = 0;
       for (let index = 0; index < group.length; index++) {
         const student = group[index];
@@ -3031,7 +3029,7 @@ export async function generateBalancedClasses(
     for (const student of group) placedStudentIds.add(student.id);
   });
 
-  const evaluateLayout = (assignments: Map<number, string>) => {
+  const evaluateLayout = (assignments: Map<number, string>, includeCharacteristicScores = true) => {
     const studentsByClass = new Map(classConfigList.map((config) => [config.id, [] as Student[]]));
     const classByStudent = new Map<string, string>();
     assignments.forEach((classId, groupIndex) => {
@@ -3046,14 +3044,16 @@ export async function generateBalancedClasses(
     let valid = true;
     let sizePenalty = 0;
     let genderScore = 100;
-    const characteristicScores = activeCharacteristics.map(() => 0);
+    const characteristicScores = includeCharacteristicScores ? activeCharacteristics.map(() => 0) : [];
     for (const config of classConfigList) {
       const classStudents = studentsByClass.get(config.id)!;
       if (classStudents.length > (config.capacity || 30)) valid = false;
       sizePenalty += Math.abs(classStudents.length - (targetClassSizes.get(config.id) ?? 0));
-      activeCharacteristics.forEach((characteristic, index) => {
-        characteristicScores[index] += calculateCharacteristicScore(classStudents, characteristic, numericTargets);
-      });
+      if (includeCharacteristicScores) {
+        activeCharacteristics.forEach((characteristic, index) => {
+          characteristicScores[index] += calculateCharacteristicScore(classStudents, characteristic, numericTargets);
+        });
+      }
     }
     genderScore = calculateGenderLayoutScore(studentsByClass);
 
@@ -3101,19 +3101,31 @@ export async function generateBalancedClasses(
     };
   };
 
-  const compareObjective = (left: ReturnType<typeof evaluateLayout>, right: ReturnType<typeof evaluateLayout>, pass: "characteristics" | "gender") => {
+  const compareObjective = (
+    left: ReturnType<typeof evaluateLayout>,
+    right: ReturnType<typeof evaluateLayout>,
+    pass: "characteristics" | "teacher-placement" | "gender",
+  ) => {
+    if (pass === "teacher-placement") {
+      if (left.teacherPlacementScore !== right.teacherPlacementScore) {
+        return left.teacherPlacementScore - right.teacherPlacementScore;
+      }
+      if (left.importantScore !== right.importantScore) return left.importantScore - right.importantScore;
+      return 0;
+    }
     if (pass === "gender") {
       if (left.genderScore !== right.genderScore) return left.genderScore - right.genderScore;
-      return compareVectors(left.characteristicScores, right.characteristicScores);
+      return 0;
     }
     if (left.genderScore !== right.genderScore) return left.genderScore - right.genderScore;
     return compareVectors(left.characteristicScores, right.characteristicScores);
   };
 
   const maxRefinementEvaluations = 20_000;
-  const runImprovementPass = (pass: "characteristics" | "gender") => {
+  const runImprovementPass = (pass: "characteristics" | "teacher-placement" | "gender") => {
     let currentAssignments = new Map(groupAssignments);
-    let currentMetrics = evaluateLayout(currentAssignments);
+    const includeCharacteristics = pass === "characteristics";
+    let currentMetrics = evaluateLayout(currentAssignments, includeCharacteristics);
     let changed = true;
     let evaluations = 0;
 
@@ -3124,20 +3136,24 @@ export async function generateBalancedClasses(
       const consider = (candidateAssignments: Map<number, string>) => {
         if (evaluations >= maxRefinementEvaluations) return;
         evaluations++;
-        const candidateMetrics = evaluateLayout(candidateAssignments);
+        const candidateMetrics = evaluateLayout(candidateAssignments, includeCharacteristics);
         if (
           !candidateMetrics.valid ||
           candidateMetrics.sizePenalty > currentMetrics.sizePenalty ||
           candidateMetrics.teacherPlacementScore < currentMetrics.teacherPlacementScore ||
-          candidateMetrics.importantScore < currentMetrics.importantScore
+          (pass !== "teacher-placement" && candidateMetrics.importantScore < currentMetrics.importantScore)
         ) return;
         if (Array.from(currentMetrics.satisfiedTeacherPreferenceIndexes).some((index) =>
           !candidateMetrics.satisfiedTeacherPreferenceIndexes.has(index),
         )) return;
-        if (Array.from(currentMetrics.satisfiedImportantRuleIds).some((id) =>
+        if (pass !== "teacher-placement" && Array.from(currentMetrics.satisfiedImportantRuleIds).some((id) =>
           !candidateMetrics.satisfiedImportantRuleIds.has(id),
         )) return;
         if (pass === "characteristics" && candidateMetrics.genderScore < currentMetrics.genderScore) return;
+        if (pass === "teacher-placement" && (
+          candidateMetrics.genderScore < currentMetrics.genderScore ||
+          candidateMetrics.teacherPlacementScore <= currentMetrics.teacherPlacementScore
+        )) return;
         if (pass === "gender" && candidateMetrics.genderScore <= currentMetrics.genderScore) return;
         if (compareObjective(candidateMetrics, bestMetrics, pass) <= 0) return;
         bestAssignments = candidateAssignments;
@@ -3183,6 +3199,7 @@ export async function generateBalancedClasses(
     });
   };
 
+  runImprovementPass("teacher-placement");
   runImprovementPass("characteristics");
   runImprovementPass("gender");
 
