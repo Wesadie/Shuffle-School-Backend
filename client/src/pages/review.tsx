@@ -4,11 +4,12 @@ import { motion } from "framer-motion";
 import {
   Users, AlertTriangle, CheckCircle, ArrowRight, Download,
   GripVertical, Link2, Unlink, BarChart3, RefreshCw, Zap,
-  ArrowRightLeft, Check, Loader2, Undo2, X
+  ArrowRightLeft, Check, Loader2, Undo2, X, Plus, UserRoundMinus
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -409,6 +410,10 @@ export default function ReviewPage() {
   const [hiddenCharacteristicIds, setHiddenCharacteristicIds] = useState<string[]>([]);
   const [undoStack, setUndoStack] = useState<PlacementSnapshot[]>([]);
   const [selectedSimilarStudentId, setSelectedSimilarStudentId] = useState<string | null>(null);
+  const [isAddLearnerOpen, setIsAddLearnerOpen] = useState(false);
+  const [newLearnerId, setNewLearnerId] = useState("");
+  const [newLearnerClassId, setNewLearnerClassId] = useState("");
+  const [removingLearner, setRemovingLearner] = useState<{ student: Student; className: string; placementId: string } | null>(null);
 
   const { data: classConfigs = [], isLoading: configsLoading } = useQuery<ClassConfig[]>({
     queryKey: ["/api/class-configs"],
@@ -478,6 +483,43 @@ export default function ReviewPage() {
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/placements"] });
     },
+  });
+
+  const addPlacementMutation = useMutation({
+    mutationFn: async ({ studentId, classId }: { studentId: string; classId: string }) => {
+      const response = await apiRequest("POST", "/api/placements", { studentId, classId });
+      return response.json() as Promise<Placement>;
+    },
+    onSuccess: (placement) => {
+      queryClient.setQueryData<Placement[]>(["/api/placements"], (current = []) => [...current, placement]);
+      queryClient.invalidateQueries({ queryKey: ["/api/placements"] });
+      setIsAddLearnerOpen(false);
+      setNewLearnerId("");
+      setNewLearnerClassId("");
+      toast({ title: "Learner added to class" });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Failed to add learner", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const removePlacementMutation = useMutation({
+    mutationFn: (placementId: string) => apiRequest("DELETE", `/api/placements/${placementId}`),
+    onSuccess: (_response, placementId) => {
+      queryClient.setQueryData<Placement[]>(["/api/placements"], (current = []) =>
+        current.filter((placement) => placement.id !== placementId),
+      );
+      queryClient.invalidateQueries({ queryKey: ["/api/placements"] });
+      setRemovingLearner(null);
+      toast({ title: "Learner removed from class allocation", description: "The learner's student record was not deleted." });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Failed to remove learner", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const { data: placementRequests = [] } = useQuery<{ studentId: string; teacherId: string }[]>({
+    queryKey: ["/api/placement-requests"],
   });
 
   const { data: boostData, isLoading: boostLoading, refetch: refetchBoost } = useQuery<BoostResponse>({
@@ -637,6 +679,69 @@ export default function ReviewPage() {
     const placedIds = new Set(placements.map((p) => p.studentId));
     return students.filter((s) => !placedIds.has(s.id));
   }, [students, placements]);
+
+  const learnerForPlacement = unplacedStudents.find((student) => student.id === newLearnerId) ?? null;
+  const placementRecommendation = useMemo(() => {
+    if (!learnerForPlacement) return null;
+    const targetGrade = getStudentTargetGrade(learnerForPlacement);
+    if (!targetGrade) return null;
+
+    const cohort = students.filter((student) => getStudentTargetGrade(student) === targetGrade);
+    const genderShares = getGenderCohortShares(cohort);
+    const activeCharacteristics = characteristics.filter((characteristic) => !characteristic.tagOnly);
+    const characteristicTargets = activeCharacteristics.map((characteristic) =>
+      [characteristic, getCharacteristicCohortTarget(cohort, characteristic)] as const,
+    );
+    const existingClassByStudent = new Map(placements.map((placement) => [placement.studentId, placement.classId]));
+    const teacherPreferenceIds = new Set(
+      placementRequests
+        .filter((request) => request.studentId === learnerForPlacement.id)
+        .map((request) => request.teacherId),
+    );
+    const requestedTeacherClasses = teachers
+      .filter((teacher) => teacherPreferenceIds.has(teacher.id))
+      .flatMap((teacher) => [teacher.currentClass, teacher.allocatedClass].filter(Boolean));
+
+    const candidates = classConfigs
+      .filter((config) => normalizeGradeValue(config.grade) === targetGrade)
+      .map((config) => {
+        const classStudents = classesWithStudents.find(({ config: item }) => item.id === config.id)?.students ?? [];
+        if (classStudents.length >= (config.capacity || 30)) return null;
+
+        for (const rule of rules) {
+          if (rule.importance === "important") continue;
+          const partnerId = rule.studentId1 === learnerForPlacement.id
+            ? rule.studentId2
+            : rule.studentId2 === learnerForPlacement.id ? rule.studentId1 : null;
+          if (!partnerId) continue;
+          const partnerClassId = existingClassByStudent.get(partnerId);
+          if (rule.type === "pair" && (!partnerClassId || partnerClassId !== config.id)) return null;
+          if (rule.type === "separate" && partnerClassId === config.id) return null;
+        }
+
+        const withLearner = [...classStudents, learnerForPlacement];
+        const genderScore = computeGenderClassScore(withLearner, genderShares);
+        const academicScore = characteristicTargets.length === 0
+          ? 100
+          : characteristicTargets.reduce((sum, [characteristic, target]) =>
+              sum + computeCharacteristicClassScore(withLearner, characteristic, target), 0,
+            ) / characteristicTargets.length;
+        const teacherPreferenceScore = requestedTeacherClasses.some((className) =>
+          className?.trim().toLowerCase() === config.name.trim().toLowerCase(),
+        ) ? 100 : 0;
+
+        const capacityScore = (1 - classStudents.length / (config.capacity || 30)) * 100;
+        return {
+          config,
+          score: genderScore * 0.3 + academicScore * 0.5 + capacityScore * 0.1 + teacherPreferenceScore * 0.1,
+          classSize: classStudents.length,
+        };
+      })
+      .filter((candidate): candidate is NonNullable<typeof candidate> => candidate !== null)
+      .sort((a, b) => b.score - a.score || a.classSize - b.classSize);
+
+    return candidates[0] ?? null;
+  }, [learnerForPlacement, students, characteristics, placements, placementRequests, teachers, classConfigs, classesWithStudents, rules]);
 
   const conflicts: ConflictWarning[] = useMemo(() => {
     const warnings: ConflictWarning[] = [];
@@ -1268,6 +1373,7 @@ export default function ReviewPage() {
             {conflicts.length === 0 ? <><CheckCircle className="h-3.5 w-3.5" /> No conflicts</> : <><AlertTriangle className="h-3.5 w-3.5" /> {conflicts.length} conflict{conflicts.length !== 1 ? "s" : ""}</>}
           </Badge>
           <Badge variant="outline" className="h-7 gap-1 text-xs"><BarChart3 className="h-3.5 w-3.5" /> {overallBalance}% balance</Badge>
+          <Button variant="outline" size="sm" className="h-7 px-2.5 text-xs" onClick={() => { setNewLearnerId(""); setNewLearnerClassId(""); setIsAddLearnerOpen(true); }} disabled={unplacedStudents.length === 0} data-testid="button-add-learner"><Plus className="mr-1 h-3.5 w-3.5" /> Add learner</Button>
           <Button variant={showBoostPanel ? "default" : "outline"} size="sm" className="h-7 px-2.5 text-xs" onClick={() => setShowBoostPanel(!showBoostPanel)} data-testid="button-toggle-boost"><Zap className="mr-1 h-3.5 w-3.5" /> Boost</Button>
         </div>
       </div>
@@ -1667,6 +1773,21 @@ export default function ReviewPage() {
                                   <span className="shrink-0 rounded bg-emerald-600 px-1 py-px text-[9px] font-semibold leading-4 text-white" data-testid={`similar-score-${student.id}`}>{similarityScore}%</span>
                                 )}
                                 {hasConflict && <Tooltip><TooltipTrigger asChild><AlertTriangle className="h-3 w-3 shrink-0 text-red-500" /></TooltipTrigger><TooltipContent><p>This student is involved in a conflict</p></TooltipContent></Tooltip>}
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-5 w-5 shrink-0 text-muted-foreground hover:text-destructive"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    const placement = placements.find((item) => item.studentId === student.id);
+                                    if (placement) setRemovingLearner({ student, className: config.name, placementId: placement.id });
+                                  }}
+                                  aria-label={`Remove ${student.firstName} ${student.lastName} from ${config.name}`}
+                                  data-testid={`button-remove-learner-${student.id}`}
+                                >
+                                  <UserRoundMinus className="h-3 w-3" />
+                                </Button>
                               </div>
                             </motion.div>
                           );
@@ -1690,6 +1811,86 @@ export default function ReviewPage() {
             </Card>
           )}
         </main>
+
+        <Dialog open={isAddLearnerOpen} onOpenChange={setIsAddLearnerOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Add learner to class</DialogTitle>
+              <DialogDescription>Select an unplaced learner. Review the recommended class before adding them; current placements will not be changed.</DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4 py-2">
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Learner</label>
+                <Select value={newLearnerId} onValueChange={(value) => { setNewLearnerId(value); setNewLearnerClassId(""); }}>
+                  <SelectTrigger data-testid="select-new-learner"><SelectValue placeholder="Select an unplaced learner" /></SelectTrigger>
+                  <SelectContent>
+                    {unplacedStudents.map((student) => <SelectItem key={student.id} value={student.id}>{student.firstName} {student.lastName} · Grade {getStudentTargetGrade(student) || "Unknown"}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              {learnerForPlacement && (
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Class</label>
+                  <Select
+                    value={newLearnerClassId || placementRecommendation?.config.id || ""}
+                    onValueChange={setNewLearnerClassId}
+                  >
+                    <SelectTrigger data-testid="select-recommended-class"><SelectValue placeholder="Select a class" /></SelectTrigger>
+                    <SelectContent>
+                      {classConfigs
+                        .filter((config) => normalizeGradeValue(config.grade) === getStudentTargetGrade(learnerForPlacement))
+                        .map((config) => {
+                          const count = classesWithStudents.find((entry) => entry.config.id === config.id)?.students.length ?? 0;
+                          const isFull = count >= (config.capacity || 30);
+                          return <SelectItem key={config.id} value={config.id} disabled={isFull}>{config.name} · {count}/{config.capacity || 30}{placementRecommendation?.config.id === config.id ? " · Recommended" : ""}</SelectItem>;
+                        })}
+                    </SelectContent>
+                  </Select>
+                  {placementRecommendation ? (
+                    <p className="text-xs text-muted-foreground">Recommended: {placementRecommendation.config.name} based on capacity, gender balance, academic results, mandatory rules, and teacher placement requests.</p>
+                  ) : (
+                    <p className="text-xs text-destructive">No available class meets the learner’s grade, capacity, and mandatory rule requirements.</p>
+                  )}
+                </div>
+              )}
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setIsAddLearnerOpen(false)}>Cancel</Button>
+              <Button
+                onClick={() => {
+                  const classId = newLearnerClassId || placementRecommendation?.config.id;
+                  if (newLearnerId && classId) addPlacementMutation.mutate({ studentId: newLearnerId, classId });
+                }}
+                disabled={!newLearnerId || !(newLearnerClassId || placementRecommendation?.config.id) || addPlacementMutation.isPending}
+                data-testid="button-confirm-add-learner"
+              >
+                {addPlacementMutation.isPending ? "Adding…" : "Add to class"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog open={!!removingLearner} onOpenChange={(open) => { if (!open && !removePlacementMutation.isPending) setRemovingLearner(null); }}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Remove learner from class?</DialogTitle>
+              <DialogDescription>
+                {removingLearner ? `${removingLearner.student.firstName} ${removingLearner.student.lastName} will be removed from ${removingLearner.className} in the active class allocation. Their student record will remain and will not be permanently deleted.` : ""}
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setRemovingLearner(null)} disabled={removePlacementMutation.isPending}>Cancel</Button>
+              <Button
+                variant="destructive"
+                onClick={() => removingLearner && removePlacementMutation.mutate(removingLearner.placementId)}
+                disabled={!removingLearner || removePlacementMutation.isPending}
+                data-testid="button-confirm-remove-learner"
+              >
+                {removePlacementMutation.isPending ? "Removing…" : "Remove from allocation"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
     </div>
   );
