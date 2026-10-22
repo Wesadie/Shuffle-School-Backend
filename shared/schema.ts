@@ -402,10 +402,11 @@ export interface ClassGenerationResult {
   classes: GeneratedClass[];
   overallBalance: number;
   conflicts: ConflictWarning[];
+  unassignedStudentIds: string[];
 }
 
 export interface ConflictWarning {
-  type: "separation" | "pairing" | "capacity";
+  type: "separation" | "pairing" | "capacity" | "teacher-placement" | "gender-balance";
   message: string;
   studentIds: string[];
   ruleId?: string;

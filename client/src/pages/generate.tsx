@@ -28,7 +28,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { getStudentTargetGrade, normalizeGradeValue } from "@shared/grades";
-import type { ClassConfig, InsertClassConfig, Student, Rule, Characteristic, Teacher } from "@shared/schema";
+import type { ClassConfig, ClassGenerationResult, InsertClassConfig, Student, Rule, Characteristic, Teacher } from "@shared/schema";
 
 export default function GeneratePage() {
   const { toast } = useToast();
@@ -168,24 +168,36 @@ export default function GeneratePage() {
 
   const generateMutation = useMutation({
     mutationFn: () => apiRequest("POST", "/api/generate-classes", {}),
-    onSuccess: () => {
+    onSuccess: async (response) => {
+      const result = await response.json() as ClassGenerationResult;
       queryClient.invalidateQueries({ queryKey: ["/api/placements"] });
       queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
       setIsGenerating(false);
-      toast({ title: "Classes generated successfully!" });
+      const conflictSummary = result.conflicts.slice(0, 3).map((conflict) => conflict.message).join("; ");
+      toast({
+        title: result.conflicts.length > 0 ? "Classes generated with conflicts" : "Classes generated successfully!",
+        description: conflictSummary || undefined,
+      });
       setLocation("/review");
     },
     onError: (error: Error) => {
       setIsGenerating(false);
       const isLimit = error.message.includes("TRIAL_SOLVER_LIMIT_REACHED");
       const isExpired = error.message.includes("TRIAL_EXPIRED");
+      let serverMessage: string | undefined;
+      try {
+        const responseBody = error.message.slice(error.message.indexOf("{"));
+        serverMessage = JSON.parse(responseBody).error;
+      } catch {
+        serverMessage = undefined;
+      }
       toast({
         title: isLimit ? "Trial solver limit reached" : isExpired ? "Trial expired" : "Failed to generate classes",
         description: isLimit
           ? "You have used all 3 trial generations. Upgrade to generate more class lists."
           : isExpired
             ? "Your trial has expired. This workspace is now read-only until you upgrade."
-            : undefined,
+            : serverMessage,
         variant: "destructive",
       });
     },

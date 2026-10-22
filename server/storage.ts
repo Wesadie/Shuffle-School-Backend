@@ -526,6 +526,78 @@ export class DatabaseStorage {
     await db.delete(placements).where(eq(placements.accountId, accountId));
   }
 
+  async replacePlacements(
+    accountId: string,
+    placementList: InsertPlacement[],
+    studentIds?: string[],
+  ): Promise<void> {
+    accountId = requireAccountId(accountId);
+    const assignedStudentIds = placementList.map((placement) => placement.studentId);
+    if (new Set(assignedStudentIds).size !== assignedStudentIds.length) {
+      throw new Error("A learner can only be assigned once");
+    }
+    const scopedStudentIds = studentIds ? Array.from(new Set(studentIds)) : undefined;
+    if (scopedStudentIds && assignedStudentIds.some((id) => !scopedStudentIds.includes(id))) {
+      throw new Error("Replacement placements contain a learner outside the requested scope");
+    }
+
+    await db.transaction(async (transaction) => {
+      if (scopedStudentIds?.length) {
+        const linkedStudents = await transaction
+          .select({ id: students.id })
+          .from(students)
+          .where(and(eq(students.accountId, accountId), inArray(students.id, scopedStudentIds)));
+        if (linkedStudents.length !== scopedStudentIds.length) {
+          throw new Error("Replacement learners must belong to the current account");
+        }
+      }
+
+      const classIds = Array.from(new Set(placementList.map((placement) => placement.classId)));
+      if (classIds.length > 0) {
+        const linkedClasses = await transaction
+          .select({ id: classConfigs.id })
+          .from(classConfigs)
+          .where(and(eq(classConfigs.accountId, accountId), inArray(classConfigs.id, classIds)));
+        if (linkedClasses.length !== classIds.length) {
+          throw new Error("Replacement classes must belong to the current account");
+        }
+      }
+
+      const placementStudentIds = Array.from(new Set(assignedStudentIds));
+      if (placementStudentIds.length > 0) {
+        const linkedStudents = await transaction
+          .select({ id: students.id })
+          .from(students)
+          .where(and(eq(students.accountId, accountId), inArray(students.id, placementStudentIds)));
+        if (linkedStudents.length !== placementStudentIds.length) {
+          throw new Error("Replacement learners must belong to the current account");
+        }
+      }
+
+      if (scopedStudentIds) {
+        if (scopedStudentIds.length > 0) {
+          await transaction
+            .delete(placements)
+            .where(and(eq(placements.accountId, accountId), inArray(placements.studentId, scopedStudentIds)));
+        }
+      } else {
+        await transaction.delete(placements).where(eq(placements.accountId, accountId));
+      }
+
+      if (placementList.length > 0) {
+        await transaction.insert(placements).values(
+          placementList.map((placement) => ({
+            id: randomUUID(),
+            accountId,
+            studentId: placement.studentId,
+            classId: placement.classId,
+            locked: placement.locked ?? false,
+          })),
+        );
+      }
+    });
+  }
+
   async bulkCreatePlacements(accountId: string, placementList: InsertPlacement[]): Promise<{ count: number }> {
     accountId = requireAccountId(accountId);
     let count = 0;

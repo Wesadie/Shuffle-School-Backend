@@ -20,6 +20,7 @@ import {
 import { cancelSubscription } from "./licenseService";
 import { getAccountInvoice, getAccountInvoices } from "./invoiceService";
 import { generateInvoicePdf } from "./invoicePdf";
+import { mapTeacherPlacementRequests, persistCompleteGeneration, type TeacherPlacementPreference } from "./generationSafety";
 
 import {
   insertStudentSchema,
@@ -1712,6 +1713,14 @@ export async function registerRoutes(
       const classConfigs = await storage.getClassConfigs(accountIdFor(req));
       const rules = await storage.getRules(accountIdFor(req));
       const characteristics = await storage.getCharacteristics(accountIdFor(req));
+      const teachers = await storage.getTeachers(accountIdFor(req));
+      let placementRequests: PlacementRequest[];
+      try {
+        placementRequests = await storage.getPlacementRequests(accountIdFor(req));
+      } catch (error) {
+        console.error("[generate-classes] placement requests unavailable", error);
+        return res.status(503).json({ error: "Placement requests are unavailable; class generation was not run" });
+      }
       const targetConfigs = requestedGrade
         ? classConfigs.filter((config) => normalizeGradeValue(config.grade) === requestedGrade)
         : classConfigs;
@@ -1725,6 +1734,12 @@ export async function registerRoutes(
       if (students.length === 0) {
         return res.status(400).json({ error: "No students found for the specified target grade" });
       }
+
+      const mappedRequests = mapTeacherPlacementRequests(students, placementRequests, teachers, targetConfigs);
+      if (!mappedRequests.preferences) {
+        return res.status(400).json({ error: mappedRequests.error });
+      }
+      const teacherPlacementPreferences = mappedRequests.preferences;
 
       const studentsWithoutTargetGrade = students.filter((student) => !getStudentTargetGrade(student));
       if (studentsWithoutTargetGrade.length > 0) {
@@ -1760,6 +1775,7 @@ export async function registerRoutes(
 
       const generatedClasses: GeneratedClass[] = [];
       const conflicts: ConflictWarning[] = [];
+      const unassignedStudentIds: string[] = [];
       for (const targetGrade of targetGrades) {
         const gradeStudents = students.filter((student) => getStudentTargetGrade(student) === targetGrade);
         const gradeStudentIds = new Set(gradeStudents.map((student) => student.id));
@@ -1767,9 +1783,19 @@ export async function registerRoutes(
         const gradeRules = rules.filter(
           (rule) => gradeStudentIds.has(rule.studentId1) && gradeStudentIds.has(rule.studentId2),
         );
-        const gradeResult = await generateBalancedClasses(gradeStudents, gradeClasses, gradeRules, characteristics);
+        const gradePlacementPreferences = teacherPlacementPreferences.filter((preference) =>
+          gradeStudentIds.has(preference.studentId),
+        );
+        const gradeResult = await generateBalancedClasses(
+          gradeStudents,
+          gradeClasses,
+          gradeRules,
+          characteristics,
+          gradePlacementPreferences,
+        );
         generatedClasses.push(...gradeResult.classes);
         conflicts.push(...gradeResult.conflicts);
+        unassignedStudentIds.push(...gradeResult.unassignedStudentIds);
       }
 
       const invalidAssignments = generatedClasses.flatMap((generatedClass) =>
@@ -1787,28 +1813,28 @@ export async function registerRoutes(
       const overallBalance = balanceScores.length > 0
         ? balanceScores.reduce((total, score) => total + score, 0) / balanceScores.length
         : 100;
-      const result: ClassGenerationResult = { classes: generatedClasses, conflicts, overallBalance };
-
-      // Replace persisted placements only after every generated assignment has
-      // passed the target-grade safety check.
-      if (requestedGrade) {
-        const targetStudentIds = new Set(students.map((student) => student.id));
-        const existingPlacements = await storage.getPlacements(accountIdFor(req));
-        for (const placement of existingPlacements) {
-          if (targetStudentIds.has(placement.studentId)) {
-            await storage.deletePlacement(accountIdFor(req), placement.id);
-          }
-        }
-      } else {
-        await storage.deleteAllPlacements(accountIdFor(req));
-      }
-      for (const generatedClass of result.classes) {
-        for (const student of generatedClass.students) {
-          await storage.createPlacement(accountIdFor(req), {
+      const result: ClassGenerationResult = {
+        classes: generatedClasses,
+        conflicts,
+        overallBalance,
+        unassignedStudentIds,
+      };
+      const validation = await persistCompleteGeneration(students, result, () =>
+        storage.replacePlacements(
+          accountIdFor(req),
+          result.classes.flatMap((generatedClass) => generatedClass.students.map((student) => ({
             studentId: student.id,
             classId: generatedClass.classConfig.id,
-          });
+          }))),
+          requestedGrade ? students.map((student) => student.id) : undefined,
+        ),
+      );
+      if (!validation.complete) {
+        if (reservedTrialUse) {
+          await releaseTrialSolverGeneration(context);
+          reservedTrialUse = false;
         }
+        return res.status(409).json({ error: validation.error, ...result });
       }
 
       res.json({
@@ -2728,11 +2754,12 @@ const calculateCandidateBalanceScore = (
 };
 
 // Class generation algorithm with balancing
-async function generateBalancedClasses(
+export async function generateBalancedClasses(
   students: Student[],
   classConfigs: ClassConfig[],
   rules: Rule[],
-  characteristics: Characteristic[]
+  characteristics: Characteristic[],
+  teacherPlacementPreferences: TeacherPlacementPreference[] = [],
 ): Promise<ClassGenerationResult> {
   const activeCharacteristics = [...characteristics]
     .filter((char) => !char.tagOnly)
@@ -2851,112 +2878,336 @@ async function generateBalancedClasses(
   // Class size is the first priority: give every class a target size that is as
   // equal as mathematically possible (e.g. 103 learners over 4 classes -> 26/26/26/25),
   // capped by each class capacity.
-  const baseClassSize = Math.floor(students.length / numClasses);
-  const classSizeRemainder = students.length % numClasses;
   const targetClassSizes = new Map<string, number>();
-  classConfigList.forEach((config, index) => {
-    const idealSize = baseClassSize + (index < classSizeRemainder ? 1 : 0);
-    targetClassSizes.set(config.id, Math.min(idealSize, config.capacity || 30));
-  });
+  let openClasses = [...classConfigList];
+  let remainingTargetSize = students.length;
+  while (openClasses.length > 0) {
+    const baseSize = Math.floor(remainingTargetSize / openClasses.length);
+    const remainder = remainingTargetSize % openClasses.length;
+    const cappedClasses = openClasses.filter((config, index) =>
+      (config.capacity || 30) < baseSize + (index < remainder ? 1 : 0),
+    );
+    if (cappedClasses.length === 0) {
+      openClasses.forEach((config, index) => {
+        targetClassSizes.set(config.id, baseSize + (index < remainder ? 1 : 0));
+      });
+      break;
+    }
+    for (const config of cappedClasses) {
+      const capacity = config.capacity || 30;
+      targetClassSizes.set(config.id, capacity);
+      remainingTargetSize -= capacity;
+    }
+    const cappedIds = new Set(cappedClasses.map((config) => config.id));
+    openClasses = openClasses.filter((config) => !cappedIds.has(config.id));
+  }
 
-  for (const group of pairingGroups) {
-    // Find the best class for this group: mandatory separation rules first
-    // (hard requirements — a class that would violate one is only considered
-    // when no class can avoid it), then equal class sizes, characteristic and
-    // gender balance, and finally important-request preferences.
+  const calculateGenderLayoutScore = (studentsByClass: Map<string, Student[]>) => {
+    let totalTargetSize = 0;
+    let totalDeviation = 0;
+    for (const config of classConfigList) {
+      const targetSize = targetClassSizes.get(config.id) ?? 0;
+      totalTargetSize += targetSize;
+      const cohortShares = genderSharesByTargetGrade.get(normalizeGradeValue(config.grade));
+      if (!cohortShares) continue;
+      const counts = new Map<string, number>();
+      for (const student of studentsByClass.get(config.id) || []) {
+        const gender = genderValueOf(student);
+        counts.set(gender, (counts.get(gender) || 0) + 1);
+      }
+      const categories = new Set([...cohortShares.keys(), ...counts.keys()]);
+      for (const category of categories) {
+        totalDeviation += Math.abs((counts.get(category) || 0) - (cohortShares.get(category) || 0) * targetSize);
+      }
+    }
+    if (totalTargetSize === 0) return 100;
+    return Math.max(0, 100 - (totalDeviation / (2 * totalTargetSize)) * 100);
+  };
+
+  const conflicts: ConflictWarning[] = [];
+  const unassignedStudentIds = new Set<string>();
+  const groupAssignments = new Map<number, string>();
+  const preferencesByStudent = new Map<string, string[]>();
+  for (const preference of teacherPlacementPreferences) {
+    const preferenceClasses = preferencesByStudent.get(preference.studentId) ?? [];
+    preferenceClasses.push(preference.classId);
+    preferencesByStudent.set(preference.studentId, preferenceClasses);
+  }
+  const compareVectors = (left: number[], right: number[]) => {
+    for (let index = 0; index < Math.max(left.length, right.length); index++) {
+      const difference = (left[index] ?? 0) - (right[index] ?? 0);
+      if (Math.abs(difference) > 1e-9) return difference;
+    }
+    return 0;
+  };
+
+  pairingGroups.forEach((group, groupIndex) => {
     const candidates: {
       classId: string;
       separationViolations: number;
       sizeOverflow: number;
-      balanceScore: number;
       genderScore: number;
+      characteristicScores: number[];
+      teacherPlacementScore: number;
       importantScore: number;
     }[] = [];
 
     for (const config of classConfigList) {
       const currentStudents = classAssignments.get(config.id)!;
-      
-      // Check capacity
-      if (currentStudents.length + group.length > (config.capacity || 30)) {
-        continue;
-      }
-      
-      // Check mandatory separations
+      if (currentStudents.length + group.length > (config.capacity || 30)) continue;
+
+      const groupIds = new Set(group.map((student) => student.id));
       let separationViolations = 0;
-      for (const student of group) {
+      for (let index = 0; index < group.length; index++) {
+        const student = group[index];
         const mustSeparate = separations.get(student.id);
-        if (mustSeparate) {
-          for (const existing of currentStudents) {
-            if (mustSeparate.has(existing.id)) {
-              separationViolations++;
-            }
-          }
+        if (!mustSeparate) continue;
+        for (const existing of currentStudents) {
+          if (mustSeparate.has(existing.id)) separationViolations++;
+        }
+        for (const other of group.slice(index + 1)) {
+          if (mustSeparate.has(other.id)) separationViolations++;
         }
       }
-      
-      // Calculate balance score based on active characteristics.
-      // Category responses are balanced by distribution; scale/percentage values are balanced numerically.
-      let balanceScore = 0;
+
       const candidateStudents = [...currentStudents, ...group];
-      for (const char of activeCharacteristics) {
-        balanceScore += calculateCandidateBalanceScore(candidateStudents, char, numericTargets);
-      }
-      const targetGrade = getStudentTargetGrade(group[0]);
-      const genderScore = calculateGenderScore(
-        candidateStudents,
-        genderSharesByTargetGrade.get(targetGrade),
+      const characteristicScores = activeCharacteristics.map((char) =>
+        calculateCandidateBalanceScore(candidateStudents, char, numericTargets),
       );
-      
-      // Equal class sizes are the primary goal: prefer classes that stay within
-      // their target size; characteristics only decide between classes that are
-      // equally on target.
+      const teacherPlacementScore = group.reduce((score, student) =>
+        score + (preferencesByStudent.get(student.id) || []).filter((classId) => classId === config.id).length,
+      0);
       const targetSize = targetClassSizes.get(config.id) ?? group.length;
-      const sizeOverflow = Math.max(0, currentStudents.length + group.length - targetSize);
+      const candidateLayout = new Map(classAssignments);
+      candidateLayout.set(config.id, candidateStudents);
 
       candidates.push({
         classId: config.id,
         separationViolations,
-        sizeOverflow,
-        balanceScore,
-        genderScore,
+        sizeOverflow: Math.max(0, candidateStudents.length - targetSize),
+        genderScore: calculateGenderLayoutScore(candidateLayout),
+        characteristicScores,
+        teacherPlacementScore,
         importantScore: calculateImportantScore(group, currentStudents),
       });
     }
 
-    // Mandatory separations are hard requirements: never place a group in a
-    // class that violates one while a clean class is available. When every
-    // candidate violates (the requirements cannot all be satisfied), fall back
-    // to the fewest violations so the conflict is reported rather than ignored.
-    let pool = candidates;
-    const cleanClasses = candidates.filter((candidate) => candidate.separationViolations === 0);
-    if (cleanClasses.length > 0) pool = cleanClasses;
-
-    let targetClassId = classConfigList[0].id;
-    if (pool.length > 0) {
-      let best = pool[0];
-      for (const candidate of pool.slice(1)) {
-        if (
-          candidate.separationViolations < best.separationViolations ||
-          (candidate.separationViolations === best.separationViolations && candidate.sizeOverflow < best.sizeOverflow) ||
-          (candidate.separationViolations === best.separationViolations && candidate.sizeOverflow === best.sizeOverflow && candidate.balanceScore > best.balanceScore) ||
-          (candidate.separationViolations === best.separationViolations && candidate.sizeOverflow === best.sizeOverflow && candidate.balanceScore === best.balanceScore && candidate.genderScore > best.genderScore) ||
-          (candidate.separationViolations === best.separationViolations && candidate.sizeOverflow === best.sizeOverflow && candidate.balanceScore === best.balanceScore && candidate.genderScore === best.genderScore && candidate.importantScore > best.importantScore)
-        ) {
-          best = candidate;
-        }
-      }
-      targetClassId = best.classId;
+    const validCandidates = candidates.filter((candidate) => candidate.separationViolations === 0);
+    if (validCandidates.length === 0) {
+      for (const student of group) unassignedStudentIds.add(student.id);
+      const hasCapacity = candidates.length > 0;
+      const pairRule = hasCapacity
+        ? mandatoryRules.find((rule) => rule.type === "separate" && group.some((student) =>
+            rule.studentId1 === student.id || rule.studentId2 === student.id,
+          ))
+        : undefined;
+      conflicts.push({
+        type: hasCapacity ? "separation" : "capacity",
+        message: hasCapacity
+          ? `Mandatory separation rules leave no valid class for ${group.map((student) => `${student.firstName} ${student.lastName}`).join(", ")}`
+          : `No class has enough remaining capacity for ${group.map((student) => `${student.firstName} ${student.lastName}`).join(", ")}`,
+        studentIds: group.map((student) => student.id),
+        ruleId: pairRule?.id,
+      });
+      return;
     }
 
-    // Assign group to best class (fall back to the first class when every class
-    // is already at capacity, matching the previous behaviour).
-    const targetClass = classAssignments.get(targetClassId)!;
-    targetClass.push(...group);
-    for (const student of group) placedStudentIds.add(student.id);
-  }
+    const minimumSizeOverflow = Math.min(...validCandidates.map((candidate) => candidate.sizeOverflow));
+    const sizeCandidates = validCandidates.filter((candidate) => candidate.sizeOverflow === minimumSizeOverflow);
+    let best = sizeCandidates[0];
+    for (const candidate of sizeCandidates.slice(1)) {
+      if (
+        candidate.genderScore > best.genderScore ||
+        (candidate.genderScore === best.genderScore && compareVectors(candidate.characteristicScores, best.characteristicScores) > 0) ||
+        (candidate.genderScore === best.genderScore && compareVectors(candidate.characteristicScores, best.characteristicScores) === 0 && candidate.teacherPlacementScore > best.teacherPlacementScore) ||
+        (candidate.genderScore === best.genderScore && compareVectors(candidate.characteristicScores, best.characteristicScores) === 0 && candidate.teacherPlacementScore === best.teacherPlacementScore && candidate.importantScore > best.importantScore)
+      ) {
+        best = candidate;
+      }
+    }
 
-  // Generate conflict warnings
-  const conflicts: ConflictWarning[] = [];
+    classAssignments.get(best.classId)!.push(...group);
+    groupAssignments.set(groupIndex, best.classId);
+    for (const student of group) placedStudentIds.add(student.id);
+  });
+
+  const evaluateLayout = (assignments: Map<number, string>) => {
+    const studentsByClass = new Map(classConfigList.map((config) => [config.id, [] as Student[]]));
+    const classByStudent = new Map<string, string>();
+    assignments.forEach((classId, groupIndex) => {
+      const classStudents = studentsByClass.get(classId);
+      if (!classStudents) return;
+      for (const student of pairingGroups[groupIndex]) {
+        classStudents.push(student);
+        classByStudent.set(student.id, classId);
+      }
+    });
+
+    let valid = true;
+    let sizePenalty = 0;
+    let genderScore = 100;
+    const characteristicScores = activeCharacteristics.map(() => 0);
+    for (const config of classConfigList) {
+      const classStudents = studentsByClass.get(config.id)!;
+      if (classStudents.length > (config.capacity || 30)) valid = false;
+      sizePenalty += Math.abs(classStudents.length - (targetClassSizes.get(config.id) ?? 0));
+      activeCharacteristics.forEach((characteristic, index) => {
+        characteristicScores[index] += calculateCharacteristicScore(classStudents, characteristic, numericTargets);
+      });
+    }
+    genderScore = calculateGenderLayoutScore(studentsByClass);
+
+    for (const rule of mandatoryRules) {
+      const class1 = classByStudent.get(rule.studentId1);
+      const class2 = classByStudent.get(rule.studentId2);
+      if (!class1 || !class2) continue;
+      if ((rule.type === "pair" && class1 !== class2) || (rule.type === "separate" && class1 === class2)) {
+        valid = false;
+      }
+    }
+
+    const satisfiedTeacherPreferenceIndexes = new Set<number>();
+    let teacherPlacementScore = 0;
+    teacherPlacementPreferences.forEach((preference, index) => {
+      if (classByStudent.get(preference.studentId) === preference.classId) {
+        teacherPlacementScore++;
+        satisfiedTeacherPreferenceIndexes.add(index);
+      }
+    });
+
+    const satisfiedImportantRuleIds = new Set<string>();
+    let importantScore = 0;
+    for (const rule of importantRules) {
+      const class1 = classByStudent.get(rule.studentId1);
+      const class2 = classByStudent.get(rule.studentId2);
+      if (!class1 || !class2) continue;
+      if ((rule.type === "pair" && class1 === class2) || (rule.type === "separate" && class1 !== class2)) {
+        importantScore++;
+        satisfiedImportantRuleIds.add(rule.id);
+      }
+    }
+
+    return {
+      valid,
+      studentsByClass,
+      classByStudent,
+      sizePenalty,
+      genderScore,
+      characteristicScores,
+      teacherPlacementScore,
+      satisfiedTeacherPreferenceIndexes,
+      importantScore,
+      satisfiedImportantRuleIds,
+    };
+  };
+
+  const compareObjective = (left: ReturnType<typeof evaluateLayout>, right: ReturnType<typeof evaluateLayout>, pass: "characteristics" | "gender") => {
+    if (pass === "gender") {
+      if (left.genderScore !== right.genderScore) return left.genderScore - right.genderScore;
+      return compareVectors(left.characteristicScores, right.characteristicScores);
+    }
+    if (left.genderScore !== right.genderScore) return left.genderScore - right.genderScore;
+    return compareVectors(left.characteristicScores, right.characteristicScores);
+  };
+
+  const maxRefinementEvaluations = 20_000;
+  const runImprovementPass = (pass: "characteristics" | "gender") => {
+    let currentAssignments = new Map(groupAssignments);
+    let currentMetrics = evaluateLayout(currentAssignments);
+    let changed = true;
+    let evaluations = 0;
+
+    while (changed && evaluations < maxRefinementEvaluations) {
+      changed = false;
+      let bestAssignments: Map<number, string> | undefined;
+      let bestMetrics = currentMetrics;
+      const consider = (candidateAssignments: Map<number, string>) => {
+        if (evaluations >= maxRefinementEvaluations) return;
+        evaluations++;
+        const candidateMetrics = evaluateLayout(candidateAssignments);
+        if (
+          !candidateMetrics.valid ||
+          candidateMetrics.sizePenalty > currentMetrics.sizePenalty ||
+          candidateMetrics.teacherPlacementScore < currentMetrics.teacherPlacementScore ||
+          candidateMetrics.importantScore < currentMetrics.importantScore
+        ) return;
+        if (Array.from(currentMetrics.satisfiedTeacherPreferenceIndexes).some((index) =>
+          !candidateMetrics.satisfiedTeacherPreferenceIndexes.has(index),
+        )) return;
+        if (Array.from(currentMetrics.satisfiedImportantRuleIds).some((id) =>
+          !candidateMetrics.satisfiedImportantRuleIds.has(id),
+        )) return;
+        if (pass === "characteristics" && candidateMetrics.genderScore < currentMetrics.genderScore) return;
+        if (pass === "gender" && candidateMetrics.genderScore <= currentMetrics.genderScore) return;
+        if (compareObjective(candidateMetrics, bestMetrics, pass) <= 0) return;
+        bestAssignments = candidateAssignments;
+        bestMetrics = candidateMetrics;
+      };
+
+      for (const [groupIndex, fromClassId] of currentAssignments) {
+        if (evaluations >= maxRefinementEvaluations) break;
+        for (const toClass of classConfigList) {
+          if (evaluations >= maxRefinementEvaluations) break;
+          if (toClass.id === fromClassId) continue;
+          const candidateAssignments = new Map(currentAssignments);
+          candidateAssignments.set(groupIndex, toClass.id);
+          consider(candidateAssignments);
+        }
+      }
+
+      const assignedGroups = Array.from(currentAssignments.entries());
+      for (let first = 0; first < assignedGroups.length && evaluations < maxRefinementEvaluations; first++) {
+        for (let second = first + 1; second < assignedGroups.length && evaluations < maxRefinementEvaluations; second++) {
+          const [firstGroup, firstClass] = assignedGroups[first];
+          const [secondGroup, secondClass] = assignedGroups[second];
+          if (firstClass === secondClass) continue;
+          const candidateAssignments = new Map(currentAssignments);
+          candidateAssignments.set(firstGroup, secondClass);
+          candidateAssignments.set(secondGroup, firstClass);
+          consider(candidateAssignments);
+        }
+      }
+
+      if (bestAssignments) {
+        currentAssignments = bestAssignments;
+        currentMetrics = bestMetrics;
+        changed = true;
+      }
+    }
+
+    groupAssignments.clear();
+    currentAssignments.forEach((classId, groupIndex) => groupAssignments.set(groupIndex, classId));
+    for (const config of classConfigList) classAssignments.set(config.id, []);
+    currentAssignments.forEach((classId, groupIndex) => {
+      classAssignments.get(classId)!.push(...pairingGroups[groupIndex]);
+    });
+  };
+
+  runImprovementPass("characteristics");
+  runImprovementPass("gender");
+
+  const finalMetrics = evaluateLayout(groupAssignments);
+  for (const preference of teacherPlacementPreferences) {
+    const assignedClassId = finalMetrics.classByStudent.get(preference.studentId);
+    if (assignedClassId !== preference.classId) {
+      conflicts.push({
+        type: "teacher-placement",
+        message: `Teacher placement request for ${students.find((student) => student.id === preference.studentId)?.firstName || "learner"} could not be satisfied`,
+        studentIds: [preference.studentId],
+      });
+    }
+  }
+  classConfigList.forEach((config) => {
+    const classStudents = finalMetrics.studentsByClass.get(config.id) || [];
+    const genderScore = calculateGenderScore(classStudents, genderSharesByTargetGrade.get(normalizeGradeValue(config.grade)));
+    if (classStudents.length > 0 && genderScore < 100) {
+      conflicts.push({
+        type: "gender-balance",
+        message: `${config.name} has the best feasible gender balance found (score ${genderScore}%)`,
+        studentIds: classStudents.map((student) => student.id),
+      });
+    }
+  });
   
   for (const [classId, classStudents] of classAssignments) {
     const config = classConfigs.find(c => c.id === classId)!;
@@ -3050,5 +3301,6 @@ async function generateBalancedClasses(
     classes: generatedClasses,
     overallBalance,
     conflicts,
+    unassignedStudentIds: Array.from(unassignedStudentIds),
   };
 }
