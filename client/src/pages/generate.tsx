@@ -167,10 +167,15 @@ export default function GeneratePage() {
   };
 
   const generateMutation = useMutation({
-    mutationFn: () => apiRequest("POST", "/api/generate-classes", {}),
+    mutationFn: async () => {
+      const stateResponse = await apiRequest("GET", "/api/placements/state");
+      const state = await stateResponse.json() as { revision: number };
+      return apiRequest("POST", "/api/generate-classes", { expectedRevision: state.revision });
+    },
     onSuccess: async (response) => {
       const result = await response.json() as ClassGenerationResult;
       queryClient.invalidateQueries({ queryKey: ["/api/placements"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/placements/state"] });
       queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
       setIsGenerating(false);
       const conflictSummary = result.conflicts.slice(0, 3).map((conflict) => conflict.message).join("; ");
@@ -181,6 +186,7 @@ export default function GeneratePage() {
       setLocation("/review");
     },
     onError: (error: Error) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/placements/state"] });
       setIsGenerating(false);
       const isLimit = error.message.includes("TRIAL_SOLVER_LIMIT_REACHED");
       const isExpired = error.message.includes("TRIAL_EXPIRED");

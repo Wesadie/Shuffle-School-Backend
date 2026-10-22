@@ -59,7 +59,7 @@ export function validateCompleteGeneration(
 export async function persistCompleteGeneration(
   students: Student[],
   result: ClassGenerationResult,
-  persist: () => Promise<void>,
+  persist: () => Promise<unknown>,
 ): Promise<GenerationValidation> {
   const validation = validateCompleteGeneration(students, result);
   if (!validation.complete) return validation;

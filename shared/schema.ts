@@ -28,6 +28,7 @@ export const accounts = pgTable("accounts", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   createdBy: uuid("created_by"),
+  solverRevision: integer("solver_revision").notNull().default(0),
 });
 
 export const profiles = pgTable("profiles", {
@@ -318,7 +319,10 @@ export const placements = pgTable("placements", {
   studentId: varchar("student_id", { length: 36 }).notNull(),
   classId: varchar("class_id", { length: 36 }).notNull(),
   locked: boolean("locked").default(false),
-}, (table) => [index("placements_account_id_idx").on(table.accountId)]);
+}, (table) => [
+  index("placements_account_id_idx").on(table.accountId),
+  unique("placements_account_student_unique").on(table.accountId, table.studentId),
+]);
 
 export const insertPlacementSchema = createInsertSchema(placements).omit({ id: true, accountId: true });
 export type InsertPlacement = z.infer<typeof insertPlacementSchema>;

@@ -21,6 +21,7 @@ import { cancelSubscription } from "./licenseService";
 import { getAccountInvoice, getAccountInvoices } from "./invoiceService";
 import { generateInvoicePdf } from "./invoicePdf";
 import { mapTeacherPlacementRequests, persistCompleteGeneration, type TeacherPlacementPreference } from "./generationSafety";
+import { InvalidPlacementError, PlacementNotFoundError, PlacementRevisionConflictError } from "./placementSafety";
 
 import {
   insertStudentSchema,
@@ -77,6 +78,18 @@ export async function registerRoutes(
   const hasAnyField = (body: unknown, fields: string[]) => {
     if (!body || typeof body !== "object") return false;
     return fields.some((field) => Object.prototype.hasOwnProperty.call(body, field));
+  };
+  const readPlacementRevision = (value: unknown): number => {
+    if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+      throw new InvalidPlacementError("A valid placement revision is required");
+    }
+    return value;
+  };
+  const placementError = (res: import("express").Response, error: unknown) => {
+    const conflict = error instanceof PlacementRevisionConflictError;
+    const invalid = error instanceof InvalidPlacementError;
+    const message = error instanceof Error ? error.message : "Placement update failed";
+    res.status(conflict ? 409 : invalid ? 400 : error instanceof PlacementNotFoundError ? 404 : 500).json({ error: message });
   };
   const surveySettingsForTeacher = async (accountId: string, settings: TeacherSurveySettings | null) => {
     if (settings) return settings;
@@ -1622,6 +1635,11 @@ export async function registerRoutes(
     res.json(placements);
   });
 
+  app.get("/api/placements/state", isAuthenticated, async (req, res) => {
+    const state = await storage.getPlacementState(accountIdFor(req));
+    res.json(state);
+  });
+
   app.get("/api/placements/:id", isAuthenticated, async (req, res) => {
     const placement = await storage.getPlacement(accountIdFor(req), req.params.id);
     if (!placement) {
@@ -1633,61 +1651,80 @@ export async function registerRoutes(
   app.post("/api/placements", isAuthenticated, requireWritableWorkspace, async (req, res) => {
     try {
       const data = insertPlacementSchema.parse(req.body);
-      const placement = await storage.createPlacement(accountIdFor(req), data);
-      res.status(201).json(placement);
+      const { expectedRevision } = req.body;
+      const result = await storage.createPlacement(accountIdFor(req), data, readPlacementRevision(expectedRevision));
+      res.status(201).json(result);
     } catch (error) {
-      res.status(400).json({ error: "Invalid placement data" });
+      if (error instanceof PlacementRevisionConflictError || error instanceof InvalidPlacementError) {
+        placementError(res, error);
+      } else {
+        res.status(400).json({ error: "Invalid placement data" });
+      }
     }
   });
 
   app.patch("/api/placements/:id", isAuthenticated, requireWritableWorkspace, async (req, res) => {
-    const placement = await storage.updatePlacement(accountIdFor(req), req.params.id, req.body);
-    if (!placement) {
-      return res.status(404).json({ error: "Placement not found" });
+    try {
+      const { expectedRevision, ...updates } = req.body || {};
+      const parsedUpdates = insertPlacementSchema.partial().parse(updates);
+      const result = await storage.updatePlacement(
+        accountIdFor(req),
+        req.params.id,
+        parsedUpdates,
+        readPlacementRevision(expectedRevision),
+      );
+      if (!result.placement) return res.status(404).json({ error: "Placement not found" });
+      res.json(result);
+    } catch (error) {
+      placementError(res, error);
     }
-    res.json(placement);
   });
 
   app.delete("/api/placements/:id", isAuthenticated, requireWritableWorkspace, async (req, res) => {
-    const deleted = await storage.deletePlacement(accountIdFor(req), req.params.id);
-    if (!deleted) {
-      return res.status(404).json({ error: "Placement not found" });
+    try {
+      const result = await storage.deletePlacement(
+        accountIdFor(req),
+        req.params.id,
+        readPlacementRevision(req.body?.expectedRevision),
+      );
+      if (!result.deleted) return res.status(404).json({ error: "Placement not found" });
+      res.json({ revision: result.revision });
+    } catch (error) {
+      placementError(res, error);
     }
-    res.status(204).send();
   });
 
   app.delete("/api/placements", isAuthenticated, requireWritableWorkspace, async (req, res) => {
-    await storage.deleteAllPlacements(accountIdFor(req));
-    res.status(204).send();
+    try {
+      const revision = await storage.deleteAllPlacements(
+        accountIdFor(req),
+        readPlacementRevision(req.body?.expectedRevision),
+      );
+      res.json({ revision });
+    } catch (error) {
+      placementError(res, error);
+    }
   });
 
   // Move student (reassign to different class) (protected)
   app.post("/api/placements/move", isAuthenticated, requireWritableWorkspace, async (req, res) => {
     try {
-      const { studentId, targetClassId } = req.body;
-      
-      const placements = await storage.getPlacements(accountIdFor(req));
-      const existingPlacement = placements.find(p => p.studentId === studentId);
-      
-      if (existingPlacement) {
-        const updated = await storage.updatePlacement(accountIdFor(req), existingPlacement.id, {
-          classId: targetClassId,
-        });
-        
-        // Check for conflicts after move
-        const rules = await storage.getRules(accountIdFor(req));
-        const conflicts = await checkConflicts(studentId, targetClassId, rules, placements.filter(p => p.id !== existingPlacement.id).concat(updated!));
-        
-        res.json({ placement: updated, conflicts });
-      } else {
-        const newPlacement = await storage.createPlacement(accountIdFor(req), {
-          studentId,
-          classId: targetClassId,
-        });
-        res.status(201).json({ placement: newPlacement, conflicts: [] });
-      }
+      const { studentId, targetClassId, expectedRevision } = req.body;
+      const accountId = accountIdFor(req);
+      const result = await storage.movePlacement(
+        accountId,
+        studentId,
+        targetClassId,
+        readPlacementRevision(expectedRevision),
+      );
+      const [placements, rules] = await Promise.all([
+        storage.getPlacements(accountId),
+        storage.getRules(accountId),
+      ]);
+      const conflicts = await checkConflicts(studentId, targetClassId, rules, placements);
+      res.json({ ...result, conflicts });
     } catch (error) {
-      res.status(400).json({ error: "Failed to move student" });
+      placementError(res, error);
     }
   });
 
@@ -1697,6 +1734,7 @@ export async function registerRoutes(
     let reservedTrialUse = false;
 
     try {
+      const generationRevision = readPlacementRevision(req.body?.expectedRevision);
       const hasRequestedGrade = req.body && Object.prototype.hasOwnProperty.call(req.body, "grade");
       if (hasRequestedGrade && typeof req.body.grade !== "string") {
         return res.status(400).json({ error: "Grade must be a valid target grade" });
@@ -1826,6 +1864,7 @@ export async function registerRoutes(
             studentId: student.id,
             classId: generatedClass.classConfig.id,
           }))),
+          generationRevision,
           requestedGrade ? students.map((student) => student.id) : undefined,
         ),
       );
@@ -1847,6 +1886,9 @@ export async function registerRoutes(
       });
     } catch (error) {
       if (reservedTrialUse) await releaseTrialSolverGeneration(context);
+      if (error instanceof PlacementRevisionConflictError || error instanceof InvalidPlacementError || error instanceof PlacementNotFoundError) {
+        return placementError(res, error);
+      }
       console.error("Generation error:", error);
       res.status(500).json({ error: "Failed to generate classes" });
     }
@@ -2069,7 +2111,7 @@ export async function registerRoutes(
   // Apply a boost suggestion (swap two students) (protected)
   app.post("/api/boost/apply", isAuthenticated, requireWritableWorkspace, async (req, res) => {
     try {
-      const { student1Id, student1NewClassId, student2Id, student2NewClassId } = req.body;
+      const { student1Id, student1NewClassId, student2Id, student2NewClassId, expectedRevision } = req.body;
       const accountId = accountIdFor(req);
       const [placements, students, classConfigs] = await Promise.all([
         storage.getPlacements(accountId),
@@ -2093,13 +2135,17 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Boost cannot move a learner outside their New Grade" });
       }
       
-      // Update both placements
-      await storage.updatePlacement(accountId, placement1.id, { classId: student1NewClassId });
-      await storage.updatePlacement(accountId, placement2.id, { classId: student2NewClassId });
-      
-      res.json({ success: true });
+      const revision = await storage.swapPlacements(
+        accountId,
+        student1Id,
+        student1NewClassId,
+        student2Id,
+        student2NewClassId,
+        readPlacementRevision(expectedRevision),
+      );
+      res.json({ success: true, revision });
     } catch (error) {
-      res.status(500).json({ error: "Failed to apply boost suggestion" });
+      placementError(res, error);
     }
   });
 
@@ -2246,20 +2292,14 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Scenario has no placements to restore" });
       }
 
-      // Clear current placements
-      await storage.deleteAllPlacements(accountIdFor(req));
-
-      // Restore placements from scenario
-      for (const placement of placementsToRestore) {
-        await storage.createPlacement(accountIdFor(req), {
-          studentId: placement.studentId,
-          classId: placement.classId,
-        });
-      }
-
-      res.json({ success: true, placementsRestored: placementsToRestore.length });
+      const revision = await storage.replacePlacements(
+        accountIdFor(req),
+        placementsToRestore.map(({ studentId, classId }) => ({ studentId, classId })),
+        readPlacementRevision(req.body?.expectedRevision),
+      );
+      res.json({ success: true, placementsRestored: placementsToRestore.length, revision });
     } catch (error) {
-      res.status(500).json({ error: "Failed to restore scenario" });
+      placementError(res, error);
     }
   });
 

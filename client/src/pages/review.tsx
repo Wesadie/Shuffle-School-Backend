@@ -48,6 +48,7 @@ interface ClassWithStudents {
 }
 
 type PlacementSnapshot = Array<Pick<Placement, "studentId" | "classId">>;
+type PlacementState = { placements: Placement[]; revision: number };
 
 type ColourLegendItem = {
   value: string;
@@ -436,9 +437,10 @@ export default function ReviewPage() {
     queryKey: ["/api/students"],
   });
 
-  const { data: placements = [], isLoading: placementsLoading } = useQuery<Placement[]>({
-    queryKey: ["/api/placements"],
+  const { data: placementState, isLoading: placementsLoading } = useQuery<PlacementState>({
+    queryKey: ["/api/placements/state"],
   });
+  const placements = placementState?.placements ?? [];
 
   const { data: rules = [] } = useQuery<Rule[]>({
     queryKey: ["/api/rules"],
@@ -462,17 +464,24 @@ export default function ReviewPage() {
     return mapping;
   }, [teachers]);
 
+  const currentPlacementRevision = () => {
+    const state = queryClient.getQueryData<PlacementState>(["/api/placements/state"]);
+    if (!state) throw new Error("Placement data is still loading. Try again shortly.");
+    return state.revision;
+  };
+
   const moveMutation = useMutation({
     mutationFn: ({ studentId, targetClassId }: { studentId: string; targetClassId: string; historySnapshot?: PlacementSnapshot }) =>
-      apiRequest("POST", "/api/placements/move", { studentId, targetClassId }),
+      apiRequest("POST", "/api/placements/move", { studentId, targetClassId, expectedRevision: currentPlacementRevision() }),
     onMutate: async ({ studentId, targetClassId }) => {
-      await queryClient.cancelQueries({ queryKey: ["/api/placements"] });
-      const previousPlacements = queryClient.getQueryData<Placement[]>(["/api/placements"]);
-      queryClient.setQueryData<Placement[]>(["/api/placements"], (current = []) =>
-        current.map((placement) =>
+      await queryClient.cancelQueries({ queryKey: ["/api/placements/state"] });
+      const previousPlacements = queryClient.getQueryData<PlacementState>(["/api/placements/state"]);
+      queryClient.setQueryData<PlacementState>(["/api/placements/state"], (current) => current && ({
+        ...current,
+        placements: current.placements.map((placement) =>
           placement.studentId === studentId ? { ...placement, classId: targetClassId } : placement,
         ),
-      );
+      }));
       setRecentlyMovedStudentId(studentId);
       window.setTimeout(() => setRecentlyMovedStudentId((current) => current === studentId ? null : current), 900);
       return { previousPlacements };
@@ -485,7 +494,7 @@ export default function ReviewPage() {
     },
     onError: (error: any, _variables, context) => {
       if (context?.previousPlacements) {
-        queryClient.setQueryData(["/api/placements"], context.previousPlacements);
+        queryClient.setQueryData(["/api/placements/state"], context.previousPlacements);
       }
       toast({
         title: "Failed to move student",
@@ -494,24 +503,31 @@ export default function ReviewPage() {
       });
     },
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/placements"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/placements/state"] });
     },
   });
 
   const addPlacementMutation = useMutation({
     mutationFn: async ({ studentId, classId }: { studentId: string; classId: string }) => {
-      const response = await apiRequest("POST", "/api/placements", { studentId, classId });
-      return response.json() as Promise<Placement>;
+      const response = await apiRequest("POST", "/api/placements", {
+        studentId,
+        classId,
+        expectedRevision: currentPlacementRevision(),
+      });
+      return response.json() as Promise<{ placement: Placement; revision: number }>;
     },
-    onSuccess: (placement) => {
-      queryClient.setQueryData<Placement[]>(["/api/placements"], (current = []) => [...current, placement]);
-      queryClient.invalidateQueries({ queryKey: ["/api/placements"] });
+    onSuccess: ({ placement, revision }) => {
+      queryClient.setQueryData<PlacementState>(["/api/placements/state"], (current) => current
+        ? { placements: [...current.placements, placement], revision }
+        : current);
+      queryClient.invalidateQueries({ queryKey: ["/api/placements/state"] });
       setIsAddLearnerOpen(false);
       setNewLearnerId("");
       setNewLearnerClassId("");
       toast({ title: "Learner added to class" });
     },
     onError: (error: Error) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/placements/state"] });
       toast({ title: "Failed to add learner", description: error.message, variant: "destructive" });
     },
   });
@@ -538,16 +554,19 @@ export default function ReviewPage() {
   });
 
   const removePlacementMutation = useMutation({
-    mutationFn: (placementId: string) => apiRequest("DELETE", `/api/placements/${placementId}`),
-    onSuccess: (_response, placementId) => {
-      queryClient.setQueryData<Placement[]>(["/api/placements"], (current = []) =>
-        current.filter((placement) => placement.id !== placementId),
-      );
-      queryClient.invalidateQueries({ queryKey: ["/api/placements"] });
+    mutationFn: (placementId: string) => apiRequest("DELETE", `/api/placements/${placementId}`, {
+      expectedRevision: currentPlacementRevision(),
+    }),
+    onSuccess: async (_response, placementId) => {
+      queryClient.setQueryData<PlacementState>(["/api/placements/state"], (current) => current
+        ? { ...current, placements: current.placements.filter((placement) => placement.id !== placementId) }
+        : current);
+      await queryClient.invalidateQueries({ queryKey: ["/api/placements/state"] });
       setRemovingLearner(null);
       toast({ title: "Learner removed from class allocation", description: "The learner's student record was not deleted." });
     },
     onError: (error: Error) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/placements/state"] });
       toast({ title: "Failed to remove learner", description: error.message, variant: "destructive" });
     },
   });
@@ -572,17 +591,19 @@ export default function ReviewPage() {
         student1NewClassId: suggestion.student2.currentClassId,
         student2Id: suggestion.student2.id,
         student2NewClassId: suggestion.student1.currentClassId,
+        expectedRevision: currentPlacementRevision(),
       }),
     onSuccess: (_data, variables) => {
       if (variables.historySnapshot) {
         setUndoStack((current) => [...current, variables.historySnapshot!].slice(-20));
       }
-      queryClient.invalidateQueries({ queryKey: ["/api/placements"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/placements/state"] });
       queryClient.invalidateQueries({ queryKey: ["/api/boost"] });
       toast({ title: "Swap applied successfully" });
     },
-    onError: () => {
-      toast({ title: "Failed to apply swap", variant: "destructive" });
+    onError: (error: Error) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/placements/state"] });
+      toast({ title: "Failed to apply swap", description: error.message, variant: "destructive" });
     },
   });
 
@@ -600,25 +621,30 @@ export default function ReviewPage() {
           student1NewClassId: best.student2.currentClassId,
           student2Id: best.student2.id,
           student2NewClassId: best.student1.currentClassId,
+          expectedRevision: currentPlacementRevision(),
         });
       })(),
     onSuccess: (_data, variables) => {
       setUndoStack((current) => [...current, variables.historySnapshot].slice(-20));
-      queryClient.invalidateQueries({ queryKey: ["/api/placements"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/placements/state"] });
       queryClient.invalidateQueries({ queryKey: ["/api/boost"] });
       toast({ title: `${variables.name} boosted`, description: "Best balancing swap applied." });
     },
     onError: (error: Error) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/placements/state"] });
       toast({ title: "Boost failed", description: error.message || "An error occurred", variant: "destructive" });
     },
   });
 
   const regenerateMutation = useMutation({
     mutationFn: (variables: { historySnapshot: PlacementSnapshot; grade?: string }) =>
-      apiRequest("POST", "/api/generate-classes", variables.grade ? { grade: variables.grade } : {}),
+      apiRequest("POST", "/api/generate-classes", {
+        ...(variables.grade ? { grade: variables.grade } : {}),
+        expectedRevision: currentPlacementRevision(),
+      }),
     onSuccess: (_data, variables) => {
       setUndoStack((current) => [...current, variables.historySnapshot].slice(-20));
-      queryClient.invalidateQueries({ queryKey: ["/api/placements"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/placements/state"] });
       queryClient.invalidateQueries({ queryKey: ["/api/boost"] });
       queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
       toast({
@@ -627,6 +653,7 @@ export default function ReviewPage() {
       });
     },
     onError: (error: Error) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/placements/state"] });
       const message = error.message || "";
       const isLimit = message.includes("TRIAL_SOLVER_LIMIT_REACHED");
       const isExpired = message.includes("TRIAL_EXPIRED");
@@ -644,29 +671,36 @@ export default function ReviewPage() {
 
   const undoMutation = useMutation({
     mutationFn: async (snapshot: PlacementSnapshot) => {
-      const current = queryClient.getQueryData<Placement[]>(["/api/placements"]) ?? [];
+      const current = queryClient.getQueryData<PlacementState>(["/api/placements/state"]);
+      if (!current) throw new Error("Placement data is still loading. Try again shortly.");
+      let revision = current.revision;
       let restoredCount = 0;
       for (const entry of snapshot) {
-        const placement = current.find((p) => p.studentId === entry.studentId);
+        const latest = queryClient.getQueryData<PlacementState>(["/api/placements/state"]) ?? current;
+        const placement = latest.placements.find((p) => p.studentId === entry.studentId);
         if (placement && placement.classId !== entry.classId) {
-          await apiRequest("POST", "/api/placements/move", {
+          const response = await apiRequest("POST", "/api/placements/move", {
             studentId: entry.studentId,
             targetClassId: entry.classId,
+            expectedRevision: revision,
           });
+          const result = await response.json() as { revision: number };
+          revision = result.revision;
           restoredCount += 1;
         }
       }
       return restoredCount;
     },
     onMutate: async (snapshot) => {
-      await queryClient.cancelQueries({ queryKey: ["/api/placements"] });
-      const previousPlacements = queryClient.getQueryData<Placement[]>(["/api/placements"]);
-      queryClient.setQueryData<Placement[]>(["/api/placements"], (current = []) =>
-        current.map((placement) => {
+      await queryClient.cancelQueries({ queryKey: ["/api/placements/state"] });
+      const previousPlacements = queryClient.getQueryData<PlacementState>(["/api/placements/state"]);
+      queryClient.setQueryData<PlacementState>(["/api/placements/state"], (current) => current && ({
+        ...current,
+        placements: current.placements.map((placement) => {
           const entry = snapshot.find((s) => s.studentId === placement.studentId);
           return entry && entry.classId !== placement.classId ? { ...placement, classId: entry.classId } : placement;
         }),
-      );
+      }));
       return { previousPlacements };
     },
     onSuccess: (restoredCount) => {
@@ -679,13 +713,13 @@ export default function ReviewPage() {
     },
     onError: (error: any, snapshot, context) => {
       if (context?.previousPlacements) {
-        queryClient.setQueryData(["/api/placements"], context.previousPlacements);
+        queryClient.setQueryData(["/api/placements/state"], context.previousPlacements);
       }
       setUndoStack((current) => [...current, snapshot].slice(-20));
       toast({ title: "Failed to undo", description: error?.message || "An error occurred", variant: "destructive" });
     },
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/placements"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/placements/state"] });
     },
   });
 

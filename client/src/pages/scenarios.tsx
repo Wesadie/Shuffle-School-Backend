@@ -82,15 +82,19 @@ export default function ScenariosPage() {
 
   const restoreMutation = useMutation({
     mutationFn: async (id: string) => {
-      return apiRequest("POST", `/api/scenarios/${id}/restore`, {});
+      const stateResponse = await apiRequest("GET", "/api/placements/state");
+      const state = await stateResponse.json() as { revision: number };
+      return apiRequest("POST", `/api/scenarios/${id}/restore`, { expectedRevision: state.revision });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/placements"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/placements/state"] });
       toast({ title: "Scenario restored", description: "Placements have been restored from this scenario" });
       setRestoreId(null);
     },
-    onError: () => {
-      toast({ title: "Failed to restore scenario", variant: "destructive" });
+    onError: (error: Error) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/placements/state"] });
+      toast({ title: "Failed to restore scenario", description: error.message, variant: "destructive" });
     },
   });
 

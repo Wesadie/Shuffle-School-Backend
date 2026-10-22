@@ -1,8 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { Characteristic, ClassConfig, ClassGenerationResult, PlacementRequest, Rule, Student, Teacher } from "@shared/schema";
+import type { Characteristic, ClassConfig, ClassGenerationResult, Placement, PlacementRequest, Rule, Student, Teacher } from "@shared/schema";
 import { generateBalancedClasses } from "./routes";
 import { mapTeacherPlacementRequests, persistCompleteGeneration } from "./generationSafety";
+import {
+  buildSwapPlacements,
+  InvalidPlacementError,
+  PlacementRevisionConflictError,
+  runRevisionedMutation,
+  validatePlacements,
+} from "./placementSafety";
 
 function makeStudent(id: string, gender: string, characteristics: Record<string, string> = {}): Student {
   return {
@@ -280,4 +287,93 @@ test("rejects teacher placement requests without an unambiguous same-grade class
       { ...makeClass("b2", 10), name: " room b " },
     ],
   ).error);
+});
+
+test("only one concurrent mutation can commit against the same placement revision", async () => {
+  let revision = 4;
+  let mutationCount = 0;
+  const advance = async (expected: number) => {
+    if (revision !== expected) return null;
+    revision += 1;
+    return revision;
+  };
+  const results = await Promise.allSettled([
+    runRevisionedMutation(4, advance, async () => {
+      mutationCount += 1;
+    }),
+    runRevisionedMutation(4, advance, async () => {
+      mutationCount += 1;
+    }),
+  ]);
+
+  assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
+  const rejected = results.find((result) => result.status === "rejected");
+  assert.ok(rejected?.status === "rejected" && rejected.reason instanceof PlacementRevisionConflictError);
+  assert.equal(revision, 5);
+  assert.equal(mutationCount, 1);
+});
+
+test("rejects duplicate placements for a learner", () => {
+  const students = [makeStudent("one", "female")];
+  const configs = [makeClass("A", 3), makeClass("B", 3)];
+  const candidate = [
+    { studentId: "one", classId: "A" },
+    { studentId: "one", classId: "B" },
+  ];
+
+  assert.throws(() => validatePlacements(candidate, students, configs, []), InvalidPlacementError);
+});
+
+test("rejects placements over class capacity and invalid account references", () => {
+  const students = [makeStudent("one", "female"), makeStudent("two", "male")];
+  const configs = [makeClass("A", 1)];
+
+  assert.throws(
+    () => validatePlacements([{ studentId: "one", classId: "A" }, { studentId: "two", classId: "A" }], students, configs, []),
+    /exceeds capacity/,
+  );
+  assert.throws(
+    () => validatePlacements([{ studentId: "one", classId: "missing" }], students, configs, []),
+    /current account/,
+  );
+});
+
+test("rejects placements that violate mandatory pair and separation constraints", () => {
+  const students = [makeStudent("one", "female"), makeStudent("two", "male")];
+  const configs = [makeClass("A", 3), makeClass("B", 3)];
+
+  assert.throws(
+    () => validatePlacements(
+      [{ studentId: "one", classId: "A" }, { studentId: "two", classId: "B" }],
+      students,
+      configs,
+      [makeRule("pair", "one", "two")],
+    ),
+    /mandatory together/,
+  );
+  assert.throws(
+    () => validatePlacements(
+      [{ studentId: "one", classId: "A" }, { studentId: "two", classId: "A" }],
+      students,
+      configs,
+      [makeRule("separate", "one", "two")],
+    ),
+    /mandatory separation/,
+  );
+});
+
+test("a rejected swap leaves its placement snapshot unchanged", () => {
+  const original: Placement[] = [
+    { id: "p1", accountId: "account", studentId: "one", classId: "A", locked: false },
+    { id: "p2", accountId: "account", studentId: "two", classId: "B", locked: false },
+  ];
+  const students = [makeStudent("one", "female"), makeStudent("two", "male")];
+  const configs = [makeClass("A", 1), makeClass("B", 1)];
+  const invalidSwap = buildSwapPlacements(original, "one", "B", "two", "B");
+
+  assert.throws(() => validatePlacements(invalidSwap, students, configs, []), /exceeds capacity/);
+  assert.deepEqual(original.map(({ studentId, classId }) => ({ studentId, classId })), [
+    { studentId: "one", classId: "A" },
+    { studentId: "two", classId: "B" },
+  ]);
 });
