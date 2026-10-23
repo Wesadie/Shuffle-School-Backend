@@ -100,14 +100,22 @@ export function CSVImportDialog({ open, onOpenChange, characteristics, importTyp
         importType === "characteristics" ? "/api/students/bulk-import-characteristics" : "/api/students/bulk-import",
         { students: rows },
       );
-      return await response.json() as { count: number };
+      return await response.json() as {
+        count: number;
+        skippedExisting?: number;
+        duplicateRows?: number;
+        existingDuplicateStudentIds?: string[];
+      };
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["/api/students"] });
       queryClient.invalidateQueries({ queryKey: ["/api/characteristics"] });
+      const existingDuplicateStudentIds = data.existingDuplicateStudentIds || [];
       toast({
-        title: importType === "characteristics" ? "Characteristic responses imported" : "Import successful",
-        description: `${data.count} ${importType === "characteristics" ? "responses" : "students"} imported`,
+        title: importType === "characteristics" ? "Characteristic responses imported" : "Import summary",
+        description: importType === "characteristics"
+          ? `${data.count} responses imported`
+          : `${data.count} added · ${data.skippedExisting || 0} skipped (already in this school) · ${data.duplicateRows || 0} duplicate upload rows skipped${existingDuplicateStudentIds.length > 0 ? `. Existing duplicate student IDs to review: ${existingDuplicateStudentIds.join(", ")}` : ". No existing duplicate student IDs found."}`,
       });
       handleClose();
     },

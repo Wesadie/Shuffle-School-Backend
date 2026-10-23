@@ -49,6 +49,7 @@ import {
 } from "@shared/schema";
 import { CHARACTERISTIC_TYPES, characteristicValueToArray, defaultResponseColor, getStableResponseId, isCharacteristicApplicableToGrade, normalizeResponses } from "@shared/characteristics";
 import { billingDetailsSchema } from "@shared/billing-details";
+import { partitionStudentImportRows } from "./studentImport";
 import { getStudentTargetGrade, normalizeGradeValue } from "@shared/grades";
 import { z } from "zod";
 import { isRuleMandatory } from "@shared/schema";
@@ -685,18 +686,21 @@ export async function registerRoutes(
       }
 
       const context = getAccountContext(req);
-
-      const currentStudentCount = (await storage.getStudents(accountIdFor(req))).length;
-      if (wouldExceedLearnerCapacity(context, currentStudentCount, students.length)) {
+      const accountId = accountIdFor(req);
+      const existingStudents = await storage.getStudents(accountId);
+      const { rowsToImport, skippedExisting, duplicateRows, existingDuplicateStudentIds } =
+        partitionStudentImportRows(students, existingStudents);
+      const currentStudentCount = existingStudents.length;
+      if (wouldExceedLearnerCapacity(context, currentStudentCount, rowsToImport.length)) {
         return res.status(403).json(learnerCapacityExceededResponse(context));
       }
       
       const standardFields = ["studentId", "firstName", "lastName", "grade", "currentClass", "gender", "notes", "parentRequests", "parentNotes"];
-      const existingCharacteristics = await storage.getCharacteristics(accountIdFor(req));
+      const existingCharacteristics = await storage.getCharacteristics(accountId);
       const characteristicByName = new Map(existingCharacteristics.map((char) => [char.name, char]));
       const importedValuesByCharacteristic = new Map<string, Set<string>>();
 
-      for (const student of students) {
+      for (const student of rowsToImport) {
         for (const [key, value] of Object.entries(student)) {
           if (!standardFields.includes(key) && value !== undefined && value !== null && value !== "") {
             if (!importedValuesByCharacteristic.has(key)) {
@@ -773,7 +777,7 @@ export async function registerRoutes(
       }
       
       // Process students and extract characteristics from extra columns
-      const processedStudents = students.map(student => {
+      const processedStudents = rowsToImport.map(student => {
         const characteristics: Record<string, string> = {};
         for (const [key, value] of Object.entries(student)) {
           if (!standardFields.includes(key) && value !== undefined && value !== null && value !== "") {
@@ -792,8 +796,13 @@ export async function registerRoutes(
         });
       });
       
-      const result = await storage.bulkImportStudents(accountIdFor(req), processedStudents);
-      res.status(201).json(result);
+      const result = await storage.bulkImportStudents(accountId, processedStudents);
+      res.status(201).json({
+        ...result,
+        skippedExisting,
+        duplicateRows,
+        existingDuplicateStudentIds,
+      });
     } catch (error) {
       if (error instanceof z.ZodError) {
         const issue = error.issues[0];
