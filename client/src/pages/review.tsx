@@ -412,6 +412,8 @@ export default function ReviewPage() {
   const [hiddenCharacteristicIds, setHiddenCharacteristicIds] = useState<string[]>([]);
   const [undoStack, setUndoStack] = useState<PlacementSnapshot[]>([]);
   const [selectedSimilarStudentId, setSelectedSimilarStudentId] = useState<string | null>(null);
+  const [selectedSwapStudentIds, setSelectedSwapStudentIds] = useState<string[]>([]);
+  const [confirmWorseningSwap, setConfirmWorseningSwap] = useState(false);
   const [isAddLearnerOpen, setIsAddLearnerOpen] = useState(false);
   const [isCreatingLearner, setIsCreatingLearner] = useState(false);
   const [newLearnerFormData, setNewLearnerFormData] = useState<Partial<InsertStudent>>({
@@ -573,6 +575,51 @@ export default function ReviewPage() {
 
   const { data: placementRequests = [] } = useQuery<{ studentId: string; teacherId: string }[]>({
     queryKey: ["/api/placement-requests"],
+  });
+
+  const applyGuidedSwapMutation = useMutation({
+    mutationFn: async ({ student1Id, student2Id }: { student1Id: string; student2Id: string; historySnapshot: PlacementSnapshot }) => {
+      const placement1 = placements.find((placement) => placement.studentId === student1Id);
+      const placement2 = placements.find((placement) => placement.studentId === student2Id);
+      if (!placement1 || !placement2) throw new Error("Both learners must have an active class placement.");
+      const response = await apiRequest("POST", "/api/boost/apply", {
+        student1Id,
+        student1NewClassId: placement2.classId,
+        student2Id,
+        student2NewClassId: placement1.classId,
+        expectedRevision: currentPlacementRevision(),
+      });
+      return response.json() as Promise<{ revision: number }>;
+    },
+    onSuccess: ({ revision }, variables) => {
+      setUndoStack((current) => [...current, variables.historySnapshot].slice(-20));
+      queryClient.setQueryData<PlacementState>(["/api/placements/state"], (current) => {
+        if (!current) return current;
+        const selectedIds = new Set(selectedSwapStudentIds);
+        const sourceClasses = new Map(current.placements
+          .filter((placement) => selectedIds.has(placement.studentId))
+          .map((placement) => [placement.studentId, placement.classId]));
+        const student1Id = selectedSwapStudentIds[0];
+        const student2Id = selectedSwapStudentIds[1];
+        return {
+          revision,
+          placements: current.placements.map((placement) => {
+            if (placement.studentId === student1Id) return { ...placement, classId: sourceClasses.get(student2Id)! };
+            if (placement.studentId === student2Id) return { ...placement, classId: sourceClasses.get(student1Id)! };
+            return placement;
+          }),
+        };
+      });
+      setSelectedSwapStudentIds([]);
+      setConfirmWorseningSwap(false);
+      queryClient.invalidateQueries({ queryKey: ["/api/placements/state"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/boost"] });
+      toast({ title: "Swap applied", description: "Only the selected learners’ placements were exchanged." });
+    },
+    onError: (error: Error) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/placements/state"] });
+      toast({ title: "Failed to apply swap", description: error.message || "An error occurred", variant: "destructive" });
+    },
   });
 
   const { data: boostData, isLoading: boostLoading, refetch: refetchBoost } = useQuery<BoostResponse>({
@@ -960,6 +1007,119 @@ export default function ReviewPage() {
     if (balanceMetrics.length === 0) return 100;
     return Math.round(balanceMetrics.reduce((sum, m) => sum + m.score, 0) / balanceMetrics.length);
   }, [balanceMetrics]);
+
+  const selectedSwapStudents = selectedSwapStudentIds
+    .map((studentId) => students.find((student) => student.id === studentId))
+    .filter((student): student is Student => Boolean(student));
+  const guidedSwapPreview = useMemo(() => {
+    if (selectedSwapStudents.length !== 2) return null;
+    const [student1, student2] = selectedSwapStudents;
+    const placement1 = placements.find((placement) => placement.studentId === student1.id);
+    const placement2 = placements.find((placement) => placement.studentId === student2.id);
+    if (!placement1 || !placement2) return null;
+    const class1 = classesWithStudents.find(({ config }) => config.id === placement1.classId);
+    const class2 = classesWithStudents.find(({ config }) => config.id === placement2.classId);
+    if (!class1 || !class2) return null;
+
+    const warnings: string[] = [];
+    if (placement1.classId === placement2.classId) warnings.push("Both learners are already in the same class, so swapping them has no placement effect.");
+    if (getStudentTargetGrade(student1) !== normalizeGradeValue(class2.config.grade)
+      || getStudentTargetGrade(student2) !== normalizeGradeValue(class1.config.grade)) {
+      warnings.push("The swap would move a learner outside their target grade.");
+    }
+
+    const nextClass1Students = class1.students.filter((student) => student.id !== student1.id).concat(student2);
+    const nextClass2Students = class2.students.filter((student) => student.id !== student2.id).concat(student1);
+    if (nextClass1Students.length > (class1.config.capacity || 30)) warnings.push(`${class1.config.name} would exceed capacity.`);
+    if (nextClass2Students.length > (class2.config.capacity || 30)) warnings.push(`${class2.config.name} would exceed capacity.`);
+
+    const nextClassByStudent = new Map(placements.map((placement) => [placement.studentId, placement.classId]));
+    nextClassByStudent.set(student1.id, placement2.classId);
+    nextClassByStudent.set(student2.id, placement1.classId);
+    rules.forEach((rule) => {
+      if (rule.importance === "important") return;
+      const classForFirst = nextClassByStudent.get(rule.studentId1);
+      const classForSecond = nextClassByStudent.get(rule.studentId2);
+      if (!classForFirst || !classForSecond) return;
+      if (rule.type === "pair" && classForFirst !== classForSecond) {
+        warnings.push(`Mandatory pairing would be broken for ${students.find((student) => student.id === rule.studentId1)?.firstName ?? "a learner"} and ${students.find((student) => student.id === rule.studentId2)?.firstName ?? "a learner"}.`);
+      }
+      if (rule.type === "separate" && classForFirst === classForSecond) {
+        warnings.push(`Mandatory separation would be broken for ${students.find((student) => student.id === rule.studentId1)?.firstName ?? "a learner"} and ${students.find((student) => student.id === rule.studentId2)?.firstName ?? "a learner"}.`);
+      }
+    });
+
+    const activeCharacteristics = characteristics.filter((characteristic) => !characteristic.tagOnly);
+    const targets = activeCharacteristics.map((characteristic) => [characteristic, getCharacteristicCohortTarget(students, characteristic)] as const);
+    const cohortGenderShares = getGenderCohortShares(students);
+    const simulatedClasses = classesWithStudents.map(({ config, students: classStudents }) => ({
+      config,
+      students: config.id === class1.config.id
+        ? nextClass1Students
+        : config.id === class2.config.id ? nextClass2Students : classStudents,
+    }));
+    const calculateOverallBalance = (classEntries: { config: ClassConfig; students: Student[] }[]) => {
+      if (activeCharacteristics.length === 0) return 100;
+      const characteristicScores = targets.map(([characteristic, target]) => {
+        const classScores = classEntries
+          .map(({ students: members }) => ({
+            members: members.filter((student) => isCharacteristicApplicableToGrade(characteristic, student.grade)),
+          }))
+          .filter(({ members }) => isNumericCharacteristic(characteristic) || members.some((student) =>
+            characteristicValueToArray(getStudentCharacteristicValue(student, characteristic)).length > 0,
+          ))
+          .map(({ members }) => computeCharacteristicClassScore(members, characteristic, target));
+        return classScores.length > 0
+          ? classScores.reduce((sum, score) => sum + score, 0) / classScores.length
+          : 100;
+      });
+      return Math.round(characteristicScores.reduce((sum, score) => sum + score, 0) / characteristicScores.length);
+    };
+    const beforeBalance = calculateOverallBalance(classesWithStudents);
+    const afterBalance = calculateOverallBalance(simulatedClasses);
+    const beforeGenderBalance = Math.round(
+      classesWithStudents.reduce((sum, entry) => sum + computeGenderClassScore(entry.students, cohortGenderShares), 0)
+        / Math.max(classesWithStudents.length, 1),
+    );
+    const afterGenderBalance = Math.round(
+      simulatedClasses.reduce((sum, entry) => sum + computeGenderClassScore(entry.students, cohortGenderShares), 0)
+        / Math.max(simulatedClasses.length, 1),
+    );
+    return {
+      student1,
+      student2,
+      class1,
+      class2,
+      beforeBalance,
+      afterBalance,
+      beforeGenderBalance,
+      afterGenderBalance,
+      warnings: Array.from(new Set(warnings)),
+      valid: warnings.length === 0 && placement1.classId !== placement2.classId,
+      worsensBalance: afterBalance < beforeBalance,
+    };
+  }, [selectedSwapStudents, placements, classesWithStudents, rules, characteristics, students]);
+
+  const toggleGuidedSwapStudent = (studentId: string) => {
+    setConfirmWorseningSwap(false);
+    setSelectedSwapStudentIds((current) => {
+      if (current.includes(studentId)) return current.filter((id) => id !== studentId);
+      return current.length === 2 ? [current[1], studentId] : [...current, studentId];
+    });
+  };
+
+  const applyGuidedSwap = () => {
+    if (!guidedSwapPreview?.valid) return;
+    if (guidedSwapPreview.worsensBalance && !confirmWorseningSwap) {
+      setConfirmWorseningSwap(true);
+      return;
+    }
+    applyGuidedSwapMutation.mutate({
+      student1Id: guidedSwapPreview.student1.id,
+      student2Id: guidedSwapPreview.student2.id,
+      historySnapshot: placements.map(({ studentId, classId }) => ({ studentId, classId })),
+    });
+  };
 
   // Best possible single-characteristic swap improvement for each active
   // characteristic, mirroring /api/boost's swap search and 0.5% threshold so
@@ -1669,7 +1829,18 @@ export default function ReviewPage() {
                       Matched on race, gender, Aggregate, English %, Maths %, 2nd Language, Medication &amp; Learner Support · {similarityMatches.size} match{similarityMatches.size === 1 ? "" : "es"} at 60%+
                     </p>
                   </div>
-                  <Button size="icon" variant="ghost" className="h-7 w-7 shrink-0" onClick={() => setSelectedSimilarStudentId(null)} aria-label="Clear similar learners" data-testid="button-clear-similar"><X className="h-4 w-4" /></Button>
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    <Button
+                      size="sm"
+                      variant={selectedSwapStudentIds.includes(selectedSimilarStudent.id) ? "default" : "outline"}
+                      className="h-7 px-2 text-[10px]"
+                      onClick={() => toggleGuidedSwapStudent(selectedSimilarStudent.id)}
+                      data-testid={`button-select-swap-${selectedSimilarStudent.id}`}
+                    >
+                      {selectedSwapStudentIds.includes(selectedSimilarStudent.id) ? "Selected" : "Select for swap"}
+                    </Button>
+                    <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => { setSelectedSimilarStudentId(null); setSelectedSwapStudentIds([]); }} aria-label="Clear similar learners" data-testid="button-clear-similar"><X className="h-4 w-4" /></Button>
+                  </div>
                 </div>
 
                 <div className="mt-3 rounded-md border border-primary/25 bg-background p-2.5">
@@ -1721,6 +1892,18 @@ export default function ReviewPage() {
                             </div>
                           </AccordionTrigger>
                           <AccordionContent className="pb-2">
+                            <div className="mb-2 flex justify-end">
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant={selectedSwapStudentIds.includes(match.id) ? "default" : "outline"}
+                                className="h-7 px-2 text-[10px]"
+                                onClick={() => toggleGuidedSwapStudent(match.id)}
+                                data-testid={`button-select-swap-${match.id}`}
+                              >
+                                {selectedSwapStudentIds.includes(match.id) ? "Selected for swap" : "Select for swap"}
+                              </Button>
+                            </div>
                             <div className="overflow-x-auto rounded-md border">
                               <table className="w-full min-w-[620px] text-left text-[11px]">
                                 <thead className="bg-muted/60">
@@ -1755,6 +1938,70 @@ export default function ReviewPage() {
                   </Accordion>
                 ) : (
                   <p className="mt-2 text-[11px] text-muted-foreground">No similar learners found in other classes (learners need a 60%+ profile match).</p>
+                )}
+
+                {selectedSwapStudentIds.length > 0 && (
+                  <div className="mt-3 rounded-md border bg-background p-3" data-testid="guided-swap-preview">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="text-xs font-semibold">Guided learner swap</p>
+                      <span className="text-[10px] text-muted-foreground">Select two learners from this panel</span>
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {selectedSwapStudents.map((student) => {
+                        const currentClass = classesWithStudents.find(({ students: members }) => members.some((member) => member.id === student.id))?.config.name ?? "Unplaced";
+                        return <Badge key={student.id} variant="secondary">{student.firstName} {student.lastName} · {currentClass}</Badge>;
+                      })}
+                    </div>
+                    {guidedSwapPreview ? (
+                      <div className="mt-3 space-y-2 text-xs">
+                        <div className="grid gap-2 sm:grid-cols-2">
+                          <div className="rounded border p-2">
+                            <p className="font-medium">Before</p>
+                            <p className="text-muted-foreground">{guidedSwapPreview.class1.config.name}: {guidedSwapPreview.class1.students.length}/{guidedSwapPreview.class1.config.capacity || 30} learners</p>
+                            <p className="text-muted-foreground">{guidedSwapPreview.class2.config.name}: {guidedSwapPreview.class2.students.length}/{guidedSwapPreview.class2.config.capacity || 30} learners</p>
+                            <p className="mt-1 font-medium">{guidedSwapPreview.beforeBalance}% characteristic balance · {guidedSwapPreview.beforeGenderBalance}% gender balance</p>
+                          </div>
+                          <div className="rounded border p-2">
+                            <p className="font-medium">After proposed swap</p>
+                            <p className="text-muted-foreground">{guidedSwapPreview.class1.config.name}: {guidedSwapPreview.class1.students.length}/{guidedSwapPreview.class1.config.capacity || 30} learners</p>
+                            <p className="text-muted-foreground">{guidedSwapPreview.class2.config.name}: {guidedSwapPreview.class2.students.length}/{guidedSwapPreview.class2.config.capacity || 30} learners</p>
+                            <p className={`mt-1 font-medium ${guidedSwapPreview.worsensBalance ? "text-amber-600" : "text-emerald-600"}`}>{guidedSwapPreview.afterBalance}% characteristic balance · {guidedSwapPreview.afterGenderBalance}% gender balance</p>
+                          </div>
+                        </div>
+                        {guidedSwapPreview.warnings.length > 0 && (
+                          <Alert variant="destructive" className="py-2">
+                            <AlertTriangle className="h-4 w-4" />
+                            <AlertTitle className="text-xs">Swap warnings</AlertTitle>
+                            <AlertDescription className="text-xs">{guidedSwapPreview.warnings.join(" · ")}</AlertDescription>
+                          </Alert>
+                        )}
+                        {confirmWorseningSwap && guidedSwapPreview.worsensBalance && (
+                          <Alert className="py-2">
+                            <AlertTriangle className="h-4 w-4" />
+                            <AlertTitle className="text-xs">Confirm balance reduction</AlertTitle>
+                            <AlertDescription className="text-xs">This swap reduces overall balance from {guidedSwapPreview.beforeBalance}% to {guidedSwapPreview.afterBalance}%. Click Apply Swap again to proceed.</AlertDescription>
+                          </Alert>
+                        )}
+                        <div className="flex justify-end gap-2">
+                          <Button type="button" variant="ghost" size="sm" onClick={() => { setSelectedSwapStudentIds([]); setConfirmWorseningSwap(false); }}>Clear selections</Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            onClick={applyGuidedSwap}
+                            disabled={!guidedSwapPreview.valid || applyGuidedSwapMutation.isPending}
+                            data-testid="button-apply-guided-swap"
+                          >
+                            {applyGuidedSwapMutation.isPending ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <ArrowRightLeft className="mr-1 h-3.5 w-3.5" />}
+                            {confirmWorseningSwap ? "Confirm Swap" : "Apply Swap"}
+                          </Button>
+                        </div>
+                      </div>
+                    ) : selectedSwapStudentIds.length < 2 ? (
+                      <p className="mt-2 text-[11px] text-muted-foreground">Choose one more learner from a similar learner result to evaluate the swap.</p>
+                    ) : (
+                      <p className="mt-2 text-[11px] text-destructive">A selected learner does not have a current class placement.</p>
+                    )}
+                  </div>
                 )}
               </CardContent>
             </Card>
