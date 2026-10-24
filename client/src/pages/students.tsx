@@ -40,6 +40,7 @@ import { queryClient, apiRequest } from "@/lib/queryClient";
 import { downloadXlsx, type SpreadsheetCell } from "@/lib/xlsx-export";
 import { characteristicValueToArray, formatCharacteristicValue, isCharacteristicApplicableToGrade, normalizeResponses } from "@shared/characteristics";
 import type { Student, InsertStudent, Characteristic, ClassConfig, CharacteristicResponse } from "@shared/schema";
+import { getNextGrade, isIncomingGradeRAwaitingAllocation } from "@shared/grades";
 
 type SortField = "firstName" | "lastName" | "grade" | "currentClass";
 type SortDirection = "asc" | "desc";
@@ -199,11 +200,6 @@ export default function StudentsPage() {
   const normalizeGrade = (grade?: string | null) =>
     (grade || "").replace(/^grade\s+/i, "").trim();
 
-  const getNextGrade = (currentGrade?: string | null) => {
-    const normalizedGrade = normalizeGrade(currentGrade);
-    if (!/^\d+$/.test(normalizedGrade)) return "";
-    return String(Number(normalizedGrade) + 1);
-  };
 
   const getStudentDisplayId = (student: Student) =>
     student.studentId || formatCharacteristicValue(getCharacteristics(student).studentId) || "—";
@@ -225,6 +221,7 @@ export default function StudentsPage() {
 
   const gradeOptions = uniqueOptions([
     ...students.map((student) => student.grade),
+    "R",
     ...classConfigs.map((config) => config.grade),
     ...staticGrades,
   ]);
@@ -237,6 +234,7 @@ export default function StudentsPage() {
   const newGradeOptions = uniqueOptions([
     ...students.map((student) => getNewGrade(student)).filter((value) => value !== "—"),
     ...classConfigs.map((config) => config.grade),
+    "1",
     ...staticGrades,
   ]);
 
@@ -769,7 +767,7 @@ export default function StudentsPage() {
             <SelectValue placeholder="Filter" />
           </SelectTrigger>
           <SelectContent>
-            {staticGrades.map((grade) => (
+            {gradeOptions.map((grade) => (
               <SelectItem key={grade} value={grade}>
                 Grade {grade}
               </SelectItem>

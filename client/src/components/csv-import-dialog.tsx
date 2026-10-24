@@ -31,7 +31,9 @@ interface ParsedStudent {
   grade: string;
   currentClass?: string;
   gender?: string;
-  [key: string]: string | undefined;
+  isNew?: boolean;
+  newGrade?: string;
+  [key: string]: string | boolean | undefined;
 }
 
 interface ParsedCharacteristicRow {
@@ -183,16 +185,18 @@ export function CSVImportDialog({ open, onOpenChange, characteristics, importTyp
       return { headers: mappedHeaders, data };
     }
 
-    const requiredHeaders = ["Student ID", "First Name", "Last Name", "Gender", "Current Grade", "Current Class"];
-    const altHeaders: Record<string, string[]> = {
-      "Student ID": ["student id", "student_id", "id"],
-      "First Name": ["first_name", "first name", "firstname", "first"],
-      "Last Name": ["last_name", "last name", "lastname", "last"],
-      Gender: ["gender", "sex"],
-      "Current Grade": ["current grade", "current_grade", "grade", "grade_level", "gradelevel", "year"],
-      "Current Class": ["current class", "current_class", "class"],
-    };
-
+    const requiredHeaders = ["Student ID", "First Name", "Last Name", "Gender", "Current Grade"];
+      const altHeaders: Record<string, string[]> = {
+        "Student ID": ["student id", "student_id", "id"],
+        "First Name": ["first_name", "first name", "firstname", "first"],
+        "Last Name": ["last_name", "last name", "lastname", "last"],
+        Gender: ["gender", "sex"],
+        "Current Grade": ["current grade", "current_grade", "grade", "grade_level", "gradelevel", "year"],
+        "Current Class": ["current class", "current_class", "class"],
+        "New Grade": ["new grade", "new_grade", "next grade", "next_grade"],
+        "New Student": ["new student", "is new", "is_new", "incoming student"],
+      };
+  
     const mappedHeaders = headers.map((header) => {
       const lowerHeader = header.toLowerCase();
       for (const [standard, alternatives] of Object.entries(altHeaders)) {
@@ -217,6 +221,7 @@ export function CSVImportDialog({ open, onOpenChange, characteristics, importTyp
       });
 
       if (!requiredHeaders.every((required) => row[required])) continue;
+      if (!row["Current Class"] && row["Current Grade"].trim().toLowerCase() !== "r") continue;
 
       for (const characteristic of characteristics) {
         const value = row[characteristic.name];
@@ -231,7 +236,7 @@ export function CSVImportDialog({ open, onOpenChange, characteristics, importTyp
       }
 
       const extraValues = Object.fromEntries(
-        Object.entries(row).filter(([header, value]) => !requiredHeaders.includes(header) && value !== ""),
+        Object.entries(row).filter(([header, value]) => !requiredHeaders.includes(header) && header !== "Current Class" && header !== "New Student" && header !== "New Grade" && value !== ""),
       );
       data.push({
         studentId: row["Student ID"],
@@ -239,7 +244,9 @@ export function CSVImportDialog({ open, onOpenChange, characteristics, importTyp
         lastName: row["Last Name"],
         gender: row["Gender"],
         grade: row["Current Grade"],
-        currentClass: row["Current Class"],
+        currentClass: row["Current Class"] || undefined,
+        isNew: row["New Student"] ? ["true", "yes", "1", "y"].includes(row["New Student"].trim().toLowerCase()) : row["Current Grade"].trim().toLowerCase() === "r",
+        ...(row["New Grade"] ? { newGrade: row["New Grade"] } : {}),
         ...extraValues,
       });
     }
@@ -314,7 +321,7 @@ export function CSVImportDialog({ open, onOpenChange, characteristics, importTyp
     const templateHeaders =
       importType === "characteristics"
         ? ["Student ID", ...characteristics.map((characteristic) => characteristic.name)]
-        : ["Student ID", "First Name", "Last Name", "Gender", "Current Grade", "Current Class", ...characteristics.map((characteristic) => characteristic.name)];
+        : ["Student ID", "First Name", "Last Name", "Gender", "Current Grade", "Current Class", "New Grade", "New Student", ...characteristics.map((characteristic) => characteristic.name)];
     const csvContent = `${templateHeaders.map((header) => `"${header.replace(/"/g, '""')}"`).join(";")}\r\n`;
 
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
@@ -434,6 +441,7 @@ export function CSVImportDialog({ open, onOpenChange, characteristics, importTyp
                           "Gender",
                           "Current Grade",
                           "Current Class",
+                          "New Grade",
                           "Characteristic",
                           "Response",
                         ].includes(h) ? "default" : "secondary"}
@@ -467,6 +475,7 @@ export function CSVImportDialog({ open, onOpenChange, characteristics, importTyp
                                 <th className="px-3 py-2 text-left font-medium">Gender</th>
                                 <th className="px-3 py-2 text-left font-medium">Current Grade</th>
                                 <th className="px-3 py-2 text-left font-medium">Current Class</th>
+                                <th className="px-3 py-2 text-left font-medium">New Grade</th>
                               </>
                             )}
                           </tr>
@@ -488,6 +497,7 @@ export function CSVImportDialog({ open, onOpenChange, characteristics, importTyp
                                   <td className="px-3 py-2">{(row as ParsedStudent).gender || "—"}</td>
                                   <td className="px-3 py-2">{(row as ParsedStudent).grade}</td>
                                   <td className="px-3 py-2">{(row as ParsedStudent).currentClass || "—"}</td>
+                                  <td className="px-3 py-2">{(row as ParsedStudent).newGrade || "—"}</td>
                                 </>
                               )}
                             </tr>

@@ -49,8 +49,8 @@ import {
 } from "@shared/schema";
 import { CHARACTERISTIC_TYPES, characteristicValueToArray, defaultResponseColor, getStableResponseId, isCharacteristicApplicableToGrade, normalizeResponses } from "@shared/characteristics";
 import { billingDetailsSchema } from "@shared/billing-details";
-import { partitionStudentImportRows } from "./studentImport";
-import { getStudentTargetGrade, normalizeGradeValue } from "@shared/grades";
+import { importedStudentIsNew, importedStudentNewGrade, partitionStudentImportRows } from "./studentImport";
+import { getStudentTargetGrade, isIncomingGradeRAwaitingAllocation, normalizeGradeValue } from "@shared/grades";
 import { z } from "zod";
 import { isRuleMandatory } from "@shared/schema";
 
@@ -695,7 +695,7 @@ export async function registerRoutes(
         return res.status(403).json(learnerCapacityExceededResponse(context));
       }
       
-      const standardFields = ["studentId", "firstName", "lastName", "grade", "currentClass", "gender", "notes", "parentRequests", "parentNotes"];
+      const standardFields = ["studentId", "firstName", "lastName", "grade", "currentClass", "gender", "notes", "parentRequests", "parentNotes", "isNew", "New Student", "New Grade", "newGrade"];
       const existingCharacteristics = await storage.getCharacteristics(accountId);
       const characteristicByName = new Map(existingCharacteristics.map((char) => [char.name, char]));
       const importedValuesByCharacteristic = new Map<string, Set<string>>();
@@ -789,10 +789,14 @@ export async function registerRoutes(
           firstName: student.firstName,
           lastName: student.lastName,
           grade: student.grade,
-          currentClass: student.currentClass,
+          currentClass: student.currentClass || null,
           gender: student.gender,
+          isNew: importedStudentIsNew(student),
           notes: student.notes,
-          characteristics,
+          characteristics: {
+            ...characteristics,
+            ...(importedStudentNewGrade(student) !== undefined ? { newGrade: importedStudentNewGrade(student)! } : {}),
+          },
         });
       });
       
@@ -1754,9 +1758,10 @@ export async function registerRoutes(
       }
 
       const allStudents = await storage.getStudents(accountIdFor(req));
-      const students = requestedGrade
-        ? allStudents.filter((student) => getStudentTargetGrade(student) === requestedGrade)
-        : allStudents;
+      const students = allStudents.filter((student) => !isIncomingGradeRAwaitingAllocation(student));
+      const generationStudents = requestedGrade
+        ? students.filter((student) => getStudentTargetGrade(student) === requestedGrade)
+        : students;
       const classConfigs = await storage.getClassConfigs(accountIdFor(req));
       const rules = await storage.getRules(accountIdFor(req));
       const characteristics = await storage.getCharacteristics(accountIdFor(req));
@@ -1778,17 +1783,16 @@ export async function registerRoutes(
           : "No class configurations found for the specified target grade" });
       }
 
-      if (students.length === 0) {
-        return res.status(400).json({ error: "No students found for the specified target grade" });
+      if (generationStudents.length === 0) {
+        return res.status(400).json({ error: "There are no learners with a destination grade to place. Incoming Grade R learners can remain unallocated until a destination grade is assigned." });
       }
-
-      const mappedRequests = mapTeacherPlacementRequests(students, placementRequests, teachers, targetConfigs);
+      const mappedRequests = mapTeacherPlacementRequests(generationStudents, placementRequests, teachers, targetConfigs);
       if (!mappedRequests.preferences) {
         return res.status(400).json({ error: mappedRequests.error });
       }
       const teacherPlacementPreferences = mappedRequests.preferences;
 
-      const studentsWithoutTargetGrade = students.filter((student) => !getStudentTargetGrade(student));
+      const studentsWithoutTargetGrade = generationStudents.filter((student) => !getStudentTargetGrade(student));
       if (studentsWithoutTargetGrade.length > 0) {
         return res.status(400).json({
           error: `New Grade is required for ${studentsWithoutTargetGrade.length} learner${studentsWithoutTargetGrade.length === 1 ? "" : "s"}`,
@@ -1799,9 +1803,9 @@ export async function registerRoutes(
         return res.status(400).json({ error: "A maximum of 50 active characteristics is supported" });
       }
 
-      const targetGrades = Array.from(new Set(students.map(getStudentTargetGrade)));
+      const targetGrades = Array.from(new Set(generationStudents.map(getStudentTargetGrade)));
       for (const targetGrade of targetGrades) {
-        const learnerCount = students.filter((student) => getStudentTargetGrade(student) === targetGrade).length;
+        const learnerCount = generationStudents.filter((student) => getStudentTargetGrade(student) === targetGrade).length;
         const gradeClasses = targetConfigs.filter((config) => normalizeGradeValue(config.grade) === targetGrade);
         if (gradeClasses.length === 0) {
           return res.status(400).json({ error: `No target classes are configured for Grade ${targetGrade}` });
@@ -1824,7 +1828,7 @@ export async function registerRoutes(
       const conflicts: ConflictWarning[] = [];
       const unassignedStudentIds: string[] = [];
       for (const targetGrade of targetGrades) {
-        const gradeStudents = students.filter((student) => getStudentTargetGrade(student) === targetGrade);
+        const gradeStudents = generationStudents.filter((student) => getStudentTargetGrade(student) === targetGrade);
         const gradeStudentIds = new Set(gradeStudents.map((student) => student.id));
         const gradeClasses = targetConfigs.filter((config) => normalizeGradeValue(config.grade) === targetGrade);
         const gradeRules = rules.filter(
@@ -1866,7 +1870,7 @@ export async function registerRoutes(
         overallBalance,
         unassignedStudentIds,
       };
-      const validation = await persistCompleteGeneration(students, result, () =>
+      const validation = await persistCompleteGeneration(generationStudents, result, () =>
         storage.replacePlacements(
           accountIdFor(req),
           result.classes.flatMap((generatedClass) => generatedClass.students.map((student) => ({
@@ -1874,7 +1878,7 @@ export async function registerRoutes(
             classId: generatedClass.classConfig.id,
           }))),
           generationRevision,
-          requestedGrade ? students.map((student) => student.id) : undefined,
+          requestedGrade ? generationStudents.map((student) => student.id) : undefined,
         ),
       );
       if (!validation.complete) {

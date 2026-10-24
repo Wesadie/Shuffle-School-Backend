@@ -27,7 +27,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { getStudentTargetGrade, normalizeGradeValue } from "@shared/grades";
+import { getStudentTargetGrade, isIncomingGradeRAwaitingAllocation, normalizeGradeValue } from "@shared/grades";
 import type { ClassConfig, ClassGenerationResult, InsertClassConfig, Student, Rule, Characteristic, Teacher } from "@shared/schema";
 
 export default function GeneratePage() {
@@ -230,16 +230,18 @@ export default function GeneratePage() {
     generateMutation.mutate();
   };
 
-  const studentsWithoutTargetGrade = students.filter((student) => !getStudentTargetGrade(student));
-  const grades = Array.from(new Set(students.map(getStudentTargetGrade).filter(Boolean))).sort();
+  const studentsAwaitingAllocation = students.filter(isIncomingGradeRAwaitingAllocation);
+  const studentsWithoutTargetGrade = students.filter((student) => !isIncomingGradeRAwaitingAllocation(student) && !getStudentTargetGrade(student));
+  const placementCandidates = students.filter((student) => !isIncomingGradeRAwaitingAllocation(student));
+  const grades = Array.from(new Set(placementCandidates.map(getStudentTargetGrade).filter(Boolean))).sort();
   const gradeCapacityIssues = grades.flatMap((grade) => {
-    const learnerCount = students.filter((student) => getStudentTargetGrade(student) === grade).length;
+    const learnerCount = placementCandidates.filter((student) => getStudentTargetGrade(student) === grade).length;
     const capacity = classConfigs
       .filter((config) => normalizeGradeValue(config.grade) === grade)
       .reduce((sum, config) => sum + (config.capacity || 30), 0);
     return capacity < learnerCount ? [{ grade, learnerCount, capacity }] : [];
   });
-  const canGenerate = students.length > 0 && studentsWithoutTargetGrade.length === 0 && gradeCapacityIssues.length === 0;
+  const canGenerate = placementCandidates.length > 0 && studentsWithoutTargetGrade.length === 0 && gradeCapacityIssues.length === 0;
 
   const isLoading = configsLoading || studentsLoading;
   const accountContext = user?.accountContext;
@@ -337,7 +339,7 @@ export default function GeneratePage() {
         </Alert>
       )}
 
-      {classConfigs.length === 0 && students.length > 0 && (
+      {classConfigs.length === 0 && placementCandidates.length > 0 && (
         <Alert>
           <AlertCircle className="h-4 w-4" />
           <AlertTitle>No target classes defined</AlertTitle>
@@ -353,6 +355,16 @@ export default function GeneratePage() {
           <AlertTitle>New Grade required</AlertTitle>
           <AlertDescription>
             {studentsWithoutTargetGrade.length} learner{studentsWithoutTargetGrade.length === 1 ? " is" : "s are"} missing a valid New Grade.
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {studentsAwaitingAllocation.length > 0 && (
+        <Alert>
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>Incoming Grade R learners awaiting allocation</AlertTitle>
+          <AlertDescription>
+            {studentsAwaitingAllocation.length} learner{studentsAwaitingAllocation.length === 1 ? " is" : "s are"} intentionally not included in class generation until a destination grade is assigned.
           </AlertDescription>
         </Alert>
       )}

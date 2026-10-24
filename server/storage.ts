@@ -105,6 +105,7 @@ export class DatabaseStorage {
       currentClass: insertStudent.currentClass ?? null, gender: insertStudent.gender ?? null,
       characteristics: insertStudent.characteristics ?? {}, notes: insertStudent.notes ?? null,
       parentRequests: insertStudent.parentRequests ?? null, parentNotes: insertStudent.parentNotes ?? null,
+      isNew: insertStudent.isNew ?? false, isLeaving: insertStudent.isLeaving ?? false,
     }).returning();
     return student;
   }

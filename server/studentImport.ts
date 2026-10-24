@@ -11,6 +11,19 @@ export interface StudentImportPartition<T extends StudentIdRow> {
 
 const normalizeStudentId = (studentId?: string | null) => (studentId ?? "").trim().toLowerCase();
 
+export const isIncomingGradeRStudent = (grade?: string | null, currentClass?: string | null) =>
+  (grade ?? "").replace(/^grade\s+/i, "").trim().toLowerCase() === "r"
+  && !(currentClass ?? "").trim();
+
+export const importedStudentIsNew = (student: { grade?: string | null; currentClass?: string | null; isNew?: boolean }) =>
+  isIncomingGradeRStudent(student.grade, student.currentClass) || student.isNew === true;
+
+export const importedStudentNewGrade = (student: { grade?: string | null; currentClass?: string | null; newGrade?: string }) => {
+  const newGrade = student.newGrade?.trim();
+  if (newGrade) return newGrade;
+  return isIncomingGradeRStudent(student.grade, student.currentClass) ? "" : undefined;
+};
+
 export const partitionStudentImportRows = <T extends StudentIdRow>(
   uploadedRows: T[],
   existingRows: StudentIdRow[],

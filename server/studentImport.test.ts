@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { partitionStudentImportRows } from "./studentImport";
+import { getStudentTargetGrade, isIncomingGradeRAwaitingAllocation } from "@shared/grades";
+import { importedStudentIsNew, importedStudentNewGrade, isIncomingGradeRStudent, partitionStudentImportRows } from "./studentImport";
 
 const row = (studentId: string, firstName = "Learner") => ({ studentId, firstName });
 
@@ -39,4 +40,29 @@ test("reports pre-existing duplicate IDs for manual review", () => {
   assert.deepEqual(result.rowsToImport, []);
   assert.equal(result.skippedExisting, 2);
   assert.deepEqual(result.existingDuplicateStudentIds, ["s-1"]);
+});
+
+test("incoming Grade R import allows no class, sets New Student, and waits without destination", () => {
+  const student = { grade: "R", currentClass: "", isNew: undefined };
+  const imported = {
+    ...student,
+    isNew: importedStudentIsNew(student),
+    characteristics: { newGrade: importedStudentNewGrade(student) ?? "" },
+  };
+  assert.equal(isIncomingGradeRStudent(student.grade, student.currentClass), true);
+  assert.equal(imported.isNew, true);
+  assert.equal(isIncomingGradeRAwaitingAllocation(imported), true);
+  assert.equal(getStudentTargetGrade(imported), "");
+});
+
+test("Grade R with explicit New Grade 1 can be targeted for solver placement", () => {
+  const student = { grade: "R", currentClass: "", newGrade: "1" };
+  const imported = {
+    ...student,
+    isNew: importedStudentIsNew(student),
+    characteristics: { newGrade: importedStudentNewGrade(student) ?? "" },
+  };
+  assert.equal(imported.isNew, true);
+  assert.equal(isIncomingGradeRAwaitingAllocation(imported), false);
+  assert.equal(getStudentTargetGrade(imported), "1");
 });
