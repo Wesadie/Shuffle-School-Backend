@@ -144,6 +144,23 @@ test("improves configured category balance without reducing gender balance", asy
   }
 });
 
+test("balances learners from the same previous school across target classes and reports the distribution", async () => {
+  const students = Array.from({ length: 8 }, (_, index) =>
+    makeStudent(`cowan-${index + 1}`, index % 2 ? "female" : "male", { "Previous School": "Cowan House" }),
+  );
+  const result = await generateBalancedClasses(
+    students,
+    [makeClass("Grade 1 A", 2), makeClass("Grade 1 B", 2), makeClass("Grade 1 C", 2), makeClass("Grade 1 D", 2)],
+    [],
+    [],
+  );
+
+  for (const generatedClass of result.classes) {
+    assert.equal(generatedClass.students.filter((student) => student.characteristics["Previous School"] === "Cowan House").length, 2);
+    assert.equal(generatedClass.balanceScores.previousSchool, 100);
+  }
+});
+
 test("keeps unknown gender values as normalized independent categories", async () => {
   const students = [
     makeStudent("male", " M "),

@@ -49,6 +49,7 @@ import {
 } from "@shared/schema";
 import { CHARACTERISTIC_TYPES, characteristicValueToArray, defaultResponseColor, getStableResponseId, isCharacteristicApplicableToGrade, normalizeResponses } from "@shared/characteristics";
 import { billingDetailsSchema } from "@shared/billing-details";
+import { calculatePreviousSchoolBalanceScore, calculatePreviousSchoolClassBalanceScore, getPreviousSchoolDistribution } from "./previousSchoolBalance";
 import { importedStudentIsNew, importedStudentNewGrade, partitionStudentImportRows } from "./studentImport";
 import { getStudentTargetGrade, isIncomingGradeRAwaitingAllocation, normalizeGradeValue } from "@shared/grades";
 import { z } from "zod";
@@ -2976,6 +2977,13 @@ export async function generateBalancedClasses(
     return Math.max(0, 100 - (totalDeviation / (2 * totalTargetSize)) * 100);
   };
 
+  const previousSchoolCohortDistribution = getPreviousSchoolDistribution(students);
+  const hasPreviousSchoolData = Object.keys(previousSchoolCohortDistribution).length > 0;
+  const calculatePreviousSchoolLayoutScore = (studentsByClass: Map<string, Student[]>) =>
+    hasPreviousSchoolData
+      ? calculatePreviousSchoolBalanceScore(studentsByClass, classConfigList, targetClassSizes, students)
+      : 100;
+
   const conflicts: ConflictWarning[] = [];
   const unassignedStudentIds = new Set<string>();
   const groupAssignments = new Map<number, string>();
@@ -2999,6 +3007,7 @@ export async function generateBalancedClasses(
       separationViolations: number;
       sizeOverflow: number;
       genderScore: number;
+      previousSchoolScore: number;
       characteristicScores: number[];
       teacherPlacementScore: number;
       importantScore: number;
@@ -3037,6 +3046,7 @@ export async function generateBalancedClasses(
         separationViolations,
         sizeOverflow: Math.max(0, candidateStudents.length - targetSize),
         genderScore: calculateGenderLayoutScore(candidateLayout),
+        previousSchoolScore: calculatePreviousSchoolLayoutScore(candidateLayout),
         characteristicScores,
         teacherPlacementScore,
         importantScore: calculateImportantScore(group, currentStudents),
@@ -3069,9 +3079,10 @@ export async function generateBalancedClasses(
     for (const candidate of sizeCandidates.slice(1)) {
       if (
         candidate.genderScore > best.genderScore ||
-        (candidate.genderScore === best.genderScore && compareVectors(candidate.characteristicScores, best.characteristicScores) > 0) ||
-        (candidate.genderScore === best.genderScore && compareVectors(candidate.characteristicScores, best.characteristicScores) === 0 && candidate.teacherPlacementScore > best.teacherPlacementScore) ||
-        (candidate.genderScore === best.genderScore && compareVectors(candidate.characteristicScores, best.characteristicScores) === 0 && candidate.teacherPlacementScore === best.teacherPlacementScore && candidate.importantScore > best.importantScore)
+        (candidate.genderScore === best.genderScore && candidate.previousSchoolScore > best.previousSchoolScore) ||
+        (candidate.genderScore === best.genderScore && candidate.previousSchoolScore === best.previousSchoolScore && compareVectors(candidate.characteristicScores, best.characteristicScores) > 0) ||
+        (candidate.genderScore === best.genderScore && candidate.previousSchoolScore === best.previousSchoolScore && compareVectors(candidate.characteristicScores, best.characteristicScores) === 0 && candidate.teacherPlacementScore > best.teacherPlacementScore) ||
+        (candidate.genderScore === best.genderScore && candidate.previousSchoolScore === best.previousSchoolScore && compareVectors(candidate.characteristicScores, best.characteristicScores) === 0 && candidate.teacherPlacementScore === best.teacherPlacementScore && candidate.importantScore > best.importantScore)
       ) {
         best = candidate;
       }
@@ -3097,6 +3108,7 @@ export async function generateBalancedClasses(
     let valid = true;
     let sizePenalty = 0;
     let genderScore = 100;
+    let previousSchoolScore = 100;
     const characteristicScores = includeCharacteristicScores ? activeCharacteristics.map(() => 0) : [];
     for (const config of classConfigList) {
       const classStudents = studentsByClass.get(config.id)!;
@@ -3109,6 +3121,7 @@ export async function generateBalancedClasses(
       }
     }
     genderScore = calculateGenderLayoutScore(studentsByClass);
+    previousSchoolScore = calculatePreviousSchoolLayoutScore(studentsByClass);
 
     for (const rule of mandatoryRules) {
       const class1 = classByStudent.get(rule.studentId1);
@@ -3146,6 +3159,7 @@ export async function generateBalancedClasses(
       classByStudent,
       sizePenalty,
       genderScore,
+      previousSchoolScore,
       characteristicScores,
       teacherPlacementScore,
       satisfiedTeacherPreferenceIndexes,
@@ -3157,7 +3171,7 @@ export async function generateBalancedClasses(
   const compareObjective = (
     left: ReturnType<typeof evaluateLayout>,
     right: ReturnType<typeof evaluateLayout>,
-    pass: "characteristics" | "teacher-placement" | "gender",
+    pass: "characteristics" | "teacher-placement" | "gender" | "previous-school",
   ) => {
     if (pass === "teacher-placement") {
       if (left.teacherPlacementScore !== right.teacherPlacementScore) {
@@ -3166,16 +3180,21 @@ export async function generateBalancedClasses(
       if (left.importantScore !== right.importantScore) return left.importantScore - right.importantScore;
       return 0;
     }
+    if (pass === "previous-school") {
+      if (left.previousSchoolScore !== right.previousSchoolScore) return left.previousSchoolScore - right.previousSchoolScore;
+      return left.genderScore - right.genderScore;
+    }
     if (pass === "gender") {
       if (left.genderScore !== right.genderScore) return left.genderScore - right.genderScore;
       return 0;
     }
     if (left.genderScore !== right.genderScore) return left.genderScore - right.genderScore;
+    if (left.previousSchoolScore !== right.previousSchoolScore) return left.previousSchoolScore - right.previousSchoolScore;
     return compareVectors(left.characteristicScores, right.characteristicScores);
   };
 
   const maxRefinementEvaluations = 20_000;
-  const runImprovementPass = (pass: "characteristics" | "teacher-placement" | "gender") => {
+  const runImprovementPass = (pass: "characteristics" | "teacher-placement" | "gender" | "previous-school") => {
     let currentAssignments = new Map(groupAssignments);
     const includeCharacteristics = pass === "characteristics";
     let currentMetrics = evaluateLayout(currentAssignments, includeCharacteristics);
@@ -3202,12 +3221,20 @@ export async function generateBalancedClasses(
         if (pass !== "teacher-placement" && Array.from(currentMetrics.satisfiedImportantRuleIds).some((id) =>
           !candidateMetrics.satisfiedImportantRuleIds.has(id),
         )) return;
-        if (pass === "characteristics" && candidateMetrics.genderScore < currentMetrics.genderScore) return;
+        if (pass === "characteristics" && (
+          candidateMetrics.genderScore < currentMetrics.genderScore ||
+          candidateMetrics.previousSchoolScore < currentMetrics.previousSchoolScore
+        )) return;
         if (pass === "teacher-placement" && (
           candidateMetrics.genderScore < currentMetrics.genderScore ||
+          candidateMetrics.previousSchoolScore < currentMetrics.previousSchoolScore ||
           candidateMetrics.teacherPlacementScore <= currentMetrics.teacherPlacementScore
         )) return;
         if (pass === "gender" && candidateMetrics.genderScore <= currentMetrics.genderScore) return;
+        if (pass === "previous-school" && (
+          candidateMetrics.previousSchoolScore <= currentMetrics.previousSchoolScore ||
+          candidateMetrics.genderScore < currentMetrics.genderScore
+        )) return;
         if (compareObjective(candidateMetrics, bestMetrics, pass) <= 0) return;
         bestAssignments = candidateAssignments;
         bestMetrics = candidateMetrics;
@@ -3255,6 +3282,7 @@ export async function generateBalancedClasses(
   runImprovementPass("teacher-placement");
   runImprovementPass("characteristics");
   runImprovementPass("gender");
+  if (hasPreviousSchoolData) runImprovementPass("previous-school");
 
   const finalMetrics = evaluateLayout(groupAssignments);
   for (const preference of teacherPlacementPreferences) {
@@ -3348,7 +3376,17 @@ export async function generateBalancedClasses(
     for (const char of activeCharacteristics) {
       balanceScores[char.id] = calculateCharacteristicScore(classStudents, char, numericTargets);
     }
-    
+    const previousSchoolDistribution = getPreviousSchoolDistribution(classStudents);
+    if (Object.keys(previousSchoolCohortDistribution).length > 0) {
+      balanceScores.previousSchool = calculatePreviousSchoolClassBalanceScore(
+        classStudents,
+        config,
+        classConfigList,
+        targetClassSizes,
+        students,
+      );
+    }
+
     return {
       classConfig: config,
       students: classStudents,

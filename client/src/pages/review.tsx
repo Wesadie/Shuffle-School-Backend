@@ -907,14 +907,18 @@ export default function ReviewPage() {
   }, [rules, placements, students, classesWithStudents]);
 
   const balanceMetrics = useMemo(() => {
-    if (characteristics.length === 0 || classesWithStudents.length === 0) return [];
-
     const activeCharacteristics = [...characteristics]
       .filter((char) => !char.tagOnly)
       .sort((a, b) => (b.priority || 0) - (a.priority || 0))
       .slice(0, 50);
+    const previousSchoolCharacteristic = characteristics.find((char) => char.name.trim().toLowerCase() === "previous school");
+  const hasPreviousSchoolValues = students.some((student) => Object.keys(getStudentPreviousSchoolDistribution([student])).length > 0);
+  const balanceCharacteristics = previousSchoolCharacteristic && hasPreviousSchoolValues && !activeCharacteristics.some((char) => char.id === previousSchoolCharacteristic.id)
+    ? [...activeCharacteristics, previousSchoolCharacteristic]
+    : activeCharacteristics;
+    if (balanceCharacteristics.length === 0 || classesWithStudents.length === 0) return [];
 
-    return activeCharacteristics.map((char) => {
+    return balanceCharacteristics.map((char) => {
       const distribution = classesWithStudents.map(({ config, students: classStudents }) => {
         const values: Record<string, number> = {};
         classStudents.forEach((student) => {
@@ -964,7 +968,9 @@ export default function ReviewPage() {
       // so a class holding a single value can no longer score 100%.
       const overallCounts: Record<string, number> = {};
       let overallTotal = 0;
-      students.forEach((student) => {
+      const isPreviousSchool = char.name.trim().toLowerCase() === "previous school";
+      const cohortForCharacteristic = students;
+      cohortForCharacteristic.forEach((student) => {
         if (!isCharacteristicApplicableToGrade(char, student.grade)) return;
         const values = characteristicValueToArray(getStudentCharacteristicValue(student, char));
         if (values.length === 0) {
@@ -979,6 +985,7 @@ export default function ReviewPage() {
       });
 
       const classScores = distribution
+        .filter((item) => !isPreviousSchool || Object.keys(item.values).length > 0)
         .filter((d) => Object.values(d.values).reduce((sum, count) => sum + count, 0) > 0)
         .map((d) => {
           const classTotal = Object.values(d.values).reduce((sum, count) => sum + count, 0);
@@ -1280,6 +1287,19 @@ export default function ReviewPage() {
     [similarityMatches],
   );
 
+  const getStudentPreviousSchoolDistribution = (classStudents: Student[]) => {
+    const distribution: Record<string, number> = {};
+    classStudents.forEach((student) => {
+      const entry = Object.entries(student.characteristics || {}).find(([name]) => name.trim().toLowerCase() === "previous school");
+      const school = entry ? (Array.isArray(entry[1]) ? entry[1][0] : entry[1]) : "";
+      if (typeof school === "string" && school.trim()) {
+        const label = school.trim();
+        distribution[label] = (distribution[label] || 0) + 1;
+      }
+    });
+    return distribution;
+  };
+
   const classStatistics = useMemo(() => {
     const percentageFieldNames = ["Aggregate %", "Maths %", "English %", "Afrikaans/Isizulu %"];
     const visibleCharacteristics = characteristics.filter((characteristic) => !characteristic.adminOnly);
@@ -1356,6 +1376,9 @@ export default function ReviewPage() {
         femaleCount,
         totalStudents: classStudents.length,
         characteristicStats,
+        previousSchoolDistribution: Object.entries(getStudentPreviousSchoolDistribution(classStudents))
+          .map(([school, count]) => ({ school, count }))
+          .sort((a, b) => b.count - a.count || a.school.localeCompare(b.school)),
       };
     });
   }, [classesWithStudents, characteristics]);
@@ -1809,6 +1832,7 @@ export default function ReviewPage() {
                       <div key={stat.classId} className="rounded border px-2 py-1.5 text-[11px]" data-testid={`class-stats-${stat.classId}`}>
                         <div className="flex justify-between font-medium"><span className="truncate">{stat.className}</span><span>{stat.totalStudents}</span></div>
                         <div className="mt-0.5 flex justify-between text-muted-foreground"><span><span className="text-blue-600">{stat.maleCount} boys</span> · <span className="text-rose-600">{stat.femaleCount} girls</span></span>{stat.averages["Aggregate %"] !== null && <span>{stat.averages["Aggregate %"]}% avg</span>}</div>
+                        {stat.previousSchoolDistribution.length > 0 && <div className="mt-1 border-t pt-1 text-[10px] text-muted-foreground"><span className="font-medium text-foreground">Previous School: </span>{stat.previousSchoolDistribution.map(({ school, count }) => `${school} ${count}`).join(" · ")}</div>}
                       </div>
                     ))}
                   </div>

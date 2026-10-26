@@ -410,7 +410,7 @@ export interface ClassGenerationResult {
 }
 
 export interface ConflictWarning {
-  type: "separation" | "pairing" | "capacity" | "teacher-placement" | "gender-balance";
+  type: "separation" | "pairing" | "capacity" | "teacher-placement" | "gender-balance" | "previous-school-balance";
   message: string;
   studentIds: string[];
   ruleId?: string;
