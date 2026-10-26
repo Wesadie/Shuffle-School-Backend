@@ -912,10 +912,10 @@ export default function ReviewPage() {
       .sort((a, b) => (b.priority || 0) - (a.priority || 0))
       .slice(0, 50);
     const previousSchoolCharacteristic = characteristics.find((char) => char.name.trim().toLowerCase() === "previous school");
-  const hasPreviousSchoolValues = students.some((student) => Object.keys(getStudentPreviousSchoolDistribution([student])).length > 0);
-  const balanceCharacteristics = previousSchoolCharacteristic && hasPreviousSchoolValues && !activeCharacteristics.some((char) => char.id === previousSchoolCharacteristic.id)
-    ? [...activeCharacteristics, previousSchoolCharacteristic]
-    : activeCharacteristics;
+    const hasPreviousSchoolValues = students.some((student) => Object.keys(getStudentPreviousSchoolDistribution([student])).length > 0);
+    const balanceCharacteristics = previousSchoolCharacteristic && hasPreviousSchoolValues && !activeCharacteristics.some((char) => char.id === previousSchoolCharacteristic.id)
+      ? [...activeCharacteristics, previousSchoolCharacteristic]
+      : activeCharacteristics;
     if (balanceCharacteristics.length === 0 || classesWithStudents.length === 0) return [];
 
     return balanceCharacteristics.map((char) => {

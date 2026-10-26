@@ -161,6 +161,24 @@ test("balances learners from the same previous school across target classes and 
   }
 });
 
+test("distributes multiple previous schools proportionally across classes", async () => {
+  const students = [
+    ...Array.from({ length: 8 }, (_, index) => makeStudent(`cowan-${index}`, "female", { "Previous School": "Cowan House" })),
+    ...Array.from({ length: 4 }, (_, index) => makeStudent(`other-${index}`, "male", { "Previous School": "Other School" })),
+  ];
+  const result = await generateBalancedClasses(
+    students,
+    [makeClass("Grade 1 A", 3), makeClass("Grade 1 B", 3), makeClass("Grade 1 C", 3), makeClass("Grade 1 D", 3)],
+    [],
+    [],
+  );
+
+  for (const generatedClass of result.classes) {
+    assert.equal(generatedClass.students.filter((student) => student.characteristics["Previous School"] === "Cowan House").length, 2);
+    assert.equal(generatedClass.students.filter((student) => student.characteristics["Previous School"] === "Other School").length, 1);
+  }
+});
+
 test("keeps unknown gender values as normalized independent categories", async () => {
   const students = [
     makeStudent("male", " M "),

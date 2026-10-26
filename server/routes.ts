@@ -3182,7 +3182,8 @@ export async function generateBalancedClasses(
     }
     if (pass === "previous-school") {
       if (left.previousSchoolScore !== right.previousSchoolScore) return left.previousSchoolScore - right.previousSchoolScore;
-      return left.genderScore - right.genderScore;
+      if (left.genderScore !== right.genderScore) return left.genderScore - right.genderScore;
+      return compareVectors(left.characteristicScores, right.characteristicScores);
     }
     if (pass === "gender") {
       if (left.genderScore !== right.genderScore) return left.genderScore - right.genderScore;
@@ -3196,7 +3197,7 @@ export async function generateBalancedClasses(
   const maxRefinementEvaluations = 20_000;
   const runImprovementPass = (pass: "characteristics" | "teacher-placement" | "gender" | "previous-school") => {
     let currentAssignments = new Map(groupAssignments);
-    const includeCharacteristics = pass === "characteristics";
+    const includeCharacteristics = pass === "characteristics" || pass === "previous-school";
     let currentMetrics = evaluateLayout(currentAssignments, includeCharacteristics);
     let changed = true;
     let evaluations = 0;
@@ -3222,6 +3223,10 @@ export async function generateBalancedClasses(
           !candidateMetrics.satisfiedImportantRuleIds.has(id),
         )) return;
         if (pass === "characteristics" && (
+          candidateMetrics.genderScore < currentMetrics.genderScore ||
+          candidateMetrics.previousSchoolScore < currentMetrics.previousSchoolScore
+        )) return;
+        if (pass === "previous-school" && (
           candidateMetrics.genderScore < currentMetrics.genderScore ||
           candidateMetrics.previousSchoolScore < currentMetrics.previousSchoolScore
         )) return;
@@ -3368,7 +3373,7 @@ export async function generateBalancedClasses(
   }
 
   // Build result
-  const generatedClasses: GeneratedClass[] = classConfigs.map(config => {
+  const generatedClasses: GeneratedClass[] = classConfigList.map(config => {
     const classStudents = classAssignments.get(config.id) || [];
     
     // Calculate balance scores for each active characteristic using the same scoring model as generation.
@@ -3376,8 +3381,7 @@ export async function generateBalancedClasses(
     for (const char of activeCharacteristics) {
       balanceScores[char.id] = calculateCharacteristicScore(classStudents, char, numericTargets);
     }
-    const previousSchoolDistribution = getPreviousSchoolDistribution(classStudents);
-    if (Object.keys(previousSchoolCohortDistribution).length > 0) {
+    if (hasPreviousSchoolData) {
       balanceScores.previousSchool = calculatePreviousSchoolClassBalanceScore(
         classStudents,
         config,
