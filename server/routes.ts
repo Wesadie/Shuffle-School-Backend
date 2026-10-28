@@ -20,7 +20,7 @@ import {
 import { cancelSubscription } from "./licenseService";
 import { getAccountInvoice, getAccountInvoices } from "./invoiceService";
 import { generateInvoicePdf } from "./invoicePdf";
-import { mapTeacherPlacementRequests, partitionPlacementGeneration, persistCompleteGeneration, type TeacherPlacementPreference } from "./generationSafety";
+import { mapTeacherPlacementRequests, persistCompleteGeneration, type TeacherPlacementPreference } from "./generationSafety";
 import { InvalidPlacementError, PlacementNotFoundError, PlacementRevisionConflictError } from "./placementSafety";
 
 import {
@@ -39,7 +39,6 @@ import {
   type ClassConfig,
   type Characteristic,
   type CharacteristicResponse,
-  type Placement,
   type ConflictWarning,
   type ClassGenerationResult,
   type GeneratedClass,
@@ -1750,39 +1749,21 @@ export async function registerRoutes(
 
     try {
       const generationRevision = readPlacementRevision(req.body?.expectedRevision);
-      const mode = req.body?.mode === undefined ? "full" : req.body.mode;
-      if (mode !== "unallocated" && mode !== "regenerate-grade" && mode !== "full") {
-        return res.status(400).json({ error: "Generation mode must be unallocated, regenerate-grade, or full" });
-      }
       const hasRequestedGrade = req.body && Object.prototype.hasOwnProperty.call(req.body, "grade");
       if (hasRequestedGrade && typeof req.body.grade !== "string") {
         return res.status(400).json({ error: "Grade must be a valid target grade" });
       }
       const requestedGrade = hasRequestedGrade ? normalizeGradeValue(req.body.grade) : "";
-      if (mode !== "full" && (!requestedGrade || requestedGrade.toLowerCase() === "all")) {
-        return res.status(400).json({ error: "Select a destination grade for grade-specific generation" });
-      }
       if (hasRequestedGrade && (!requestedGrade || requestedGrade.toLowerCase() === "all")) {
         return res.status(400).json({ error: "Grade must be a valid target grade" });
       }
 
-      const accountId = accountIdFor(req);
-      const allStudents = await storage.getStudents(accountId);
-      const eligibleStudents = allStudents.filter((student) => !isIncomingGradeRAwaitingAllocation(student));
-      const classConfigs = await storage.getClassConfigs(accountId);
-      const existingPlacements = await storage.getPlacements(accountId);
-      if (mode !== "full" && new Set(existingPlacements.map((placement) => placement.studentId)).size !== existingPlacements.length) {
-        return res.status(409).json({ error: "Duplicate saved placements were found. Review them before generating grade-specific placements." });
-      }
-      const partition = partitionPlacementGeneration(
-        mode,
-        mode === "full" ? null : requestedGrade,
-        eligibleStudents,
-        existingPlacements,
-        classConfigs,
-      );
-      const generationStudents = partition.affectedStudents;
-      const protectedPlacements = partition.protectedPlacements;
+      const allStudents = await storage.getStudents(accountIdFor(req));
+      const students = allStudents.filter((student) => !isIncomingGradeRAwaitingAllocation(student));
+      const generationStudents = requestedGrade
+        ? students.filter((student) => getStudentTargetGrade(student) === requestedGrade)
+        : students;
+      const classConfigs = await storage.getClassConfigs(accountIdFor(req));
       const rules = await storage.getRules(accountIdFor(req));
       const characteristics = await storage.getCharacteristics(accountIdFor(req));
       const teachers = await storage.getTeachers(accountIdFor(req));
@@ -1793,7 +1774,9 @@ export async function registerRoutes(
         console.error("[generate-classes] placement requests unavailable", error);
         return res.status(503).json({ error: "Placement requests are unavailable; class generation was not run" });
       }
-      const targetConfigs = partition.affectedClasses;
+      const targetConfigs = requestedGrade
+        ? classConfigs.filter((config) => normalizeGradeValue(config.grade) === requestedGrade)
+        : classConfigs;
 
       if (targetConfigs.length === 0) {
         return res.status(400).json({ error: requestedGrade
@@ -1801,23 +1784,9 @@ export async function registerRoutes(
           : "No class configurations found for the specified target grade" });
       }
 
-      if (generationStudents.length === 0 && mode === "unallocated") {
-        return res.json({
-          classes: [],
-          conflicts: [],
-          overallBalance: 100,
-          unassignedStudentIds: [],
-          affectedLearnerCount: 0,
-          preservedPlacementCount: protectedPlacements.length,
-        });
-      }
       if (generationStudents.length === 0) {
-        return res.status(400).json({ error: "No eligible learners are available for this generation mode and destination grade." });
+        return res.status(400).json({ error: "There are no learners with a destination grade to place. Incoming Grade R learners can remain unallocated until a destination grade is assigned." });
       }
-      const protectedStudents = eligibleStudents.filter((student) => !partition.affectedIds.has(student.id));
-      const affectedBalanceCohort = [...generationStudents, ...protectedStudents.filter((student) =>
-        targetConfigs.some((config) => getStudentTargetGrade(student) === normalizeGradeValue(config.grade)),
-      )];
       const mappedRequests = mapTeacherPlacementRequests(generationStudents, placementRequests, teachers, targetConfigs);
       if (!mappedRequests.preferences) {
         return res.status(400).json({ error: mappedRequests.error });
@@ -1861,20 +1830,13 @@ export async function registerRoutes(
       const unassignedStudentIds: string[] = [];
       for (const targetGrade of targetGrades) {
         const gradeStudents = generationStudents.filter((student) => getStudentTargetGrade(student) === targetGrade);
-        const gradeBalanceCohort = affectedBalanceCohort.filter((student) =>
-          getStudentTargetGrade(student) === targetGrade,
-        );
-        const gradeStudentIds = new Set(gradeBalanceCohort.map((student) => student.id));
+        const gradeStudentIds = new Set(gradeStudents.map((student) => student.id));
         const gradeClasses = targetConfigs.filter((config) => normalizeGradeValue(config.grade) === targetGrade);
         const gradeRules = rules.filter(
-          (rule) => gradeBalanceCohort.some((student) => student.id === rule.studentId1)
-            && gradeBalanceCohort.some((student) => student.id === rule.studentId2),
+          (rule) => gradeStudentIds.has(rule.studentId1) && gradeStudentIds.has(rule.studentId2),
         );
         const gradePlacementPreferences = teacherPlacementPreferences.filter((preference) =>
           gradeStudentIds.has(preference.studentId),
-        );
-        const gradeProtectedPlacements = protectedPlacements.filter((placement) =>
-          gradeStudentIds.has(placement.studentId) && gradeClasses.some((config) => config.id === placement.classId),
         );
         const gradeResult = await generateBalancedClasses(
           gradeStudents,
@@ -1882,34 +1844,15 @@ export async function registerRoutes(
           gradeRules,
           characteristics,
           gradePlacementPreferences,
-          gradeProtectedPlacements,
-          gradeBalanceCohort,
         );
         generatedClasses.push(...gradeResult.classes);
         conflicts.push(...gradeResult.conflicts);
         unassignedStudentIds.push(...gradeResult.unassignedStudentIds);
       }
 
-      const generatedAffectedIds = new Set(generatedClasses.flatMap((generatedClass) =>
-        generatedClass.students
-          .filter((student) => partition.affectedIds.has(student.id))
-          .map((student) => student.id),
-      ));
-      const missingAffectedIds = generationStudents
-        .filter((student) => !generatedAffectedIds.has(student.id))
-        .map((student) => student.id);
-      if (mode !== "unallocated" && missingAffectedIds.length > 0) {
-        const missingNames = generationStudents
-          .filter((student) => missingAffectedIds.includes(student.id))
-          .map((student) => `${student.firstName} ${student.lastName}`);
-        return res.status(409).json({
-          error: `Generation could not place every selected learner (${missingNames.join(", ")}). Existing placements were left unchanged.`,
-        });
-      }
-
       const invalidAssignments = generatedClasses.flatMap((generatedClass) =>
         generatedClass.students
-          .filter((student) => partition.affectedIds.has(student.id) && getStudentTargetGrade(student) !== normalizeGradeValue(generatedClass.classConfig.grade))
+          .filter((student) => getStudentTargetGrade(student) !== normalizeGradeValue(generatedClass.classConfig.grade))
           .map((student) => `${student.firstName} ${student.lastName} → ${generatedClass.classConfig.name}`),
       );
       if (invalidAssignments.length > 0) {
@@ -1928,24 +1871,15 @@ export async function registerRoutes(
         overallBalance,
         unassignedStudentIds,
       };
-      const generatedPlacements = result.classes.flatMap((generatedClass) => generatedClass.students
-        .filter((student) => partition.affectedIds.has(student.id))
-        .map((student) => ({ studentId: student.id, classId: generatedClass.classConfig.id })));
-      const validationStudents = mode === "full" ? generationStudents : [...generationStudents, ...protectedStudents];
-      const validationResult = mode === "full" ? result : {
-        ...result,
-        unassignedStudentIds: [],
-        classes: result.classes.map((generatedClass) => ({
-          ...generatedClass,
-          students: generatedClass.students.filter((student) => partition.affectedIds.has(student.id)),
-        })),
-      };
-      const validation = await persistCompleteGeneration(validationStudents, validationResult, () =>
+      const validation = await persistCompleteGeneration(generationStudents, result, () =>
         storage.replacePlacements(
-          accountId,
-          generatedPlacements,
+          accountIdFor(req),
+          result.classes.flatMap((generatedClass) => generatedClass.students.map((student) => ({
+            studentId: student.id,
+            classId: generatedClass.classConfig.id,
+          }))),
           generationRevision,
-          mode === "full" ? undefined : Array.from(partition.affectedIds),
+          requestedGrade ? generationStudents.map((student) => student.id) : undefined,
         ),
       );
       if (!validation.complete) {
@@ -1958,8 +1892,6 @@ export async function registerRoutes(
 
       res.json({
         ...result,
-        affectedLearnerCount: generationStudents.length,
-        preservedPlacementCount: protectedPlacements.length,
         trial: {
           successfulSolverGenerations: context.successfulSolverGenerations,
           solverGenerationsLimit: 3,
@@ -2882,28 +2814,19 @@ export async function generateBalancedClasses(
   rules: Rule[],
   characteristics: Characteristic[],
   teacherPlacementPreferences: TeacherPlacementPreference[] = [],
-  seedPlacements: Placement[] = [],
-  balanceCohort: Student[] = students,
 ): Promise<ClassGenerationResult> {
   const activeCharacteristics = [...characteristics]
     .filter((char) => !char.tagOnly)
     .sort((a, b) => (b.priority || 0) - (a.priority || 0))
     .slice(0, 50);
-  const targetCohort = balanceCohort;
-  const numericTargets = getNumericTargets(balanceCohort, activeCharacteristics);
-  const genderSharesByTargetGrade = getGenderSharesByTargetGrade(balanceCohort);
+  const numericTargets = getNumericTargets(students, activeCharacteristics);
+  const genderSharesByTargetGrade = getGenderSharesByTargetGrade(students);
   const classAssignments: Map<string, Student[]> = new Map();
-  const studentById = new Map(targetCohort.map((student) => [student.id, student]));
-  const fixedClassByStudent = new Map(seedPlacements.map((placement) => [placement.studentId, placement.classId]));
-  const fixedStudentIds = new Set(fixedClassByStudent.keys());
-
-  classConfigs.forEach((config) => {
-    classAssignments.set(config.id, seedPlacements
-      .filter((placement) => placement.classId === config.id)
-      .map((placement) => studentById.get(placement.studentId))
-      .filter((student): student is Student => Boolean(student)));
+  
+  // Initialize empty classes
+  classConfigs.forEach(config => {
+    classAssignments.set(config.id, []);
   });
-  const fixedStudentsByClass = new Map(classConfigs.map((config) => [config.id, [...(classAssignments.get(config.id) || [])]]));
 
   // Mandatory rules are hard requirements: mandatory pairings keep learners in
   // the same group and mandatory separations must never share a class.
@@ -2973,8 +2896,8 @@ export async function generateBalancedClasses(
   const processedStudents = new Set<string>();
 
   for (const student of students) {
-    if (processedStudents.has(student.id) || fixedStudentIds.has(student.id)) continue;
-
+    if (processedStudents.has(student.id)) continue;
+    
     const group: Student[] = [student];
     processedStudents.add(student.id);
     
@@ -2985,8 +2908,8 @@ export async function generateBalancedClasses(
       if (pairedWith) {
         for (const pairedId of pairedWith) {
           if (!processedStudents.has(pairedId)) {
-            const pairedStudent = studentById.get(pairedId);
-            if (pairedStudent && !fixedStudentIds.has(pairedId)) {
+            const pairedStudent = students.find(s => s.id === pairedId);
+            if (pairedStudent) {
               group.push(pairedStudent);
               processedStudents.add(pairedId);
               toProcess.push(pairedId);
@@ -3010,7 +2933,7 @@ export async function generateBalancedClasses(
   // capped by each class capacity.
   const targetClassSizes = new Map<string, number>();
   let openClasses = [...classConfigList];
-  let remainingTargetSize = targetCohort.length;
+  let remainingTargetSize = students.length;
   while (openClasses.length > 0) {
     const baseSize = Math.floor(remainingTargetSize / openClasses.length);
     const remainder = remainingTargetSize % openClasses.length;
@@ -3054,11 +2977,11 @@ export async function generateBalancedClasses(
     return Math.max(0, 100 - (totalDeviation / (2 * totalTargetSize)) * 100);
   };
 
-  const previousSchoolCohortDistribution = getPreviousSchoolDistribution(balanceCohort);
+  const previousSchoolCohortDistribution = getPreviousSchoolDistribution(students);
   const hasPreviousSchoolData = Object.keys(previousSchoolCohortDistribution).length > 0;
   const calculatePreviousSchoolLayoutScore = (studentsByClass: Map<string, Student[]>) =>
     hasPreviousSchoolData
-      ? calculatePreviousSchoolBalanceScore(studentsByClass, classConfigList, targetClassSizes, balanceCohort)
+      ? calculatePreviousSchoolBalanceScore(studentsByClass, classConfigList, targetClassSizes, students)
       : 100;
 
   const conflicts: ConflictWarning[] = [];
@@ -3082,7 +3005,6 @@ export async function generateBalancedClasses(
     const candidates: {
       classId: string;
       separationViolations: number;
-      pairingViolations: number;
       sizeOverflow: number;
       genderScore: number;
       previousSchoolScore: number;
@@ -3096,7 +3018,6 @@ export async function generateBalancedClasses(
       if (currentStudents.length + group.length > (config.capacity || 30)) continue;
 
       let separationViolations = 0;
-      let pairingViolations = 0;
       for (let index = 0; index < group.length; index++) {
         const student = group[index];
         const mustSeparate = separations.get(student.id);
@@ -3106,13 +3027,6 @@ export async function generateBalancedClasses(
         }
         for (const other of group.slice(index + 1)) {
           if (mustSeparate.has(other.id)) separationViolations++;
-        }
-        const mustPair = pairings.get(student.id);
-        if (mustPair) {
-          for (const partnerId of mustPair) {
-            const fixedClass = fixedClassByStudent.get(partnerId);
-            if (fixedClass && fixedClass !== config.id) pairingViolations++;
-          }
         }
       }
 
@@ -3130,7 +3044,6 @@ export async function generateBalancedClasses(
       candidates.push({
         classId: config.id,
         separationViolations,
-        pairingViolations,
         sizeOverflow: Math.max(0, candidateStudents.length - targetSize),
         genderScore: calculateGenderLayoutScore(candidateLayout),
         previousSchoolScore: calculatePreviousSchoolLayoutScore(candidateLayout),
@@ -3140,22 +3053,19 @@ export async function generateBalancedClasses(
       });
     }
 
-    const validCandidates = candidates.filter((candidate) => candidate.separationViolations === 0 && candidate.pairingViolations === 0);
+    const validCandidates = candidates.filter((candidate) => candidate.separationViolations === 0);
     if (validCandidates.length === 0) {
       for (const student of group) unassignedStudentIds.add(student.id);
       const hasCapacity = candidates.length > 0;
       const pairRule = hasCapacity
-        ? mandatoryRules.find((rule) => group.some((student) =>
+        ? mandatoryRules.find((rule) => rule.type === "separate" && group.some((student) =>
             rule.studentId1 === student.id || rule.studentId2 === student.id,
           ))
         : undefined;
-      const pairingBlockedByProtected = candidates.length > 0 && candidates.every((candidate) => candidate.pairingViolations > 0);
       conflicts.push({
-        type: hasCapacity ? pairingBlockedByProtected ? "pairing" : "separation" : "capacity",
+        type: hasCapacity ? "separation" : "capacity",
         message: hasCapacity
-          ? pairingBlockedByProtected
-            ? `Mandatory pairing rules cannot be satisfied without moving already placed learners: ${group.map((student) => `${student.firstName} ${student.lastName}`).join(", ")}`
-            : `Mandatory separation rules leave no valid class for ${group.map((student) => `${student.firstName} ${student.lastName}`).join(", ")}`
+          ? `Mandatory separation rules leave no valid class for ${group.map((student) => `${student.firstName} ${student.lastName}`).join(", ")}`
           : `No class has enough remaining capacity for ${group.map((student) => `${student.firstName} ${student.lastName}`).join(", ")}`,
         studentIds: group.map((student) => student.id),
         ruleId: pairRule?.id,
@@ -3184,11 +3094,8 @@ export async function generateBalancedClasses(
   });
 
   const evaluateLayout = (assignments: Map<number, string>, includeCharacteristicScores = true) => {
-    const studentsByClass = new Map(classConfigList.map((config) => [
-      config.id,
-      [...(fixedStudentsByClass.get(config.id) || [])],
-    ]));
-    const classByStudent = new Map<string, string>(fixedClassByStudent);
+    const studentsByClass = new Map(classConfigList.map((config) => [config.id, [] as Student[]]));
+    const classByStudent = new Map<string, string>();
     assignments.forEach((classId, groupIndex) => {
       const classStudents = studentsByClass.get(classId);
       if (!classStudents) return;
@@ -3371,7 +3278,7 @@ export async function generateBalancedClasses(
 
     groupAssignments.clear();
     currentAssignments.forEach((classId, groupIndex) => groupAssignments.set(groupIndex, classId));
-    for (const config of classConfigList) classAssignments.set(config.id, [...(fixedStudentsByClass.get(config.id) || [])]);
+    for (const config of classConfigList) classAssignments.set(config.id, []);
     currentAssignments.forEach((classId, groupIndex) => {
       classAssignments.get(classId)!.push(...pairingGroups[groupIndex]);
     });

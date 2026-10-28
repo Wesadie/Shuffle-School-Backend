@@ -1,4 +1,4 @@
-import type { ClassConfig, ClassGenerationResult, Placement, PlacementRequest, Rule, Student, Teacher } from "@shared/schema";
+import type { ClassConfig, ClassGenerationResult, PlacementRequest, Student, Teacher } from "@shared/schema";
 import { getStudentTargetGrade, normalizeGradeValue } from "@shared/grades";
 
 export interface TeacherPlacementPreference {
@@ -9,31 +9,6 @@ export interface TeacherPlacementPreference {
 export interface GenerationValidation {
   complete: boolean;
   error?: string;
-}
-
-export type PlacementGenerationMode = "unallocated" | "regenerate-grade" | "full";
-
-export function partitionPlacementGeneration(
-  mode: PlacementGenerationMode,
-  selectedGrade: string | null,
-  eligibleStudents: Student[],
-  existingPlacements: Placement[],
-  classConfigs: ClassConfig[],
-) {
-  const targetGrade = selectedGrade ? normalizeGradeValue(selectedGrade) : null;
-  const inTargetGrade = (student: Student) => !targetGrade || getStudentTargetGrade(student) === targetGrade;
-  const existingStudentIds = new Set(existingPlacements.map((placement) => placement.studentId));
-  const affectedStudents = mode === "unallocated"
-    ? eligibleStudents.filter((student) => inTargetGrade(student) && !existingStudentIds.has(student.id))
-    : mode === "regenerate-grade"
-      ? eligibleStudents.filter(inTargetGrade)
-      : eligibleStudents;
-  const affectedIds = new Set(affectedStudents.map((student) => student.id));
-  const protectedPlacements = existingPlacements.filter((placement) => !affectedIds.has(placement.studentId));
-  const affectedClasses = targetGrade
-    ? classConfigs.filter((config) => normalizeGradeValue(config.grade) === targetGrade)
-    : classConfigs;
-  return { affectedStudents, affectedIds, protectedPlacements, affectedClasses };
 }
 
 export function validateCompleteGeneration(
