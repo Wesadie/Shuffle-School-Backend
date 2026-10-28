@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { Characteristic, ClassConfig, ClassGenerationResult, Placement, PlacementRequest, Rule, Student, Teacher } from "@shared/schema";
 import { generateBalancedClasses } from "./routes";
-import { mapTeacherPlacementRequests, persistCompleteGeneration } from "./generationSafety";
+import { mapTeacherPlacementRequests, partitionPlacementGeneration, persistCompleteGeneration } from "./generationSafety";
 import {
   buildSwapPlacements,
   InvalidPlacementError,
@@ -30,8 +30,8 @@ function makeStudent(id: string, gender: string, characteristics: Record<string,
   };
 }
 
-function makeClass(id: string, capacity: number): ClassConfig {
-  return { id, accountId: "account", name: id, grade: "5", capacity };
+function makeClass(id: string, capacity: number, grade = "5"): ClassConfig {
+  return { id, accountId: "account", name: id, grade, capacity };
 }
 
 function makeCategoryCharacteristic(id: string, name: string, priority: number): Characteristic {
@@ -97,6 +97,26 @@ function classForStudent(result: ClassGenerationResult, studentId: string) {
   );
 }
 
+test("partitions unallocated and selected-grade regeneration without affecting protected grades", () => {
+  const gradeOne = { ...makeStudent("g1-unplaced", "female"), characteristics: { newGrade: "1" } };
+  const gradeOnePlaced = { ...makeStudent("g1-placed", "male"), characteristics: { newGrade: "1" } };
+  const gradeTwoPlaced = { ...makeStudent("g2-placed", "female"), characteristics: { newGrade: "2" } };
+  const placements: Placement[] = [
+    { id: "p1", accountId: "account", studentId: gradeOnePlaced.id, classId: "g1a", locked: true },
+    { id: "p2", accountId: "account", studentId: gradeTwoPlaced.id, classId: "g2a", locked: true },
+  ];
+  const classes = [makeClass("g1a", 10, "1"), makeClass("g1b", 10, "1"), makeClass("g2a", 10, "2")];
+
+  const unallocated = partitionPlacementGeneration("unallocated", "1", [gradeOne, gradeOnePlaced, gradeTwoPlaced], placements, classes);
+  assert.deepEqual(unallocated.affectedStudents.map((student) => student.id), [gradeOne.id]);
+  assert.deepEqual(unallocated.protectedPlacements.map((placement) => placement.id), ["p1", "p2"]);
+  assert.deepEqual(unallocated.affectedClasses.map((config) => config.id), ["g1a", "g1b"]);
+
+  const regenerate = partitionPlacementGeneration("regenerate-grade", "1", [gradeOne, gradeOnePlaced, gradeTwoPlaced], placements, classes);
+  assert.deepEqual(new Set(regenerate.affectedStudents.map((student) => student.id)), new Set([gradeOne.id, gradeOnePlaced.id]));
+  assert.deepEqual(regenerate.protectedPlacements.map((placement) => placement.id), ["p2"]);
+});
+
 test("normalizes gender aliases and distributes a balanced cohort evenly", async () => {
   const students = [
     makeStudent("m1", "MALE"),
@@ -159,6 +179,28 @@ test("balances learners from the same previous school across target classes and 
     assert.equal(generatedClass.students.filter((student) => student.characteristics["Previous School"] === "Cowan House").length, 2);
     assert.equal(generatedClass.balanceScores.previousSchool, 100);
   }
+});
+
+test("keeps locked protected Grade 2 learners in their saved class while balancing Grade 1 unallocated learners", async () => {
+  const fixed = { ...makeStudent("fixed-g2", "male", { Aggregate: "Low" }), characteristics: { Aggregate: "Low", newGrade: "2" } };
+  const newLearners = [
+    { ...makeStudent("new-one", "female", { Aggregate: "High" }), characteristics: { Aggregate: "High", newGrade: "1" } },
+    { ...makeStudent("new-two", "male", { Aggregate: "Low" }), characteristics: { Aggregate: "Low", newGrade: "1" } },
+  ];
+  const classes = [makeClass("g1a", 4, "1"), makeClass("g1b", 4, "1")];
+  const fixedPlacement: Placement = { id: "fixed-placement", accountId: "account", studentId: fixed.id, classId: "g1a", locked: true };
+  const generated = await generateBalancedClasses(
+    newLearners,
+    classes,
+    [],
+    [makeCategoryCharacteristic("aggregate", "Aggregate", 3)],
+    [],
+    [fixedPlacement],
+    [...newLearners, fixed],
+  );
+
+  assert.equal(generated.classes.find((entry) => entry.classConfig.id === "g1a")?.students.some((student) => student.id === fixed.id), true);
+  assert.equal(generated.classes.reduce((sum, entry) => sum + entry.students.filter((student) => newLearners.some((learner) => learner.id === student.id)).length, 0), 2);
 });
 
 test("distributes multiple previous schools proportionally across classes", async () => {

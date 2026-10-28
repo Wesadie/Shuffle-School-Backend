@@ -28,7 +28,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { getStudentTargetGrade, isIncomingGradeRAwaitingAllocation, normalizeGradeValue } from "@shared/grades";
-import type { ClassConfig, ClassGenerationResult, InsertClassConfig, Student, Rule, Characteristic, Teacher } from "@shared/schema";
+import type { ClassConfig, ClassGenerationResult, InsertClassConfig, Placement, Student, Rule, Characteristic, Teacher } from "@shared/schema";
 
 export default function GeneratePage() {
   const { toast } = useToast();
@@ -36,6 +36,9 @@ export default function GeneratePage() {
   const [, setLocation] = useLocation();
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [placementGrade, setPlacementGrade] = useState("1");
+  const [placementMode, setPlacementMode] = useState<"unallocated" | "regenerate-grade" | "full">("unallocated");
+  const [confirmGenerationMode, setConfirmGenerationMode] = useState<"regenerate-grade" | "full" | null>(null);
   const [editingConfigId, setEditingConfigId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<{
     name: string;
@@ -57,6 +60,11 @@ export default function GeneratePage() {
   const { data: students = [], isLoading: studentsLoading } = useQuery<Student[]>({
     queryKey: ["/api/students"],
   });
+
+  const { data: placementState, isLoading: placementsLoading } = useQuery<{ placements: Placement[]; revision: number }>({
+    queryKey: ["/api/placements/state"],
+  });
+  const placements = placementState?.placements ?? [];
 
   const { data: rules = [] } = useQuery<Rule[]>({
     queryKey: ["/api/rules"],
@@ -167,10 +175,14 @@ export default function GeneratePage() {
   };
 
   const generateMutation = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (options: { grade?: string; mode: "unallocated" | "regenerate-grade" | "full" }) => {
       const stateResponse = await apiRequest("GET", "/api/placements/state");
       const state = await stateResponse.json() as { revision: number };
-      return apiRequest("POST", "/api/generate-classes", { expectedRevision: state.revision });
+      return apiRequest("POST", "/api/generate-classes", {
+        expectedRevision: state.revision,
+        mode: options.mode,
+        ...(options.grade ? { grade: options.grade } : {}),
+      });
     },
     onSuccess: async (response) => {
       const result = await response.json() as ClassGenerationResult;
@@ -226,14 +238,30 @@ export default function GeneratePage() {
   };
 
   const handleGenerate = () => {
+    const selectedGrade = placementGrade === "all" ? undefined : placementGrade;
+    const mode = placementMode === "full" ? "full" : placementMode;
+    if ((mode === "regenerate-grade" || mode === "full") && confirmGenerationMode !== mode) {
+      setConfirmGenerationMode(mode);
+      return;
+    }
+    setConfirmGenerationMode(null);
     setIsGenerating(true);
-    generateMutation.mutate();
+    generateMutation.mutate({ grade: selectedGrade, mode });
   };
 
   const studentsAwaitingAllocation = students.filter(isIncomingGradeRAwaitingAllocation);
   const studentsWithoutTargetGrade = students.filter((student) => !isIncomingGradeRAwaitingAllocation(student) && !getStudentTargetGrade(student));
   const placementCandidates = students.filter((student) => !isIncomingGradeRAwaitingAllocation(student));
-  const grades = Array.from(new Set(placementCandidates.map(getStudentTargetGrade).filter(Boolean))).sort();
+  const grades = Array.from(new Set([
+    ...placementCandidates.map(getStudentTargetGrade).filter(Boolean),
+    ...classConfigs.map((config) => normalizeGradeValue(config.grade)),
+  ])).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  const selectedDestinationGrade = placementGrade === "all" ? null : placementGrade;
+  const selectedGradeCandidates = placementCandidates.filter((student) => !selectedDestinationGrade || getStudentTargetGrade(student) === selectedDestinationGrade);
+  const selectedGradePlacedIds = new Set(placements
+    .filter((placement) => selectedGradeCandidates.some((student) => student.id === placement.studentId))
+    .map((placement) => placement.studentId));
+  const selectedGradeUnallocated = selectedGradeCandidates.length - selectedGradePlacedIds.size;
   const gradeCapacityIssues = grades.flatMap((grade) => {
     const learnerCount = placementCandidates.filter((student) => getStudentTargetGrade(student) === grade).length;
     const capacity = classConfigs
@@ -243,7 +271,7 @@ export default function GeneratePage() {
   });
   const canGenerate = placementCandidates.length > 0 && studentsWithoutTargetGrade.length === 0 && gradeCapacityIssues.length === 0;
 
-  const isLoading = configsLoading || studentsLoading;
+  const isLoading = configsLoading || studentsLoading || placementsLoading;
   const accountContext = user?.accountContext;
   const trialUsesRemaining = accountContext?.subscriptionStatus === "trialing"
     ? Math.max(0, 3 - (accountContext.successfulSolverGenerations || 0))
@@ -271,7 +299,7 @@ export default function GeneratePage() {
         <div>
           <h1 className="text-3xl font-semibold" data-testid="text-page-title">Generate Classes</h1>
           <p className="text-muted-foreground mt-1">
-            Configure your target classes and generate balanced placements
+            Configure target classes and choose which learner placements to generate
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -281,14 +309,68 @@ export default function GeneratePage() {
           </Button>
           <Button
             onClick={handleGenerate}
-            disabled={!canGenerate || isGenerating}
+            disabled={!canGenerate || isGenerating || (placementMode !== "full" && (selectedGradeCandidates.length === 0 || (placementMode === "unallocated" && selectedGradeUnallocated === 0)))}
             data-testid="button-generate"
           >
             <Sparkles className="h-4 w-4 mr-2" />
-            {isGenerating ? "Generating..." : "Generate Classes"}
+            {confirmGenerationMode === "regenerate-grade" ? "Confirm Grade Regeneration" : confirmGenerationMode === "full" ? "Confirm Full Generation" : isGenerating ? "Generating..." : "Generate Classes"}
           </Button>
         </div>
       </div>
+
+      <Card data-testid="card-placement-generation-options">
+        <CardHeader>
+          <CardTitle className="text-base">Placement generation</CardTitle>
+          <CardDescription>Existing placements remain protected unless you choose to regenerate the selected grade or run a full generation.</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-4 md:grid-cols-2">
+          <div className="space-y-2">
+            <Label htmlFor="placement-grade">Destination grade</Label>
+            <Select value={placementGrade} onValueChange={(value) => { setPlacementGrade(value); setConfirmGenerationMode(null); }}>
+              <SelectTrigger id="placement-grade" data-testid="select-placement-grade"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {Array.from({ length: 7 }, (_, index) => String(index + 1)).map((grade) => (
+                  <SelectItem key={grade} value={grade}>Grade {grade} Placement</SelectItem>
+                ))}
+                {grades.filter((grade) => !/^[1-7]$/.test(grade)).map((grade) => (
+                  <SelectItem key={grade} value={grade}>Grade {grade} Placement</SelectItem>
+                ))}
+                <SelectItem value="all">All destination grades</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="placement-mode">Generation option</Label>
+            <Select value={placementMode} onValueChange={(value: "unallocated" | "regenerate-grade" | "full") => { setPlacementMode(value); setConfirmGenerationMode(null); }}>
+              <SelectTrigger id="placement-mode" data-testid="select-placement-mode"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="unallocated">Place Unallocated Learners Only</SelectItem>
+                <SelectItem value="regenerate-grade">Regenerate All Placements for Selected Grade</SelectItem>
+                <SelectItem value="full">Full Generation (all grades)</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="md:col-span-2 grid gap-2 sm:grid-cols-3" data-testid="placement-generation-counts">
+            <div className="rounded-md border p-3 text-sm"><span className="font-semibold">Grade {selectedDestinationGrade ?? "All"}</span><span className="block text-muted-foreground">Selected destination</span></div>
+            <div className="rounded-md border p-3 text-sm"><span className="font-semibold">{selectedGradeCandidates.length}</span><span className="block text-muted-foreground">Eligible learners</span></div>
+            <div className="rounded-md border p-3 text-sm"><span className="font-semibold">{selectedGradePlacedIds.size} placed · {selectedGradeUnallocated} unallocated</span><span className="block text-muted-foreground">Selected destination grade</span></div>
+          </div>
+          {placementMode === "regenerate-grade" && (
+            <Alert variant="destructive" className="md:col-span-2">
+              <AlertCircle className="h-4 w-4" />
+              <AlertTitle>Regenerate every placement in Grade {selectedDestinationGrade ?? "selected"}?</AlertTitle>
+              <AlertDescription>Current placements and manual adjustments for this grade will be replaced. Placements in every other grade will remain unchanged. Click Generate Classes once to review, then confirm to proceed.</AlertDescription>
+            </Alert>
+          )}
+          {placementMode === "full" && (
+            <Alert variant="destructive" className="md:col-span-2">
+              <AlertCircle className="h-4 w-4" />
+              <AlertTitle>Full generation changes all learner placements</AlertTitle>
+              <AlertDescription>This preserves the original full-generation behavior and replaces placements across all destination grades. Click Generate Classes once to review, then confirm.</AlertDescription>
+            </Alert>
+          )}
+        </CardContent>
+      </Card>
 
       {accountContext?.subscriptionStatus === "trialing" && (
         <Alert variant={accountContext.trialExpired ? "destructive" : "default"}>
