@@ -906,6 +906,19 @@ export default function ReviewPage() {
     return warnings;
   }, [rules, placements, students, classesWithStudents]);
 
+  const getStudentPreviousSchoolDistribution = (classStudents: Student[]) => {
+    const distribution: Record<string, number> = {};
+    classStudents.forEach((student) => {
+      const entry = Object.entries(student.characteristics || {}).find(([name]) => name.trim().toLowerCase() === "previous school");
+      const school = entry ? (Array.isArray(entry[1]) ? entry[1][0] : entry[1]) : "";
+      if (typeof school === "string" && school.trim()) {
+        const label = school.trim();
+        distribution[label] = (distribution[label] || 0) + 1;
+      }
+    });
+    return distribution;
+  };
+
   const balanceMetrics = useMemo(() => {
     const activeCharacteristics = [...characteristics]
       .filter((char) => !char.tagOnly)
@@ -1287,18 +1300,6 @@ export default function ReviewPage() {
     [similarityMatches],
   );
 
-  const getStudentPreviousSchoolDistribution = (classStudents: Student[]) => {
-    const distribution: Record<string, number> = {};
-    classStudents.forEach((student) => {
-      const entry = Object.entries(student.characteristics || {}).find(([name]) => name.trim().toLowerCase() === "previous school");
-      const school = entry ? (Array.isArray(entry[1]) ? entry[1][0] : entry[1]) : "";
-      if (typeof school === "string" && school.trim()) {
-        const label = school.trim();
-        distribution[label] = (distribution[label] || 0) + 1;
-      }
-    });
-    return distribution;
-  };
 
   const classStatistics = useMemo(() => {
     const percentageFieldNames = ["Aggregate %", "Maths %", "English %", "Afrikaans/Isizulu %"];
