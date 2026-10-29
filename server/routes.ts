@@ -22,6 +22,7 @@ import { getAccountInvoice, getAccountInvoices } from "./invoiceService";
 import { generateInvoicePdf } from "./invoicePdf";
 import { mapTeacherPlacementRequests, persistCompleteGeneration, type TeacherPlacementPreference } from "./generationSafety";
 import { InvalidPlacementError, PlacementNotFoundError, PlacementRevisionConflictError } from "./placementSafety";
+import { buildIncrementalGeneration } from "./incrementalGeneration";
 
 import {
   insertStudentSchema,
@@ -1749,7 +1750,8 @@ export async function registerRoutes(
 
     try {
       const generationRevision = readPlacementRevision(req.body?.expectedRevision);
-      const hasRequestedGrade = req.body && Object.prototype.hasOwnProperty.call(req.body, "grade");
+      const hasRequestedGrade = req.body && Object.prototype.hasOwnProperty.call(req.body, "grade") && req.body.grade !== "";
+      const placementMode = req.body?.mode === "regenerate-grade" ? "regenerate-grade" : "unallocated";
       if (hasRequestedGrade && typeof req.body.grade !== "string") {
         return res.status(400).json({ error: "Grade must be a valid target grade" });
       }
@@ -1758,12 +1760,17 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Grade must be a valid target grade" });
       }
 
-      const allStudents = await storage.getStudents(accountIdFor(req));
+      const accountId = accountIdFor(req);
+      const [allStudents, allPlacements, classConfigs] = await Promise.all([
+        storage.getStudents(accountId),
+        storage.getPlacements(accountId),
+        storage.getClassConfigs(accountId),
+      ]);
       const students = allStudents.filter((student) => !isIncomingGradeRAwaitingAllocation(student));
       const generationStudents = requestedGrade
         ? students.filter((student) => getStudentTargetGrade(student) === requestedGrade)
         : students;
-      const classConfigs = await storage.getClassConfigs(accountIdFor(req));
+      const generationScope = requestedGrade && placementMode === "unallocated" ? "unallocated-grade" : "all-grade";
       const rules = await storage.getRules(accountIdFor(req));
       const characteristics = await storage.getCharacteristics(accountIdFor(req));
       const teachers = await storage.getTeachers(accountIdFor(req));
@@ -1785,7 +1792,9 @@ export async function registerRoutes(
       }
 
       if (generationStudents.length === 0) {
-        return res.status(400).json({ error: "There are no learners with a destination grade to place. Incoming Grade R learners can remain unallocated until a destination grade is assigned." });
+        return res.status(400).json({ error: generationScope === "unallocated-grade"
+          ? `No unallocated learners with destination Grade ${requestedGrade} need placement.`
+          : "There are no learners with a destination grade to place. Incoming Grade R learners can remain unallocated until a destination grade is assigned." });
       }
       const mappedRequests = mapTeacherPlacementRequests(generationStudents, placementRequests, teachers, targetConfigs);
       if (!mappedRequests.preferences) {
@@ -1805,6 +1814,15 @@ export async function registerRoutes(
       }
 
       const targetGrades = Array.from(new Set(generationStudents.map(getStudentTargetGrade)));
+      if (generationScope === "unallocated-grade" && requestedGrade) {
+        const fixedPlacements = allPlacements.filter((placement) => generationStudents.every((student) => student.id !== placement.studentId));
+        const fixedCounts = new Map<string, number>();
+        fixedPlacements.forEach((placement) => fixedCounts.set(placement.classId, (fixedCounts.get(placement.classId) || 0) + 1));
+        const availableCapacity = targetConfigs.reduce((sum, config) => sum + Math.max(0, (config.capacity || 30) - (fixedCounts.get(config.id) || 0)), 0);
+        if (availableCapacity < generationStudents.length) {
+          return res.status(400).json({ error: `Grade ${requestedGrade} has capacity for ${availableCapacity} unallocated learners but needs ${generationStudents.length}` });
+        }
+      }
       for (const targetGrade of targetGrades) {
         const learnerCount = generationStudents.filter((student) => getStudentTargetGrade(student) === targetGrade).length;
         const gradeClasses = targetConfigs.filter((config) => normalizeGradeValue(config.grade) === targetGrade);
@@ -1824,6 +1842,34 @@ export async function registerRoutes(
         return res.status(403).json(solverAccessResponse(reservation));
       }
       reservedTrialUse = reservation === "reserved";
+
+      if (generationScope === "unallocated-grade" && requestedGrade) {
+        const mapped = await buildIncrementalGeneration({
+          students,
+          classConfigs,
+          placements: allPlacements,
+          rules,
+          characteristics,
+          teacherPlacementPreferences,
+          targetGrade: requestedGrade,
+          mode: "unallocated",
+        }, generateBalancedClasses);
+        const revision = await storage.bulkCreatePlacements(accountId, mapped.placementList, generationRevision);
+        return res.json({
+          classes: [],
+          conflicts: mapped.conflicts.map((message) => ({ type: "capacity", message, studentIds: mapped.affectedStudentIds })),
+          overallBalance: 100,
+          unassignedStudentIds: [],
+          affectedLearnerCount: mapped.affectedStudentIds.length,
+          preservedLearnerCount: allPlacements.length,
+          revision,
+          trial: {
+            successfulSolverGenerations: context.successfulSolverGenerations,
+            solverGenerationsLimit: 3,
+            solverGenerationsRemaining: Math.max(0, 3 - context.successfulSolverGenerations),
+          },
+        });
+      }
 
       const generatedClasses: GeneratedClass[] = [];
       const conflicts: ConflictWarning[] = [];
@@ -2814,18 +2860,27 @@ export async function generateBalancedClasses(
   rules: Rule[],
   characteristics: Characteristic[],
   teacherPlacementPreferences: TeacherPlacementPreference[] = [],
+  incrementalContext?: {
+    fixedStudentsByClass: Map<string, Student[]>;
+    currentClassCounts: Map<string, number>;
+    cohortStudents: Student[];
+  },
 ): Promise<ClassGenerationResult> {
   const activeCharacteristics = [...characteristics]
     .filter((char) => !char.tagOnly)
     .sort((a, b) => (b.priority || 0) - (a.priority || 0))
     .slice(0, 50);
-  const numericTargets = getNumericTargets(students, activeCharacteristics);
-  const genderSharesByTargetGrade = getGenderSharesByTargetGrade(students);
+  const cohortStudents = incrementalContext?.cohortStudents ?? students;
+  const numericTargets = getNumericTargets(cohortStudents, activeCharacteristics);
+  const genderSharesByTargetGrade = getGenderSharesByTargetGrade(cohortStudents);
   const classAssignments: Map<string, Student[]> = new Map();
-  
-  // Initialize empty classes
-  classConfigs.forEach(config => {
-    classAssignments.set(config.id, []);
+  const fixedStudentsByClass = incrementalContext?.fixedStudentsByClass ?? new Map<string, Student[]>();
+  const availableCapacityByClass = new Map(classConfigs.map((config) => [
+    config.id,
+    Math.max(0, (config.capacity || 30) - (fixedStudentsByClass.get(config.id)?.length ?? 0)),
+  ]));
+  classConfigs.forEach((config) => {
+    classAssignments.set(config.id, [...(fixedStudentsByClass.get(config.id) ?? [])]);
   });
 
   // Mandatory rules are hard requirements: mandatory pairings keep learners in
@@ -2868,7 +2923,7 @@ export async function generateBalancedClasses(
   // +1 when a soft pair partner is already in the class, -1 when the partner
   // has already been placed elsewhere (so this placement breaks the request),
   // and -1 for each soft separation that would share the class.
-  const placedStudentIds = new Set<string>();
+  const placedStudentIds = new Set<string>(incrementalContext?.fixedStudentsByClass ? Array.from(incrementalContext.fixedStudentsByClass.values()).flat().map((student) => student.id) : []);
   const calculateImportantScore = (group: Student[], currentStudents: Student[]): number => {
     const groupIds = new Set(group.map((student) => student.id));
     let score = 0;
@@ -2928,12 +2983,13 @@ export async function generateBalancedClasses(
   // Assign groups to classes using a balanced approach
   const classConfigList = Array.from(classConfigs);
   
-  // Class size is the first priority: give every class a target size that is as
-  // equal as mathematically possible (e.g. 103 learners over 4 classes -> 26/26/26/25),
-  // capped by each class capacity.
+  // Class size is the first priority: target sizes are based on the full selected-grade cohort.
   const targetClassSizes = new Map<string, number>();
   let openClasses = [...classConfigList];
-  let remainingTargetSize = students.length;
+  let remainingTargetSize = incrementalContext?.cohortStudents.length ?? students.length;
+  if (incrementalContext) {
+    remainingTargetSize += Array.from(incrementalContext.fixedStudentsByClass.values()).reduce((sum, members) => sum + members.length, 0);
+  }
   while (openClasses.length > 0) {
     const baseSize = Math.floor(remainingTargetSize / openClasses.length);
     const remainder = remainingTargetSize % openClasses.length;
@@ -2959,7 +3015,9 @@ export async function generateBalancedClasses(
     let totalTargetSize = 0;
     let totalDeviation = 0;
     for (const config of classConfigList) {
-      const targetSize = targetClassSizes.get(config.id) ?? 0;
+      const fullTargetSize = targetClassSizes.get(config.id) ?? 0;
+      const fixedCount = fixedStudentsByClass.get(config.id)?.length ?? 0;
+      const targetSize = Math.max(0, fullTargetSize - fixedCount);
       totalTargetSize += targetSize;
       const cohortShares = genderSharesByTargetGrade.get(normalizeGradeValue(config.grade));
       if (!cohortShares) continue;
@@ -2967,6 +3025,12 @@ export async function generateBalancedClasses(
       for (const student of studentsByClass.get(config.id) || []) {
         const gender = genderValueOf(student);
         counts.set(gender, (counts.get(gender) || 0) + 1);
+      }
+      if (incrementalContext) {
+        (fixedStudentsByClass.get(config.id) || []).forEach((student) => {
+          const gender = genderValueOf(student);
+          counts.set(gender, (counts.get(gender) || 0) + 1);
+        });
       }
       const categories = new Set([...cohortShares.keys(), ...counts.keys()]);
       for (const category of categories) {
@@ -2977,11 +3041,11 @@ export async function generateBalancedClasses(
     return Math.max(0, 100 - (totalDeviation / (2 * totalTargetSize)) * 100);
   };
 
-  const previousSchoolCohortDistribution = getPreviousSchoolDistribution(students);
+  const previousSchoolCohortDistribution = getPreviousSchoolDistribution(cohortStudents);
   const hasPreviousSchoolData = Object.keys(previousSchoolCohortDistribution).length > 0;
   const calculatePreviousSchoolLayoutScore = (studentsByClass: Map<string, Student[]>) =>
     hasPreviousSchoolData
-      ? calculatePreviousSchoolBalanceScore(studentsByClass, classConfigList, targetClassSizes, students)
+      ? calculatePreviousSchoolBalanceScore(studentsByClass, classConfigList, targetClassSizes, cohortStudents)
       : 100;
 
   const conflicts: ConflictWarning[] = [];
@@ -3015,7 +3079,7 @@ export async function generateBalancedClasses(
 
     for (const config of classConfigList) {
       const currentStudents = classAssignments.get(config.id)!;
-      if (currentStudents.length + group.length > (config.capacity || 30)) continue;
+      if (currentStudents.length + group.length > ((config.capacity || 30) - (fixedStudentsByClass.get(config.id)?.length ?? 0))) continue;
 
       let separationViolations = 0;
       for (let index = 0; index < group.length; index++) {
@@ -3037,7 +3101,7 @@ export async function generateBalancedClasses(
       const teacherPlacementScore = group.reduce((score, student) =>
         score + (preferencesByStudent.get(student.id) || []).filter((classId) => classId === config.id).length,
       0);
-      const targetSize = targetClassSizes.get(config.id) ?? group.length;
+      const targetSize = Math.max(0, (targetClassSizes.get(config.id) ?? group.length) - (fixedStudentsByClass.get(config.id)?.length ?? 0));
       const candidateLayout = new Map(classAssignments);
       candidateLayout.set(config.id, candidateStudents);
 
@@ -3104,6 +3168,16 @@ export async function generateBalancedClasses(
         classByStudent.set(student.id, classId);
       }
     });
+    if (incrementalContext) {
+      fixedStudentsByClass.forEach((fixedStudents, classId) => {
+        const classStudents = studentsByClass.get(classId);
+        if (!classStudents) return;
+        fixedStudents.forEach((student) => {
+          classStudents.push(student);
+          classByStudent.set(student.id, classId);
+        });
+      });
+    }
 
     let valid = true;
     let sizePenalty = 0;

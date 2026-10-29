@@ -28,6 +28,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { getStudentTargetGrade, isIncomingGradeRAwaitingAllocation, normalizeGradeValue } from "@shared/grades";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import type { ClassConfig, ClassGenerationResult, InsertClassConfig, Student, Rule, Characteristic, Teacher } from "@shared/schema";
 
 export default function GeneratePage() {
@@ -36,6 +37,10 @@ export default function GeneratePage() {
   const [, setLocation] = useLocation();
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [destinationGrade, setDestinationGrade] = useState("");
+  const [generationMode, setGenerationMode] = useState<"unallocated" | "regenerate-grade">("unallocated");
+  const [confirmRegenerationOpen, setConfirmRegenerationOpen] = useState(false);
+  const [confirmedRegenerationGrade, setConfirmedRegenerationGrade] = useState("");
   const [editingConfigId, setEditingConfigId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<{
     name: string;
@@ -170,7 +175,11 @@ export default function GeneratePage() {
     mutationFn: async () => {
       const stateResponse = await apiRequest("GET", "/api/placements/state");
       const state = await stateResponse.json() as { revision: number };
-      return apiRequest("POST", "/api/generate-classes", { expectedRevision: state.revision });
+      return apiRequest("POST", "/api/generate-classes", {
+        expectedRevision: state.revision,
+        grade: destinationGrade,
+        mode: generationMode,
+      });
     },
     onSuccess: async (response) => {
       const result = await response.json() as ClassGenerationResult;
@@ -226,6 +235,16 @@ export default function GeneratePage() {
   };
 
   const handleGenerate = () => {
+    if (generationMode === "regenerate-grade" && confirmedRegenerationGrade !== destinationGrade) {
+      setConfirmRegenerationOpen(true);
+      return;
+    }
+    runGeneration();
+  };
+
+  const runGeneration = () => {
+    setConfirmRegenerationOpen(false);
+    if (generationMode === "regenerate-grade") setConfirmedRegenerationGrade(destinationGrade);
     setIsGenerating(true);
     generateMutation.mutate();
   };
@@ -241,7 +260,32 @@ export default function GeneratePage() {
       .reduce((sum, config) => sum + (config.capacity || 30), 0);
     return capacity < learnerCount ? [{ grade, learnerCount, capacity }] : [];
   });
-  const canGenerate = placementCandidates.length > 0 && studentsWithoutTargetGrade.length === 0 && gradeCapacityIssues.length === 0;
+  const placementStateQuery = useQuery<{ placements: { studentId: string; classId: string; locked: boolean }[] }>({
+    queryKey: ["/api/placements/state"],
+  });
+  const savedPlacements = placementStateQuery.data?.placements ?? [];
+  const selectableDestinationGrades = Array.from({ length: 7 }, (_, index) => String(index + 1));
+  const selectedGradeStudents = placementCandidates.filter((student) => getStudentTargetGrade(student) === destinationGrade);
+  const selectedGradePlacedCount = selectedGradeStudents.filter((student) => savedPlacements.some((placement) => placement.studentId === student.id)).length;
+  const selectedGradeUnallocatedCount = selectedGradeStudents.length - selectedGradePlacedCount;
+  const selectedGradeClassConfigs = classConfigs.filter((config) => normalizeGradeValue(config.grade) === destinationGrade);
+  const selectedGradeClassesAtCapacity = selectedGradeClassConfigs
+    .filter((config) => {
+      const enrolled = savedPlacements.filter((placement) => placement.classId === config.id).length;
+      return enrolled >= (config.capacity || 30);
+    })
+    .map((config) => config.name);
+  const regenerationCapacitySufficient = selectedGradeStudents.length <= selectedGradeClassConfigs.reduce((sum, config) => sum + (config.capacity || 30), 0);
+  const unallocatedCapacitySufficient = selectedGradeClassesAtCapacity.length === 0
+    && selectedGradeUnallocatedCount <= selectedGradeClassConfigs.reduce((sum, config) =>
+      sum + Math.max(0, (config.capacity || 30) - savedPlacements.filter((placement) => placement.classId === config.id).length), 0);
+  const selectedGradeCanGenerate = Boolean(destinationGrade)
+    && selectedGradeStudents.length > 0
+    && selectedGradeStudents.every((student) => Boolean(getStudentTargetGrade(student)))
+    && (generationMode === "unallocated" ? unallocatedCapacitySufficient : regenerationCapacitySufficient);
+  const canGenerate = destinationGrade
+    ? selectedGradeCanGenerate
+    : placementCandidates.length > 0 && studentsWithoutTargetGrade.length === 0 && gradeCapacityIssues.length === 0;
 
   const isLoading = configsLoading || studentsLoading;
   const accountContext = user?.accountContext;
@@ -281,7 +325,7 @@ export default function GeneratePage() {
           </Button>
           <Button
             onClick={handleGenerate}
-            disabled={!canGenerate || isGenerating}
+            disabled={!canGenerate || isGenerating || placementStateQuery.isLoading}
             data-testid="button-generate"
           >
             <Sparkles className="h-4 w-4 mr-2" />
@@ -289,6 +333,50 @@ export default function GeneratePage() {
           </Button>
         </div>
       </div>
+
+      <Card data-testid="card-grade-specific-generation">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">Grade-specific placement</CardTitle>
+          <CardDescription>Generate only the selected destination grade, or leave the grade empty to use full generation.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-2">
+              <Label htmlFor="destination-grade">Destination grade</Label>
+              <Select value={destinationGrade || "all"} onValueChange={(value) => setDestinationGrade(value === "all" ? "" : value)}>
+                <SelectTrigger id="destination-grade" data-testid="select-destination-grade"><SelectValue placeholder="All grades (full generation)" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All grades (full generation)</SelectItem>
+                  {selectableDestinationGrades.map((grade) => (
+                    <SelectItem key={grade} value={grade}>Grade {grade}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="generation-mode">Placement mode</Label>
+              <Select value={generationMode} onValueChange={(value: "unallocated" | "regenerate-grade") => setGenerationMode(value)} disabled={!destinationGrade}>
+                <SelectTrigger id="generation-mode" data-testid="select-generation-mode"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="unallocated">Place Unallocated Learners Only</SelectItem>
+                  <SelectItem value="regenerate-grade">Regenerate All Placements for Selected Grade</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          {destinationGrade && (
+            <Alert>
+              <Users className="h-4 w-4" />
+              <AlertTitle>Grade {destinationGrade} placement scope</AlertTitle>
+              <AlertDescription>
+                Eligible: {selectedGradeStudents.length} · Already placed: {selectedGradePlacedCount} · Unallocated: {selectedGradeUnallocatedCount}
+                {generationMode === "unallocated" && selectedGradeClassesAtCapacity.length > 0 ? ` · Full classes excluded: ${selectedGradeClassesAtCapacity.join(", ")}` : ""}
+                {generationMode === "unallocated" ? ". Existing placements are retained." : ". All selected-grade placements will be regenerated; other grades remain unchanged."}
+              </AlertDescription>
+            </Alert>
+          )}
+        </CardContent>
+      </Card>
 
       {accountContext?.subscriptionStatus === "trialing" && (
         <Alert variant={accountContext.trialExpired ? "destructive" : "default"}>
@@ -482,6 +570,21 @@ export default function GeneratePage() {
           </CardContent>
         </Card>
       )}
+
+      <AlertDialog open={confirmRegenerationOpen} onOpenChange={setConfirmRegenerationOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Regenerate all Grade {destinationGrade} placements?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Existing Grade {destinationGrade} assignments, including manual placements and locked learners, will be replaced. Other destination grades will remain unchanged.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={runGeneration}>Regenerate Grade {destinationGrade}</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
         <DialogContent className="max-w-md">
