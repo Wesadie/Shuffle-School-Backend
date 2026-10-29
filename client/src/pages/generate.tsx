@@ -276,13 +276,15 @@ export default function GeneratePage() {
     })
     .map((config) => config.name);
   const regenerationCapacitySufficient = selectedGradeStudents.length <= selectedGradeClassConfigs.reduce((sum, config) => sum + (config.capacity || 30), 0);
-  const unallocatedCapacitySufficient = selectedGradeClassesAtCapacity.length === 0
+  const unallocatedCapacitySufficient = selectedGradeUnallocatedCount > 0
     && selectedGradeUnallocatedCount <= selectedGradeClassConfigs.reduce((sum, config) =>
       sum + Math.max(0, (config.capacity || 30) - savedPlacements.filter((placement) => placement.classId === config.id).length), 0);
   const selectedGradeCanGenerate = Boolean(destinationGrade)
     && selectedGradeStudents.length > 0
     && selectedGradeStudents.every((student) => Boolean(getStudentTargetGrade(student)))
-    && (generationMode === "unallocated" ? unallocatedCapacitySufficient : regenerationCapacitySufficient);
+    && (generationMode === "unallocated"
+      ? selectedGradeUnallocatedCount > 0 && unallocatedCapacitySufficient
+      : regenerationCapacitySufficient);
   const canGenerate = destinationGrade
     ? selectedGradeCanGenerate
     : placementCandidates.length > 0 && studentsWithoutTargetGrade.length === 0 && gradeCapacityIssues.length === 0;

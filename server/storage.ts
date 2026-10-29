@@ -754,13 +754,51 @@ export class DatabaseStorage {
     placementList: InsertPlacement[],
     expectedRevision: number,
   ): Promise<{ count: number; revision: number }> {
-    const current = await this.getPlacements(accountId);
-    const revision = await this.replacePlacements(
-      accountId,
-      [...current, ...placementList],
-      expectedRevision,
-    );
-    return { count: placementList.length, revision };
+    accountId = requireAccountId(accountId);
+    if (placementList.length === 0) {
+      throw new Error("No new placements were supplied");
+    }
+
+    return this.withPlacementRevision(accountId, expectedRevision, async (transaction, revision) => {
+      const [currentPlacements, accountStudents, configs, accountRules] = await Promise.all([
+        transaction.select().from(placements).where(eq(placements.accountId, accountId)),
+        transaction.select().from(students).where(eq(students.accountId, accountId)),
+        transaction.select().from(classConfigs).where(eq(classConfigs.accountId, accountId)),
+        transaction.select().from(rules).where(eq(rules.accountId, accountId)),
+      ]);
+
+      // Validate the combined result, but insert only the new rows. Existing
+      // placement IDs, class assignments, and lock flags remain untouched.
+      validatePlacements([...currentPlacements, ...placementList], accountStudents, configs, accountRules);
+
+      const studentIds = Array.from(new Set(placementList.map((placement) => placement.studentId)));
+      const classIds = Array.from(new Set(placementList.map((placement) => placement.classId)));
+      const linkedStudents = await transaction
+        .select({ id: students.id })
+        .from(students)
+        .where(and(eq(students.accountId, accountId), inArray(students.id, studentIds)));
+      if (linkedStudents.length !== studentIds.length) {
+        throw new Error("New placement learners must belong to the current account");
+      }
+      const linkedClasses = await transaction
+        .select({ id: classConfigs.id })
+        .from(classConfigs)
+        .where(and(eq(classConfigs.accountId, accountId), inArray(classConfigs.id, classIds)));
+      if (linkedClasses.length !== classIds.length) {
+        throw new Error("New placement classes must belong to the current account");
+      }
+
+      await transaction.insert(placements).values(
+        placementList.map((placement) => ({
+          id: randomUUID(),
+          accountId,
+          studentId: placement.studentId,
+          classId: placement.classId,
+          locked: placement.locked ?? false,
+        })),
+      );
+      return { count: placementList.length, revision };
+    });
   }
 
   async getSurveys(accountId: string): Promise<Survey[]> {

@@ -28,7 +28,7 @@ export async function buildIncrementalGeneration(
     rules: Rule[],
     characteristics: Characteristic[],
     preferences: TeacherPlacementPreference[],
-    context: { fixedStudentsByClass: Map<string, Student[]>; cohortStudents: Student[] },
+    context: { fixedStudentsByClass: Map<string, Student[]>; currentClassCounts: Map<string, number>; cohortStudents: Student[] },
   ) => Promise<{ classes: { classConfig: ClassConfig; students: Student[] }[]; unassignedStudentIds: string[]; conflicts: { message: string }[] }>,
 ): Promise<IncrementalGenerationResult> {
   const grade = normalizeGradeValue(input.targetGrade);
@@ -44,17 +44,14 @@ export async function buildIncrementalGeneration(
   const selectedGradeConfigs = input.classConfigs.filter((config) => normalizeGradeValue(config.grade) === grade);
   if (!selectedGradeConfigs.length) throw new InvalidPlacementError(`No target classes are configured for Grade ${grade}.`);
 
-  const placementsToSave = studentsToPlace.flatMap((student) => {
-    const existing = placementByStudent.get(student.id);
-    return existing && input.mode === "regenerate-grade" ? [{ studentId: existing.studentId, classId: existing.classId, locked: existing.locked }] : [];
-  });
   const protectedPlacements = currentPlacements.filter((placement) =>
     !gradeIds.has(placement.studentId) || (input.mode === "unallocated" && gradeIds.has(placement.studentId)),
   );
-  const fixedPlacements = [...protectedPlacements, ...placementsToSave];
-  const fixedIds = new Set(fixedPlacements.map((placement) => placement.studentId));
+  const fixedIds = new Set(protectedPlacements.map((placement) => placement.studentId));
   const fixedStudentsByClass = new Map<string, Student[]>();
+  const currentClassCounts = new Map<string, number>();
   protectedPlacements.forEach((placement) => {
+    currentClassCounts.set(placement.classId, (currentClassCounts.get(placement.classId) ?? 0) + 1);
     const student = input.students.find((entry) => entry.id === placement.studentId);
     if (!student) return;
     const members = fixedStudentsByClass.get(placement.classId) ?? [];
@@ -75,12 +72,15 @@ export async function buildIncrementalGeneration(
   const selectedPreferences = input.teacherPlacementPreferences.filter((preference) =>
     studentsToPlace.some((student) => student.id === preference.studentId),
   );
-  const classesWithRemainingCapacity = selectedGradeConfigs.flatMap((config) => {
-    const protectedCount = (protectedPlacements.filter((placement) => placement.classId === config.id).length);
-    const capacity = Math.max(0, (config.capacity || 30) - protectedCount - (input.mode === "regenerate-grade" ? placementsToSave.filter((placement) => placement.classId === config.id).length : 0));
-    return capacity > 0 ? [{ ...config, capacity }] : [];
-  });
-  if (!classesWithRemainingCapacity.length) throw new InvalidPlacementError(`Grade ${grade} has no target class capacity available without moving protected learners.`);
+  const remainingCapacity = selectedGradeConfigs.reduce((total, config) => {
+    const protectedCount = currentClassCounts.get(config.id) ?? 0;
+    return total + Math.max(0, (config.capacity || 30) - protectedCount);
+  }, 0);
+  if (remainingCapacity <= 0) throw new InvalidPlacementError(`Grade ${grade} has no target class capacity available without moving protected learners.`);
+  // Keep full class capacities here. The solver already counts protected
+  // learners in each class when checking capacity; reducing capacity here too
+  // would count those learners twice.
+  const classesWithRemainingCapacity = selectedGradeConfigs;
 
   const result = await generate(
     studentsToPlace,
@@ -88,28 +88,29 @@ export async function buildIncrementalGeneration(
     selectedRules,
     input.characteristics,
     selectedPreferences,
-    { fixedStudentsByClass, cohortStudents: gradeStudents },
+    { fixedStudentsByClass, currentClassCounts, cohortStudents: gradeStudents },
   );
   if (result.unassignedStudentIds.length) {
     throw new InvalidPlacementError(`Mandatory rules or capacity prevented placing these learners: ${result.unassignedStudentIds.join(", ")}`);
   }
 
-  const generatedPlacements = result.classes.flatMap((generatedClass) => generatedClass.students.map((student) => ({
-    studentId: student.id,
-    classId: generatedClass.classConfig.id,
-  })));
+  const studentsToPlaceIds = new Set(studentsToPlace.map((student) => student.id));
+  // Incremental solver results include protected learners for scoring and
+  // class-balance summaries. Persist only newly generated/re-generated learners.
+  const generatedPlacements = result.classes.flatMap((generatedClass) => generatedClass.students
+    .filter((student) => studentsToPlaceIds.has(student.id))
+    .map((student) => ({ studentId: student.id, classId: generatedClass.classConfig.id })));
   const affectedStudentIds = studentsToPlace.map((student) => student.id);
   const nextPlacements = input.mode === "regenerate-grade"
     ? [
         ...input.placements.filter((placement) => !gradeIds.has(placement.studentId)).map(({ studentId, classId }) => ({ studentId, classId })),
-        ...placementsToSave.map(({ studentId, classId }) => ({ studentId, classId })),
         ...generatedPlacements,
       ]
     : input.placements.map(({ studentId, classId }) => ({ studentId, classId })).concat(generatedPlacements);
   validatePlacements(nextPlacements, input.students, input.classConfigs, input.rules);
 
   return {
-    placementList: input.mode === "regenerate-grade" ? [...placementsToSave, ...generatedPlacements] : generatedPlacements,
+    placementList: generatedPlacements,
     affectedStudentIds,
     studentsToPlace,
     conflicts: result.conflicts.map((conflict) => conflict.message),

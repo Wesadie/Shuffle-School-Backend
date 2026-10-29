@@ -2875,10 +2875,6 @@ export async function generateBalancedClasses(
   const genderSharesByTargetGrade = getGenderSharesByTargetGrade(cohortStudents);
   const classAssignments: Map<string, Student[]> = new Map();
   const fixedStudentsByClass = incrementalContext?.fixedStudentsByClass ?? new Map<string, Student[]>();
-  const availableCapacityByClass = new Map(classConfigs.map((config) => [
-    config.id,
-    Math.max(0, (config.capacity || 30) - (fixedStudentsByClass.get(config.id)?.length ?? 0)),
-  ]));
   classConfigs.forEach((config) => {
     classAssignments.set(config.id, [...(fixedStudentsByClass.get(config.id) ?? [])]);
   });
@@ -2986,10 +2982,9 @@ export async function generateBalancedClasses(
   // Class size is the first priority: target sizes are based on the full selected-grade cohort.
   const targetClassSizes = new Map<string, number>();
   let openClasses = [...classConfigList];
+  // cohortStudents represents the full target-grade cohort, including learners
+  // already placed. Do not add fixed learners again or target class sizes inflate.
   let remainingTargetSize = incrementalContext?.cohortStudents.length ?? students.length;
-  if (incrementalContext) {
-    remainingTargetSize += Array.from(incrementalContext.fixedStudentsByClass.values()).reduce((sum, members) => sum + members.length, 0);
-  }
   while (openClasses.length > 0) {
     const baseSize = Math.floor(remainingTargetSize / openClasses.length);
     const remainder = remainingTargetSize % openClasses.length;
@@ -3016,8 +3011,7 @@ export async function generateBalancedClasses(
     let totalDeviation = 0;
     for (const config of classConfigList) {
       const fullTargetSize = targetClassSizes.get(config.id) ?? 0;
-      const fixedCount = fixedStudentsByClass.get(config.id)?.length ?? 0;
-      const targetSize = Math.max(0, fullTargetSize - fixedCount);
+      const targetSize = fullTargetSize;
       totalTargetSize += targetSize;
       const cohortShares = genderSharesByTargetGrade.get(normalizeGradeValue(config.grade));
       if (!cohortShares) continue;
@@ -3025,12 +3019,6 @@ export async function generateBalancedClasses(
       for (const student of studentsByClass.get(config.id) || []) {
         const gender = genderValueOf(student);
         counts.set(gender, (counts.get(gender) || 0) + 1);
-      }
-      if (incrementalContext) {
-        (fixedStudentsByClass.get(config.id) || []).forEach((student) => {
-          const gender = genderValueOf(student);
-          counts.set(gender, (counts.get(gender) || 0) + 1);
-        });
       }
       const categories = new Set([...cohortShares.keys(), ...counts.keys()]);
       for (const category of categories) {
@@ -3079,7 +3067,9 @@ export async function generateBalancedClasses(
 
     for (const config of classConfigList) {
       const currentStudents = classAssignments.get(config.id)!;
-      if (currentStudents.length + group.length > ((config.capacity || 30) - (fixedStudentsByClass.get(config.id)?.length ?? 0))) continue;
+      // currentStudents already includes fixed learners, so subtracting their
+      // count from capacity again would incorrectly halve the remaining capacity.
+      if (currentStudents.length + group.length > (config.capacity || 30)) continue;
 
       let separationViolations = 0;
       for (let index = 0; index < group.length; index++) {
@@ -3101,7 +3091,7 @@ export async function generateBalancedClasses(
       const teacherPlacementScore = group.reduce((score, student) =>
         score + (preferencesByStudent.get(student.id) || []).filter((classId) => classId === config.id).length,
       0);
-      const targetSize = Math.max(0, (targetClassSizes.get(config.id) ?? group.length) - (fixedStudentsByClass.get(config.id)?.length ?? 0));
+      const targetSize = targetClassSizes.get(config.id) ?? group.length;
       const candidateLayout = new Map(classAssignments);
       candidateLayout.set(config.id, candidateStudents);
 
@@ -3461,7 +3451,7 @@ export async function generateBalancedClasses(
         config,
         classConfigList,
         targetClassSizes,
-        students,
+        cohortStudents,
       );
     }
 

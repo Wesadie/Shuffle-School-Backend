@@ -12,7 +12,7 @@ export interface StudentImportPartition<T extends StudentIdRow> {
 const normalizeStudentId = (studentId?: string | null) => (studentId ?? "").trim().toLowerCase();
 
 export const isIncomingGradeRStudent = (grade?: string | null, currentClass?: string | null) =>
-  (grade ?? "").replace(/^grade\s+/i, "").trim().toLowerCase() === "r"
+  (grade ?? "").replace(/^grade\\s+/i, "").trim().toLowerCase() === "r"
   && !(currentClass ?? "").trim();
 
 export const importedStudentIsNew = (student: { grade?: string | null; currentClass?: string | null; isNew?: boolean }) =>
@@ -61,10 +61,23 @@ export const partitionStudentImportRows = <T extends StudentIdRow>(
     rowsToImport.push(row);
   });
 
+  // If the database already contains duplicate student IDs, pause this import
+  // for manual review rather than importing any new rows into an inconsistent roster.
+  // Keep duplicateRows as a separate count for duplicates within the uploaded file.
+  if (existingDuplicateStudentIds.size > 0) {
+    skippedExisting += rowsToImport.length;
+    return {
+      rowsToImport: [],
+      skippedExisting,
+      duplicateRows,
+      existingDuplicateStudentIds: Array.from(existingDuplicateStudentIds).sort(),
+    };
+  }
+
   return {
     rowsToImport,
     skippedExisting,
     duplicateRows,
-    existingDuplicateStudentIds: Array.from(existingDuplicateStudentIds),
+    existingDuplicateStudentIds: Array.from(existingDuplicateStudentIds).sort(),
   };
 };
