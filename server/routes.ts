@@ -3132,11 +3132,11 @@ export async function generateBalancedClasses(
     let best = sizeCandidates[0];
     for (const candidate of sizeCandidates.slice(1)) {
       if (
-        candidate.genderScore > best.genderScore ||
-        (candidate.genderScore === best.genderScore && candidate.previousSchoolScore > best.previousSchoolScore) ||
-        (candidate.genderScore === best.genderScore && candidate.previousSchoolScore === best.previousSchoolScore && compareVectors(candidate.characteristicScores, best.characteristicScores) > 0) ||
-        (candidate.genderScore === best.genderScore && candidate.previousSchoolScore === best.previousSchoolScore && compareVectors(candidate.characteristicScores, best.characteristicScores) === 0 && candidate.teacherPlacementScore > best.teacherPlacementScore) ||
-        (candidate.genderScore === best.genderScore && candidate.previousSchoolScore === best.previousSchoolScore && compareVectors(candidate.characteristicScores, best.characteristicScores) === 0 && candidate.teacherPlacementScore === best.teacherPlacementScore && candidate.importantScore > best.importantScore)
+        candidate.teacherPlacementScore > best.teacherPlacementScore ||
+        (candidate.teacherPlacementScore === best.teacherPlacementScore && candidate.genderScore > best.genderScore) ||
+        (candidate.teacherPlacementScore === best.teacherPlacementScore && candidate.genderScore === best.genderScore && candidate.previousSchoolScore > best.previousSchoolScore) ||
+        (candidate.teacherPlacementScore === best.teacherPlacementScore && candidate.genderScore === best.genderScore && candidate.previousSchoolScore === best.previousSchoolScore && compareVectors(candidate.characteristicScores, best.characteristicScores) > 0) ||
+        (candidate.teacherPlacementScore === best.teacherPlacementScore && candidate.genderScore === best.genderScore && candidate.previousSchoolScore === best.previousSchoolScore && compareVectors(candidate.characteristicScores, best.characteristicScores) === 0 && candidate.importantScore > best.importantScore)
       ) {
         best = candidate;
       }
@@ -3294,11 +3294,13 @@ export async function generateBalancedClasses(
           candidateMetrics.genderScore < currentMetrics.genderScore ||
           candidateMetrics.previousSchoolScore < currentMetrics.previousSchoolScore
         )) return;
-        if (pass === "teacher-placement" && (
-          candidateMetrics.genderScore < currentMetrics.genderScore ||
-          candidateMetrics.previousSchoolScore < currentMetrics.previousSchoolScore ||
-          candidateMetrics.teacherPlacementScore <= currentMetrics.teacherPlacementScore
-        )) return;
+        // Teacher placement requests take priority over balancing preferences.
+        // During this pass, allow gender/Previous School/characteristic balance
+        // to worsen when that is necessary to satisfy an additional teacher request.
+        // Capacity, mandatory pair/separation validity, and class-size penalty
+        // are still protected by the checks above.
+        if (pass === "teacher-placement" &&
+          candidateMetrics.teacherPlacementScore <= currentMetrics.teacherPlacementScore) return;
         if (pass === "gender" && candidateMetrics.genderScore <= currentMetrics.genderScore) return;
         if (pass === "previous-school" && (
           candidateMetrics.previousSchoolScore <= currentMetrics.previousSchoolScore ||
