@@ -686,7 +686,7 @@ export default function ReviewPage() {
   const regenerateMutation = useMutation({
     mutationFn: (variables: { historySnapshot: PlacementSnapshot; grade?: string }) =>
       apiRequest("POST", "/api/generate-classes", {
-        ...(variables.grade ? { grade: variables.grade } : {}),
+        ...(variables.grade ? { grade: variables.grade, mode: "regenerate-grade" } : {}),
         expectedRevision: currentPlacementRevision(),
       }),
     onSuccess: (_data, variables) => {
