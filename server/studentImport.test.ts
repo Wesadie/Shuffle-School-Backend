@@ -69,7 +69,7 @@ test("Grade R with explicit New Grade 1 can be targeted for solver placement", (
 
 
 import { buildLearnerImportPlan } from "./learnerImportPlan";
-import { parseLearnerCsv, recognizeColumn, type LearnerImportInput } from "@shared/learner-import";
+import { parseLearnerCsv, recognizeColumn, columnMappingErrors, columnMappingLabel, characteristicImportError, type LearnerImportInput } from "@shared/learner-import";
 import type { Student, Characteristic } from "@shared/schema";
 import { readLearnerSpreadsheet } from "../client/src/lib/learner-spreadsheet";
 import ExcelJS from "exceljs";
@@ -200,4 +200,73 @@ test("Excel formula without cached results is explained rather than dropped", as
   const bytes = await workbook.xlsx.writeBuffer();
   const file = { name: "learners.xlsx", size: bytes.byteLength, arrayBuffer: async () => bytes } as unknown as File;
   await assert.rejects(() => readLearnerSpreadsheet(file), /formula has no cached value/);
+});
+
+test("explicit ignore excludes only selected columns, warns about values and does not shadow mapped IDs", () => {
+  const input = spreadsheet(["Student ID", "Race", "Unused ID", "Unused mark"], [["S1", "New race", "OTHER", "not numeric"]], "update");
+  input.columns[2] = { heading: "Unused ID", target: "studentId", kind: "ignore" };
+  input.columns[3] = { heading: "Unused mark", target: "", kind: "ignore" };
+  const saved = learner("S1"), before = JSON.stringify(saved);
+  const plan = buildLearnerImportPlan(input, [saved], []);
+  assert.deepEqual(plan.review.errors, []);
+  assert.deepEqual(plan.updates, [{ id: saved.id, characteristics: { Race: "New race" } }]);
+  assert.equal(plan.review.warnings.filter((w) => w.startsWith("Ignored column")).length, 2);
+  assert.ok(plan.review.warnings.some((w) => w.includes("Unused mark") && w.includes("1 non-blank")));
+  assert.deepEqual(plan.createCharacteristics.map((c) => c.name), ["Race"]);
+  assert.equal(JSON.stringify(saved), before);
+  assert.match(columnMappingLabel(input.columns[3]), /Ignored/);
+});
+
+test("ignoring required fields and leaving any column unmapped blocks review", () => {
+  const input = spreadsheet(["Student ID", "Race", ""], [["S1", "A", "Visible value"]], "update");
+  assert.equal(input.columns[2].kind, "unmapped");
+  let plan = buildLearnerImportPlan(input, [learner("S1")], []);
+  assert.ok(plan.review.errors.some((e) => e.includes("Column 3") && e.includes("unmapped")));
+  input.columns[0] = { heading: "Student ID", target: "", kind: "ignore" };
+  plan = buildLearnerImportPlan(input, [learner("S1")], []);
+  assert.ok(plan.review.errors.some((e) => e.includes("Missing required column: Student ID")));
+  input.columns[2] = { heading: "", target: "", kind: "ignore" };
+  assert.ok(!columnMappingErrors(input.columns, "update").some((e) => e.includes("unmapped")));
+});
+
+test("the same saved mapping works for add and update without replacing learner details", () => {
+  const input = spreadsheet(["ID", "Given Name", "Surname", "Sex", "Year", "Custom mark", "Exclude"], [["S1", "Ada", "Learner", "F", "4", "67.5", "ignored value"]]);
+  input.columns[5] = { heading: "Custom mark", target: "Aggregate", kind: "characteristic", create: true, type: "scale" };
+  input.columns[6] = { heading: "Exclude", target: "", kind: "ignore" };
+  const mapping = JSON.stringify(input.columns);
+  const added = buildLearnerImportPlan(input, [], []);
+  assert.deepEqual(added.review.errors, []);
+  assert.deepEqual(added.inserts[0].characteristics, { Aggregate: "67.5" });
+  const updated = buildLearnerImportPlan({ ...input, mode: "update" }, [learner("S1")], []);
+  assert.deepEqual(updated.review.errors, []);
+  assert.deepEqual(updated.updates[0].characteristics, { Aggregate: "67.5" });
+  assert.equal(JSON.stringify(input.columns), mapping);
+  assert.equal(columnMappingLabel(input.columns[1]), "First Name");
+});
+
+test("duplicate mappings and changed ignore choices require fresh review", () => {
+  const input = spreadsheet(["Student ID", "Race", "Custom"], [["S1", "A", "B"]], "update");
+  input.columns[2] = { heading: "Custom", target: "Race", kind: "characteristic", create: true, type: "category" };
+  assert.ok(columnMappingErrors(input.columns, "update").some((e) => e.includes("Multiple columns")));
+  input.columns[2] = { heading: "Custom", target: "", kind: "ignore" };
+  const saved = learner("S1"), reviewed = buildLearnerImportPlan(input, [saved], []);
+  input.reviewedRevision = reviewed.review.revision;
+  input.columns[2] = recognizeColumn("Custom", []);
+  assert.ok(buildLearnerImportPlan(input, [saved], []).review.errors.some((e) => e.includes("changed since")));
+});
+
+test("General-formatted Excel numerical and percentage values import without format restrictions", async () => {
+  const workbook = new ExcelJS.Workbook(), sheet = workbook.addWorksheet("Learners");
+  sheet.addRow(["Student ID", "Aggregate", "English %", "Maths %", "Race"]);
+  sheet.addRow(["S1", 67.5, 85, 0, "Race A"]);
+  for (const address of ["B2", "C2", "D2"]) sheet.getCell(address).numFmt = "General";
+  const bytes = await workbook.xlsx.writeBuffer();
+  const loaded = await readLearnerSpreadsheet({ name: "marks.xlsx", size: bytes.byteLength, arrayBuffer: async () => bytes } as unknown as File);
+  const plan = buildLearnerImportPlan(spreadsheet(loaded[0].rows[0], loaded[0].rows.slice(1), "update"), [learner("S1")], []);
+  assert.deepEqual(plan.review.errors, []);
+  assert.deepEqual(plan.updates[0].characteristics, { Aggregate: "67.5", "English %": "85", "Maths %": "0", Race: "Race A" });
+  assert.equal(characteristicImportError("85", "percentage"), null);
+  assert.equal(characteristicImportError("67.5", "scale"), null);
+  assert.equal(characteristicImportError("invalid", "scale"), "must be numeric");
+  assert.equal(characteristicImportError("101%", "percentage"), "must be between 0 and 100");
 });

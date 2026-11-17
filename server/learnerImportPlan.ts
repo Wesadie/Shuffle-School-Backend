@@ -1,5 +1,5 @@
 import { insertStudentSchema, type Student, type Characteristic, type InsertStudent, type InsertCharacteristic } from "@shared/schema";
-import { learnerFields, learnerImportSchema, normalizeHeading, type ImportReview } from "@shared/learner-import";
+import { learnerFields, learnerImportSchema, normalizeHeading, columnMappingErrors, characteristicImportError, type ImportReview } from "@shared/learner-import";
 import { defaultResponseColor, getStableResponseId, normalizeResponses } from "@shared/characteristics";
 import { importedStudentIsNew, importedStudentNewGrade, partitionStudentImportRows } from "./studentImport";
 import { createHash } from "node:crypto";
@@ -23,16 +23,17 @@ export function buildLearnerImportPlan(body: unknown, students: Student[], chara
   const review: ImportReview = { revision, count: 0, errors: [], warnings: [], rows: [], newCharacteristics: [] };
   if (input.reviewedRevision && input.reviewedRevision !== revision) review.errors.push("The roster, characteristics or spreadsheet changed since your preview. Validate and review again; no data was changed.");
   const plan: LearnerImportPlan = { review, inserts: [], updates: [], createCharacteristics: [], updateCharacteristics: [] };
-  const targets = new Set<string>();
+  review.errors.push(...columnMappingErrors(input.columns, input.mode));
   const known = new Map(characteristics.map((c) => [normalizeHeading(c.name), c]));
   const valuesByName = new Map<string, Set<string>>();
   const charColumns = input.columns.filter((c) => c.kind === "characteristic");
+  input.columns.forEach((column, index) => {
+    if (column.kind === "ignore") {
+      const populated = input.rows.filter((cells) => cells[index]?.trim()).length;
+      review.warnings.push(`Ignored column ${index + 1} (${column.heading || "no heading"}): ${populated} non-blank values will not be imported. This is an explicit mapping choice.`);
+    }
+  });
   for (const column of input.columns) {
-    const key = `${column.kind}:${normalizeHeading(column.target)}`;
-    if (!column.heading.trim()) review.errors.push("A column has no heading. Name every column before importing.");
-    if (targets.has(key)) review.errors.push(`Multiple columns map to ${column.target}. Resolve the duplicate mapping.`);
-    targets.add(key);
-    if (column.kind === "field" && !Object.prototype.hasOwnProperty.call(learnerFields, column.target)) review.errors.push(`Unknown learner field: ${column.target}.`);
     if (column.kind === "characteristic") {
       if (unsafeNames.has(column.target) || Object.prototype.hasOwnProperty.call(learnerFields, column.target)) review.errors.push(`Reserved characteristic name: ${column.target}.`);
       const existing = known.get(normalizeHeading(column.target));
@@ -43,17 +44,15 @@ export function buildLearnerImportPlan(body: unknown, students: Student[], chara
     }
   }
   const required = input.mode === "update" ? ["studentId"] : ["studentId", "firstName", "lastName", "gender", "grade"];
-  for (const field of required) {
-    if (!input.columns.some((c) => c.kind === "field" && c.target === field)) review.errors.push(`Missing required column: ${learnerFields[field as keyof typeof learnerFields]}.`);
-  }
   if (characteristics.length + review.newCharacteristics.length > 50) review.errors.push("A maximum of 50 active characteristics is supported.");
   if (input.mode === "update") {
     review.warnings.push("Only non-blank marks and characteristics will be updated. Blank cells preserve saved values. Learner identity, grades, class placements and teacher allocations remain unchanged.");
     const protectedColumns = input.columns.filter((c) => c.kind === "field" && c.target !== "studentId").map((c) => c.heading);
     if (protectedColumns.length) review.warnings.push(`Read-only columns in update mode (not applied): ${protectedColumns.join(", ")}.`);
-    if (!charColumns.length) review.errors.push("Include at least one characteristic or mark column to update.");
   }
-  const records = input.rows.map((cells) => Object.fromEntries(input.columns.map((c, i) => [c.target, (cells[i] || "").trim()])));
+  const records = input.rows.map((cells) => Object.fromEntries(input.columns.flatMap((c, i) =>
+    c.kind === "field" || c.kind === "characteristic" ? [[c.target, (cells[i] || "").trim()]] : [],
+  )));
   const existingPartition = partitionStudentImportRows(records, students);
   if (existingPartition.existingDuplicateStudentIds.length) {
     review.errors.push(`This school's roster has duplicate Student IDs. Resolve these before importing: ${existingPartition.existingDuplicateStudentIds.join(", ")}.`);
@@ -78,12 +77,10 @@ export function buildLearnerImportPlan(body: unknown, students: Student[], chara
       let value = record[column.target];
       if (!value) continue;
       const type = known.get(normalizeHeading(column.target))?.type || column.type;
-      if (type === "scale" || type === "percentage") {
-        if (type === "percentage") value = value.replace(/%$/, "").trim();
-        const numeric = Number(value);
-        if (!value || !Number.isFinite(numeric)) errors.push(`${column.target} must be numeric`);
-        else if (type === "percentage" && (numeric < 0 || numeric > 100)) errors.push(`${column.target} must be between 0 and 100`);
-        else value = String(numeric);
+      const valueError = characteristicImportError(value, type);
+      if (valueError) errors.push(`${column.target} ${valueError}`);
+      else if (type === "scale" || type === "percentage") {
+        value = String(Number(type === "percentage" ? value.replace(/%$/, "").trim() : value));
       }
       responses[column.target] = value;
     }

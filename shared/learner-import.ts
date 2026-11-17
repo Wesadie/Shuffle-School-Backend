@@ -15,8 +15,8 @@ const aliases: Record<string, string[]> = {
 };
 
 export const importColumnSchema = z.object({
-  heading: z.string(), target: z.string().trim().min(1),
-  kind: z.enum(["field", "characteristic"]),
+  heading: z.string(), target: z.string().trim(),
+  kind: z.enum(["field", "characteristic", "ignore", "unmapped"]),
   create: z.boolean().optional(), type: z.enum(["category", "scale", "percentage"]).optional(),
 }).strict();
 export const learnerImportSchema = z.object({
@@ -37,8 +37,47 @@ export interface ImportReview {
   newCharacteristics: string[];
 }
 
+export function columnMappingLabel(column: ImportColumn): string {
+  if (column.kind === "ignore") return "Ignored — not imported";
+  if (column.kind === "unmapped") return "Unmapped — choose a destination";
+  if (column.kind === "field") return learnerFields[column.target as keyof typeof learnerFields] || column.target;
+  return `${column.target || "Unnamed characteristic"}${column.create ? " (new)" : ""}`;
+}
+
+export function columnMappingErrors(columns: ImportColumn[], mode: "add" | "update"): string[] {
+  const errors: string[] = [], targets = new Set<string>();
+  columns.forEach((column, index) => {
+    if (column.kind === "ignore") return;
+    if (column.kind === "unmapped" || !column.target.trim()) {
+      errors.push(`Column ${index + 1} (${column.heading || "no heading"}) is unmapped. Choose a destination or explicitly ignore it.`);
+      return;
+    }
+    const key = `${column.kind}:${normalizeHeading(column.target)}`;
+    if (targets.has(key)) errors.push(`Multiple columns map to ${column.target}. Resolve the duplicate mapping.`);
+    targets.add(key);
+    if (column.kind === "field" && !Object.prototype.hasOwnProperty.call(learnerFields, column.target)) errors.push(`Unknown learner field: ${column.target}.`);
+    if (column.kind === "characteristic" && column.create && !column.type) errors.push(`Choose a characteristic type for ${column.target}.`);
+  });
+  const required = mode === "update" ? ["studentId"] : ["studentId", "firstName", "lastName", "gender", "grade"];
+  for (const field of required) {
+    if (!columns.some((c) => c.kind === "field" && c.target === field)) errors.push(`Missing required column: ${learnerFields[field as keyof typeof learnerFields]}.`);
+  }
+  if (mode === "update" && !columns.some((c) => c.kind === "characteristic")) errors.push("Include at least one characteristic or mark column to update.");
+  return errors;
+}
+
+export function characteristicImportError(value: string, type?: string): string | null {
+  if (!value.trim() || (type !== "scale" && type !== "percentage")) return null;
+  const numericText = type === "percentage" ? value.trim().replace(/%$/, "").trim() : value.trim();
+  const numeric = Number(numericText);
+  if (!numericText || !Number.isFinite(numeric)) return "must be numeric";
+  if (type === "percentage" && (numeric < 0 || numeric > 100)) return "must be between 0 and 100";
+  return null;
+}
+
 export function recognizeColumn(heading: string, characteristics: { name: string; type: string }[]): ImportColumn {
   const normalized = normalizeHeading(heading);
+  if (!normalized) return { heading, target: "", kind: "unmapped" };
   for (const [key, label] of Object.entries(learnerFields)) {
     if ([key, label, ...(aliases[key] || [])].some((alias) => normalizeHeading(alias) === normalized)) {
       return { heading, target: key, kind: "field" };
