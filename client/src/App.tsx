@@ -40,7 +40,7 @@ import PayfastReturnPage from "@/pages/payfast-return";
 import PayfastCancelPage from "@/pages/payfast-cancel";
 import TeacherSurveyPage from "@/pages/teacher-survey";
 
-import type { Student, Placement, ClassConfig } from "@shared/schema";
+import type { Placement, ClassConfig } from "@shared/schema";
 
 function RedirectToDashboard() {
   const [, setLocation] = useLocation();
@@ -216,12 +216,6 @@ function AppContent() {
     const token = decodeURIComponent(location.slice("/teacher-survey/".length));
     return <TeacherSurveyPage token={token} />;
   }
-
-  const { data: students = [] } = useQuery<Student[]>({
-
-    queryKey: ["/api/students"],
-    enabled: isAuthenticated,
-  });
 
   const { data: placements = [] } = useQuery<Placement[]>({
     queryKey: ["/api/placements"],

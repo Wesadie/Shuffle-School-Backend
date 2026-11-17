@@ -1,16 +1,19 @@
-import { useMemo, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Plus, Trash2, Edit2, Search, Users, ChevronUp, ChevronDown, MessageSquare, Upload, Download, Settings } from "lucide-react";
+import { Plus, Trash2, Search, Users, ChevronUp, ChevronDown, Upload, Download, Settings } from "lucide-react";
 import { CSVImportDialog } from "@/components/csv-import-dialog";
 import { StudentFormFields } from "@/components/student-form-fields";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { StudentRosterRow } from "@/components/student-roster-row";
+import { useStudentRoster, useSaveRosterStudent } from "@/hooks/use-student-roster";
+import { getCharacteristics, getStudentDisplayId, uniqueOptions } from "@/lib/student-roster-display";
+import { changedStudentFields, normalizeRosterGrade } from "@shared/student-roster";
+import { characteristicImportError } from "@shared/learner-import";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Table,
   TableBody,
-  TableCell,
   TableHead,
   TableHeader,
   TableRow,
@@ -29,22 +32,20 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { downloadXlsx, type SpreadsheetCell } from "@/lib/xlsx-export";
-import { characteristicValueToArray, formatCharacteristicValue, isCharacteristicApplicableToGrade, normalizeResponses } from "@shared/characteristics";
+import { characteristicValueToArray, formatCharacteristicValue, normalizeResponses } from "@shared/characteristics";
 import type { Student, InsertStudent, Characteristic, ClassConfig, CharacteristicResponse } from "@shared/schema";
-import { getNextGrade, isIncomingGradeRAwaitingAllocation } from "@shared/grades";
+import { getNextGrade } from "@shared/grades";
 
 type SortField = "firstName" | "lastName" | "grade" | "currentClass";
 type SortDirection = "asc" | "desc";
-type EditingCell = { studentId: string; key: string } | null;
+const EMPTY_CHARACTERISTICS: Characteristic[] = [];
+const EMPTY_CLASSES: ClassConfig[] = [];
 
 export default function StudentsPage() {
   const { toast } = useToast();
@@ -59,9 +60,9 @@ export default function StudentsPage() {
   const [editingStudent, setEditingStudent] = useState<Student | null>(null);
   const [sortField, setSortField] = useState<SortField>("lastName");
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
-  const [editingCell, setEditingCell] = useState<EditingCell>(null);
-  const [inlineDraft, setInlineDraft] = useState("");
-  const [savingCellKey, setSavingCellKey] = useState<string | null>(null);
+  const [page, setPage] = useState(0);
+  const deferredSearch = useDeferredValue(searchQuery);
+  const saveRosterStudent = useSaveRosterStudent();
 
   const [formData, setFormData] = useState<Partial<InsertStudent>>({
     firstName: "",
@@ -75,15 +76,13 @@ export default function StudentsPage() {
     parentNotes: "",
   });
 
-  const { data: students = [], isLoading } = useQuery<Student[]>({
-    queryKey: ["/api/students"],
-  });
+  const { students, isLoading, isFetching, error: rosterError, refetch, options: rosterOptions, optionsError, refetchOptions } = useStudentRoster(selectedGrade);
 
-  const { data: characteristics = [] } = useQuery<Characteristic[]>({
+  const { data: characteristics = EMPTY_CHARACTERISTICS } = useQuery<Characteristic[]>({
     queryKey: ["/api/characteristics"],
   });
 
-  const { data: classConfigs = [] } = useQuery<ClassConfig[]>({
+  const { data: classConfigs = EMPTY_CLASSES } = useQuery<ClassConfig[]>({
     queryKey: ["/api/class-configs"],
   });
 
@@ -101,16 +100,12 @@ export default function StudentsPage() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: Partial<InsertStudent> }) =>
-      apiRequest("PATCH", `/api/students/${id}`, data),
+    mutationFn: ({ student, data }: { student: Student; data: Partial<InsertStudent> }) =>
+      saveRosterStudent(student, changedStudentFields(student, data)),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/students"] });
       setEditingStudent(null);
       resetForm();
       toast({ title: "Student updated successfully" });
-    },
-    onError: () => {
-      toast({ title: "Failed to update student", variant: "destructive" });
     },
   });
 
@@ -156,9 +151,15 @@ export default function StudentsPage() {
       toast({ title: "Please fill in required fields", variant: "destructive" });
       return;
     }
+    const editedCharacteristics = editingStudent ? changedStudentFields(editingStudent, formData).characteristics : formData.characteristics;
+    for (const [name, value] of Object.entries(editedCharacteristics || {})) {
+      const characteristic = characteristics.find((c) => c.name === name);
+      const invalid = characteristicImportError(formatCharacteristicValue(value), characteristic?.type);
+      if (invalid) { toast({ title: `${name} ${invalid}`, variant: "destructive" }); return; }
+    }
 
     if (editingStudent) {
-      updateMutation.mutate({ id: editingStudent.id, data: formData as InsertStudent });
+      updateMutation.mutate({ student: editingStudent, data: formData as InsertStudent });
     } else {
       createMutation.mutate(formData as InsertStudent);
     }
@@ -174,10 +175,9 @@ export default function StudentsPage() {
   };
 
   const staticGrades = ["1", "2", "3", "4", "5", "6", "7"];
-  const metadataCharacteristicNames = new Set(["studentId", "newGrade"]);
-  const tableCharacteristicColumns = characteristics.filter(
-    (char) => !metadataCharacteristicNames.has(char.name),
-  );
+  const tableCharacteristicColumns = useMemo(() => characteristics.filter(
+    (char) => !["studentId", "newGrade"].includes(char.name),
+  ), [characteristics]);
   const formCharacteristicColumns = tableCharacteristicColumns;
 
   const responseLookup = useMemo(() => {
@@ -189,346 +189,50 @@ export default function StudentsPage() {
     return lookup;
   }, [characteristics]);
 
-  const getCharacteristics = (student: Student): Record<string, string | string[]> =>
-    (student.characteristics || {}) as Record<string, string | string[]>;
+  const gradeOptions = useMemo(() => uniqueOptions([
+    ...(rosterOptions?.grades || []).map(normalizeRosterGrade),
+    ...classConfigs.map((config) => normalizeRosterGrade(config.grade)), "R", ...staticGrades,
+  ]), [rosterOptions, classConfigs]);
+  const currentClassOptions = useMemo(() => uniqueOptions([
+    ...(rosterOptions?.currentClasses || []), ...classConfigs.map((config) => config.name),
+  ]), [rosterOptions, classConfigs]);
+  const newGradeOptions = useMemo(() => uniqueOptions([
+    ...(rosterOptions?.newGrades || []), ...(rosterOptions?.grades || []).map(getNextGrade),
+    ...classConfigs.map((config) => config.grade), ...staticGrades,
+  ]), [rosterOptions, classConfigs]);
+  const genderOptions = useMemo(() => uniqueOptions([
+    ...(rosterOptions?.genders || []), "male", "female", "other",
+  ]), [rosterOptions]);
 
-  const formatGrade = (grade?: string | null) => {
-    if (!grade) return "—";
-    return grade.toLowerCase().startsWith("grade ") ? grade : `Grade ${grade}`;
-  };
-
-  const normalizeGrade = (grade?: string | null) =>
-    (grade || "").replace(/^grade\s+/i, "").trim();
-
-
-  const getStudentDisplayId = (student: Student) =>
-    student.studentId || formatCharacteristicValue(getCharacteristics(student).studentId) || "—";
-
-  const getNewGrade = (student: Student) =>
-    formatCharacteristicValue(getCharacteristics(student).newGrade) || getNextGrade(student.grade) || "—";
-
-  const getRawCharacteristicValue = (student: Student, name: string) =>
-    getCharacteristics(student)[name];
-
-  const getCharacteristicValue = (student: Student, name: string) =>
-    formatCharacteristicValue(getRawCharacteristicValue(student, name)) || "—";
-
-  const getRequestsTotal = (student: Student) =>
-    [student.parentRequests, student.parentNotes].filter((value) => value && value.trim()).length;
-
-  const uniqueOptions = (values: Array<string | null | undefined>) =>
-    Array.from(new Set(values.filter((value): value is string => Boolean(value && value.trim()))));
-
-  const gradeOptions = uniqueOptions([
-    ...students.map((student) => student.grade),
-    "R",
-    ...classConfigs.map((config) => config.grade),
-    ...staticGrades,
-  ]);
-
-  const currentClassOptions = uniqueOptions([
-    ...students.map((student) => student.currentClass),
-    ...classConfigs.map((config) => config.name),
-  ]);
-
-  const newGradeOptions = uniqueOptions([
-    ...students.map((student) => getNewGrade(student)).filter((value) => value !== "—"),
-    ...classConfigs.map((config) => config.grade),
-    "1",
-    ...staticGrades,
-  ]);
-
-  const genderOptions = uniqueOptions([
-    ...students.map((student) => student.gender),
-    "male",
-    "female",
-    "other",
-  ]);
-
-  const cellKey = (student: Student, key: string) => `${student.id}:${key}`;
-
-  const startTextEdit = (student: Student, key: string, value: string) => {
-    if (savingCellKey === cellKey(student, key)) return;
-    setEditingCell({ studentId: student.id, key });
-    setInlineDraft(value === "—" ? "" : value);
-  };
-
-  const saveInlineUpdate = async (student: Student, key: string, data: Partial<InsertStudent>) => {
-    const keyForCell = cellKey(student, key);
-    if (savingCellKey === keyForCell) return;
-
-    setSavingCellKey(keyForCell);
-    try {
-      await apiRequest("PATCH", `/api/students/${student.id}`, data);
-      await queryClient.invalidateQueries({ queryKey: ["/api/students"] });
-      toast({ title: "Student updated successfully" });
-    } catch (error) {
-      toast({ title: "Failed to update student", variant: "destructive" });
-    } finally {
-      setSavingCellKey(null);
-    }
-  };
-
-  const commitTextEdit = async (
-    student: Student,
-    key: string,
-    previousValue: string,
-    nextValue: string,
-    buildData: (value: string) => Partial<InsertStudent>,
-    required = false,
-  ) => {
-    const trimmedValue = nextValue.trim();
-    setEditingCell(null);
-
-    if (required && !trimmedValue) {
-      setInlineDraft(previousValue);
-      return;
-    }
-
-    if (trimmedValue === previousValue) return;
-    await saveInlineUpdate(student, key, buildData(trimmedValue));
-  };
-
-  const cancelTextEdit = () => {
-    setEditingCell(null);
-    setInlineDraft("");
-  };
-
-  const updateCharacteristicData = (student: Student, name: string, value: string | string[]): Partial<InsertStudent> => ({
-    characteristics: {
-      ...getCharacteristics(student),
-      [name]: value,
-    },
-  });
-
-  const updateStudentIdData = (student: Student, value: string): Partial<InsertStudent> => {
-    if (student.studentId) return { studentId: value || null };
-    return updateCharacteristicData(student, "studentId", value);
-  };
-
-  const renderTextCell = (
-    student: Student,
-    key: string,
-    value: string,
-    buildData: (value: string) => Partial<InsertStudent>,
-    required = false,
-    className = "whitespace-nowrap",
-    inputType: "text" | "number" = "text",
-  ) => {
-    const keyForCell = cellKey(student, key);
-    const isEditing = editingCell?.studentId === student.id && editingCell.key === key;
-    const isSaving = savingCellKey === keyForCell;
-
-    if (isEditing) {
-      return (
-        <Input
-          autoFocus
-          type={inputType}
-          min={inputType === "number" ? 0 : undefined}
-          max={inputType === "number" && key.includes("percentage") ? 100 : undefined}
-          value={inlineDraft}
-          disabled={isSaving}
-          onChange={(event) => setInlineDraft(event.target.value)}
-          onBlur={() => commitTextEdit(student, key, value === "—" ? "" : value, inlineDraft, buildData, required)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              event.currentTarget.blur();
-            }
-            if (event.key === "Escape") {
-              event.preventDefault();
-              cancelTextEdit();
-            }
-          }}
-          className={`h-8 px-2 ${key === "firstName" || key === "lastName" ? "min-w-0 flex-1" : "min-w-28"}`}
-        />
-      );
-    }
-
-    return (
-      <button
-        type="button"
-        disabled={isSaving}
-        onClick={() => startTextEdit(student, key, value)}
-        className={`block w-full rounded-sm text-left hover:bg-muted/60 focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-60 ${className}`}
-        title={key === "firstName" || key === "lastName" ? value : "Click to edit"}
-      >
-        {isSaving ? "Saving…" : value}
-      </button>
-    );
-  };
-
-  const renderSelectCell = (
-    student: Student,
-    key: string,
-    value: string,
-    options: string[],
-    buildData: (value: string | null) => Partial<InsertStudent>,
-    responses?: Map<string, CharacteristicResponse>,
-  ) => {
-    const keyForCell = cellKey(student, key);
-    const isSaving = savingCellKey === keyForCell;
-    const displayValue = value === "—" ? "" : value;
-    const allOptions = uniqueOptions(options);
-    const selectedResponse = responses?.get(displayValue);
-
-    return (
-      <Select
-        value={displayValue || "__empty__"}
-        disabled={isSaving || allOptions.length === 0}
-        onValueChange={(nextValue) => {
-          const normalizedValue = nextValue === "__empty__" ? null : nextValue;
-          const nextDisplayValue = normalizedValue ?? "";
-          if (nextDisplayValue !== displayValue) {
-            void saveInlineUpdate(student, key, buildData(normalizedValue));
-          }
-        }}
-      >
-        <SelectTrigger
-          className="h-8 min-w-28 justify-between border-0 bg-transparent px-0 text-left shadow-none hover:bg-muted/60 focus:ring-1"
-          title="Select value"
-        >
-          {displayValue ? (
-            <span className="flex min-w-0 items-center gap-1.5 truncate">
-              {selectedResponse && (
-                <span
-                  className="h-2.5 w-2.5 shrink-0 rounded-full"
-                  style={{ backgroundColor: selectedResponse.color }}
-                />
-              )}
-              <span className="truncate">{isSaving ? "Saving…" : displayValue}</span>
-            </span>
-          ) : (
-            <SelectValue placeholder={isSaving ? "Saving…" : "Select…"} />
-          )}
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="__empty__">Select…</SelectItem>
-          {allOptions.map((option) => {
-            const response = responses?.get(option);
-            return (
-              <SelectItem key={option} value={option}>
-                <span className="flex items-center gap-2">
-                  {response && (
-                    <span
-                      className="h-2.5 w-2.5 rounded-full"
-                      style={{ backgroundColor: response.color }}
-                    />
-                  )}
-                  {option}
-                </span>
-              </SelectItem>
-            );
-          })}
-        </SelectContent>
-      </Select>
-    );
-  };
-
-  const renderMultiSelectCell = (
-    student: Student,
-    key: string,
-    value: string | string[] | undefined,
-    options: string[],
-    buildData: (value: string[]) => Partial<InsertStudent>,
-    responses?: Map<string, CharacteristicResponse>,
-  ) => {
-    const keyForCell = cellKey(student, key);
-    const isSaving = savingCellKey === keyForCell;
-    const selectedValues = characteristicValueToArray(value);
-    const allOptions = uniqueOptions([...selectedValues, ...options]);
-    const displayValue = selectedValues.length > 0 ? selectedValues.join(", ") : "—";
-
-    const toggleValue = (option: string) => {
-      const next = selectedValues.includes(option)
-        ? selectedValues.filter((value) => value !== option)
-        : [...selectedValues, option];
-      void saveInlineUpdate(student, key, buildData(next));
-    };
-
-    return (
-      <Popover>
-        <PopoverTrigger asChild>
-          <button
-            type="button"
-            disabled={isSaving || allOptions.length === 0}
-            className="flex h-8 min-w-32 max-w-56 items-center gap-1.5 truncate rounded-sm text-left hover:bg-muted/60 focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-60"
-            title="Select values"
-          >
-            {selectedValues.slice(0, 3).map((selected) => {
-              const response = responses?.get(selected);
-              return response ? (
-                <span key={selected} className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: response.color }} />
-              ) : null;
-            })}
-            <span className="truncate">{isSaving ? "Saving…" : displayValue}</span>
-          </button>
-        </PopoverTrigger>
-        <PopoverContent className="w-56" align="start">
-          <div className="space-y-2">
-            <p className="text-sm font-medium">Select responses</p>
-            {allOptions.map((option) => {
-              const response = responses?.get(option);
-              return (
-                <label key={option} className="flex cursor-pointer items-center gap-2 rounded-sm p-1 text-sm hover:bg-muted">
-                  <Checkbox checked={selectedValues.includes(option)} onCheckedChange={() => toggleValue(option)} />
-                  {response && <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: response.color }} />}
-                  <span>{option}</span>
-                </label>
-              );
-            })}
-          </div>
-        </PopoverContent>
-      </Popover>
-    );
-  };
-
-  const findDuplicates = (studentList: Student[]) => {
-    const nameCount = new Map<string, number>();
-    studentList.forEach((s) => {
-      const key = `${s.firstName.toLowerCase()}-${s.lastName.toLowerCase()}`;
-      nameCount.set(key, (nameCount.get(key) || 0) + 1);
-    });
-    return studentList.filter((s) => {
-      const key = `${s.firstName.toLowerCase()}-${s.lastName.toLowerCase()}`;
-      return (nameCount.get(key) || 0) > 1;
-    });
-  };
-
-  const filteredStudents = students
-    .filter((student) => {
-      const studentDisplayId = getStudentDisplayId(student);
-      const matchesSearch =
-        student.firstName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        student.lastName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        studentDisplayId.toLowerCase().includes(searchQuery.toLowerCase());
-      
-      let matchesFilter = true;
-      if (selectedGrade === "all") {
-        matchesFilter = true;
-      } else if (selectedGrade === "new") {
-        matchesFilter = student.isNew === true;
-      } else if (selectedGrade === "unallocated") {
-        matchesFilter = !student.currentClass;
-      } else if (selectedGrade === "no-id") {
-        matchesFilter = getStudentDisplayId(student) === "—";
-      } else if (selectedGrade === "leaving") {
-        matchesFilter = student.isLeaving === true;
-      } else if (selectedGrade === "duplicates") {
-        const duplicates = findDuplicates(students);
-        matchesFilter = duplicates.some((d) => d.id === student.id);
-      } else {
-        matchesFilter = normalizeGrade(student.grade) === selectedGrade;
+  const filteredStudents = useMemo(() => {
+    const search = deferredSearch.toLowerCase();
+    const duplicateIds = new Set<string>();
+    if (selectedGrade === "duplicates") {
+      const counts = new Map<string, number>();
+      for (const student of students) {
+        const name = student.firstName.toLowerCase() + '-' + student.lastName.toLowerCase();
+        counts.set(name, (counts.get(name) || 0) + 1);
       }
-      
+      for (const student of students) if ((counts.get(student.firstName.toLowerCase() + '-' + student.lastName.toLowerCase()) || 0) > 1) duplicateIds.add(student.id);
+    }
+    return students.filter((student) => {
+      const displayId = getStudentDisplayId(student);
+      const matchesSearch = student.firstName.toLowerCase().includes(search) || student.lastName.toLowerCase().includes(search) || displayId.toLowerCase().includes(search);
+      const matchesFilter = selectedGrade === "new" ? student.isNew === true
+        : selectedGrade === "unallocated" ? !student.currentClass
+        : selectedGrade === "no-id" ? displayId === "—"
+        : selectedGrade === "leaving" ? student.isLeaving === true
+        : selectedGrade === "duplicates" ? duplicateIds.has(student.id) : true;
       return matchesSearch && matchesFilter;
-    })
-    .sort((a, b) => {
-      const aValue = a[sortField] || "";
-      const bValue = b[sortField] || "";
-      const comparison = aValue.localeCompare(bValue);
+    }).sort((a, b) => {
+      const comparison = (a[sortField] || "").localeCompare(b[sortField] || "");
       return sortDirection === "asc" ? comparison : -comparison;
     });
+  }, [students, deferredSearch, selectedGrade, sortField, sortDirection]);
+  useEffect(() => { setPage(0); }, [selectedGrade, deferredSearch, sortField, sortDirection]);
+  const lastPage = Math.max(0, Math.ceil(filteredStudents.length / 50) - 1);
+  const currentPage = Math.min(page, lastPage);
+  const visibleStudents = filteredStudents.slice(currentPage * 50, (currentPage + 1) * 50);
 
   const toggleSelectAll = () => {
     if (selectedStudents.size === filteredStudents.length) {
@@ -538,17 +242,16 @@ export default function StudentsPage() {
     }
   };
 
-  const toggleSelectStudent = (id: string) => {
-    const newSelected = new Set(selectedStudents);
-    if (newSelected.has(id)) {
-      newSelected.delete(id);
-    } else {
-      newSelected.add(id);
-    }
-    setSelectedStudents(newSelected);
-  };
+  const toggleSelectStudent = useCallback((id: string) => {
+    setSelectedStudents((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }, []);
+  const deleteStudent = useCallback((id: string) => deleteMutation.mutate(id), [deleteMutation.mutate]);
 
-  const openEditDialog = (student: Student) => {
+  const openEditDialog = useCallback((student: Student) => {
     setEditingStudent(student);
     setFormData({
       firstName: student.firstName,
@@ -561,7 +264,7 @@ export default function StudentsPage() {
       parentRequests: student.parentRequests || "",
       parentNotes: student.parentNotes || "",
     });
-  };
+  }, []);
 
   const SortIcon = ({ field }: { field: SortField }) => {
     if (sortField !== field) return null;
@@ -701,25 +404,6 @@ export default function StudentsPage() {
     );
   }
 
-  if (isLoading) {
-    return (
-      <div className="p-6 space-y-6">
-        <div className="flex items-center justify-between gap-4">
-          <Skeleton className="h-10 w-64" />
-          <Skeleton className="h-10 w-32" />
-        </div>
-        <Card>
-          <CardContent className="p-6">
-            <div className="space-y-4">
-              {[...Array(5)].map((_, i) => (
-                <Skeleton key={i} className="h-12 w-full" />
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
 
   return (
     <div className="flex h-full min-h-0 max-w-full flex-col overflow-hidden p-6">
@@ -739,7 +423,7 @@ export default function StudentsPage() {
             <Upload className="h-4 w-4 mr-2" />
             Import Characteristics
           </Button>
-          <Button variant="outline" onClick={handleExportStudents} data-testid="button-export-students">
+          <Button variant="outline" onClick={handleExportStudents} disabled={isLoading || !!rosterError || searchQuery !== deferredSearch} data-testid="button-export-students">
             <Download className="h-4 w-4 mr-2" />
             Export Students
           </Button>
@@ -762,7 +446,7 @@ export default function StudentsPage() {
             data-testid="input-search-students"
           />
         </div>
-        <Select value={selectedGrade} onValueChange={setSelectedGrade}>
+        <Select value={selectedGrade} onValueChange={(value) => { setSelectedGrade(value); setSelectedStudents(new Set()); }}>
           <SelectTrigger className="w-56" data-testid="select-grade-filter">
             <SelectValue placeholder="Filter" />
           </SelectTrigger>
@@ -791,20 +475,23 @@ export default function StudentsPage() {
           </Button>
         )}
       </div>
+      {optionsError && <p role="alert" className="mt-2 text-sm text-destructive">Some roster choices could not be loaded. <button type="button" className="underline" onClick={() => void refetchOptions()}>Retry choices</button></p>}
 
-      {students.length === 0 ? (
+      {isLoading ? <Card className="mt-6 flex-1"><CardContent className="p-6 space-y-4"><p role="status" className="text-sm text-muted-foreground">Loading learners for this filter…</p>{Array.from({ length: 5 }, (_, i) => <Skeleton key={i} className="h-12 w-full" />)}</CardContent></Card>
+        : rosterError ? <Card className="mt-6"><CardContent className="p-6"><p role="alert">Unable to load this roster. Your data has not been changed.</p><Button variant="outline" onClick={() => void refetch()}>Retry</Button></CardContent></Card>
+        : students.length === 0 ? (
         <Card className="mt-6 flex-1">
           <CardContent className="flex flex-col items-center justify-center py-16">
             <div className="rounded-full bg-muted p-4 mb-4">
               <Users className="h-8 w-8 text-muted-foreground" />
             </div>
-            <h3 className="text-lg font-medium mb-2">No students yet</h3>
+            <h3 className="text-lg font-medium mb-2">{selectedGrade === "all" ? "No students yet" : "No students in this grade"}</h3>
             <p className="text-muted-foreground text-center max-w-sm mb-4">
-              Get started by adding students manually or importing an Excel (.xlsx) or CSV (.csv) file.
+              {selectedGrade === "all" ? "Get started by adding students manually or importing an Excel (.xlsx) or CSV (.csv) file." : "Choose another grade or add a student to this grade."}
             </p>
             <Button onClick={() => setIsAddDialogOpen(true)} data-testid="button-add-first-student">
               <Plus className="h-4 w-4 mr-2" />
-              Add Your First Student
+              Add Student
             </Button>
           </CardContent>
         </Card>
@@ -813,6 +500,7 @@ export default function StudentsPage() {
           <CardHeader className="flex-none pb-0">
             <CardTitle className="text-lg flex items-center gap-2">
               <span>{filteredStudents.length} Students</span>
+              {isFetching && <span role="status" className="text-xs font-normal text-muted-foreground">Refreshing…</span>}
               {searchQuery || selectedGrade !== "all" ? (
                 <Badge variant="secondary">Filtered</Badge>
               ) : null}
@@ -825,6 +513,7 @@ export default function StudentsPage() {
                     <TableHead rowSpan={2} className="w-12 align-middle bg-background">
                       <Checkbox
                         checked={selectedStudents.size === filteredStudents.length && filteredStudents.length > 0}
+                        disabled={searchQuery !== deferredSearch}
                         onCheckedChange={toggleSelectAll}
                         data-testid="checkbox-select-all"
                       />
@@ -899,193 +588,20 @@ export default function StudentsPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredStudents.map((student) => (
-                    <TableRow key={student.id} data-testid={`row-student-${student.id}`}>
-                      <TableCell>
-                        <Checkbox
-                          checked={selectedStudents.has(student.id)}
-                          onCheckedChange={() => toggleSelectStudent(student.id)}
-                          data-testid={`checkbox-student-${student.id}`}
-                        />
-                      </TableCell>
-                      <TableCell className="sticky left-0 z-10 w-36 min-w-[144px] max-w-[144px] bg-background p-2 font-medium whitespace-nowrap shadow-[inset_-1px_0_0_hsl(var(--border))] sm:w-44 sm:min-w-[176px] sm:max-w-[176px]">
-                        <div className="flex w-32 min-w-0 items-center gap-1 sm:w-40">
-                          {renderTextCell(
-                            student,
-                            "firstName",
-                            student.firstName,
-                            (value) => ({ firstName: value }),
-                            true,
-                            "min-w-0 flex-1 truncate",
-                          )}
-                          <Button
-                            type="button"
-                            size="icon"
-                            variant="ghost"
-                            className="h-6 w-6 shrink-0 p-0"
-                            onClick={() => openEditDialog(student)}
-                            aria-label="Edit student"
-                            title="Edit student"
-                            data-testid={`button-edit-student-inline-${student.id}`}
-                          >
-                            <Edit2 className="h-3.5 w-3.5" />
-                          </Button>
-                        </div>
-                      </TableCell>
-                      <TableCell className="sticky left-36 z-10 w-36 min-w-[144px] max-w-[144px] bg-background p-2 font-medium whitespace-nowrap shadow-[inset_-1px_0_0_hsl(var(--border))] sm:left-44 sm:w-44 sm:min-w-[176px] sm:max-w-[176px]">
-                        <div className="flex w-32 min-w-0 items-center gap-2 sm:w-40">
-                          {renderTextCell(
-                            student,
-                            "lastName",
-                            student.lastName,
-                            (value) => ({ lastName: value }),
-                            true,
-                            "min-w-0 flex-1 truncate",
-                          )}
-                          {student.parentRequests && (
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <MessageSquare className="h-4 w-4 shrink-0 text-muted-foreground" data-testid={`icon-parent-request-${student.id}`} />
-                              </TooltipTrigger>
-                              <TooltipContent>
-                                <p className="max-w-xs">Parent request on file</p>
-                              </TooltipContent>
-                            </Tooltip>
-                          )}
-                        </div>
-                      </TableCell>
-                      <TableCell className="whitespace-nowrap">
-                        {renderTextCell(
-                          student,
-                          "studentId",
-                          getStudentDisplayId(student),
-                          (value) => updateStudentIdData(student, value),
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        {renderSelectCell(
-                          student,
-                          "gender",
-                          student.gender || "—",
-                          genderOptions,
-                          (value) => ({ gender: value ?? "" }),
-                        )}
+                  {visibleStudents.map((student) => <StudentRosterRow
+                    key={student.id} student={student} selected={selectedStudents.has(student.id)}
+                    characteristicColumns={tableCharacteristicColumns} responseLookup={responseLookup}
+                    gradeOptions={gradeOptions} genderOptions={genderOptions} currentClassOptions={currentClassOptions} newGradeOptions={newGradeOptions}
+                    onSelect={toggleSelectStudent} onEdit={openEditDialog} onDelete={deleteStudent} onSave={saveRosterStudent}
+                  />)}
 
-                      </TableCell>
-                      <TableCell className="whitespace-nowrap">
-                        {renderSelectCell(
-                          student,
-                          "grade",
-                          student.grade,
-                          gradeOptions,
-                          (value) => ({ grade: value ?? student.grade }),
-                        )}
-
-                      </TableCell>
-                      <TableCell className="whitespace-nowrap">
-                        {currentClassOptions.length > 0
-                          ? renderSelectCell(
-                              student,
-                              "currentClass",
-                              student.currentClass || "—",
-                              currentClassOptions,
-                              (value) => ({ currentClass: value }),
-                            )
-                          : renderTextCell(
-                              student,
-                              "currentClass",
-                              student.currentClass || "—",
-                              (value) => ({ currentClass: value }),
-                            )}
-                      </TableCell>
-                      <TableCell className="whitespace-nowrap">
-                        {renderSelectCell(
-                          student,
-                          "newGrade",
-                          getNewGrade(student),
-                          newGradeOptions,
-                          (value) => updateCharacteristicData(student, "newGrade", value ?? ""),
-                        )}
-
-                      </TableCell>
-                      <TableCell className="min-w-48 max-w-72" title={student.notes || ""}>
-                        {renderTextCell(
-                          student,
-                          "notes",
-                          student.notes || "—",
-                          (value) => ({ notes: value }),
-                          false,
-                          "truncate",
-                        )}
-                      </TableCell>
-                      <TableCell>{getRequestsTotal(student)}</TableCell>
-                      {tableCharacteristicColumns.map((char) => {
-                        const responses = responseLookup.get(char.name);
-                        const options = responses ? Array.from(responses.keys()) : char.options || [];
-                        const isNumeric = char.type === "scale" || char.type === "percentage";
-                        const isApplicable = isCharacteristicApplicableToGrade(char, student.grade);
-                        const rawValue = getRawCharacteristicValue(student, char.name);
-                        return (
-                          <TableCell key={char.id} className="whitespace-nowrap">
-                            {!isApplicable
-                              ? <span className="text-muted-foreground">—</span>
-                              : char.type === "category" && options.length > 0 && char.multiSelect
-                                ? renderMultiSelectCell(
-                                    student,
-                                    `characteristic:${char.name}`,
-                                    rawValue,
-                                    options,
-                                    (value) => updateCharacteristicData(student, char.name, value ?? ""),
-
-                                    responses,
-                                  )
-                                : char.type === "category" && options.length > 0
-                                  ? renderSelectCell(
-                                      student,
-                                      `characteristic:${char.name}`,
-                                      getCharacteristicValue(student, char.name),
-                                      options,
-                                      (value) => updateCharacteristicData(student, char.name, value ?? ""),
-                                      responses,
-                                    )
-
-                                  : renderTextCell(
-                                      student,
-                                      `characteristic:${char.name}:${char.type}`,
-                                      getCharacteristicValue(student, char.name),
-                                      (value) => updateCharacteristicData(student, char.name, value),
-                                      false,
-                                      "whitespace-nowrap",
-                                      isNumeric ? "number" : "text",
-                                    )}
-                          </TableCell>
-                        );
-                      })}
-                      <TableCell>
-                        <div className="flex items-center gap-1">
-                          <Button
-                            size="icon"
-                            variant="ghost"
-                            onClick={() => openEditDialog(student)}
-                            data-testid={`button-edit-student-${student.id}`}
-                          >
-                            <Edit2 className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            size="icon"
-                            variant="ghost"
-                            onClick={() => deleteMutation.mutate(student.id)}
-                            data-testid={`button-delete-student-${student.id}`}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))}
                 </TableBody>
               </Table>
           </CardContent>
+          <div className="flex flex-wrap items-center justify-between gap-2 border-t p-3 text-sm">
+            <span>Showing {filteredStudents.length ? currentPage * 50 + 1 : 0}–{Math.min((currentPage + 1) * 50, filteredStudents.length)} of {filteredStudents.length}. Select all and export include every filtered learner.</span>
+            <div className="flex gap-2"><Button variant="outline" disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}>Previous</Button><Button variant="outline" disabled={currentPage >= lastPage} onClick={() => setPage(currentPage + 1)}>Next</Button></div>
+          </div>
         </Card>
       )}
 

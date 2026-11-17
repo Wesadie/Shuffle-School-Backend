@@ -1,4 +1,4 @@
-import type { Dispatch, SetStateAction } from "react";
+import { useMemo, type Dispatch, type SetStateAction } from "react";
 import { characteristicValueToArray, isCharacteristicApplicableToGrade, normalizeResponses } from "@shared/characteristics";
 import type { Characteristic, InsertStudent } from "@shared/schema";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -14,14 +14,14 @@ interface StudentFormFieldsProps {
 }
 
 export function StudentFormFields({ formData, setFormData, characteristics }: StudentFormFieldsProps) {
-  const responseLookup = new Map(
+  const responseLookup = useMemo(() => new Map(
     characteristics
       .filter((characteristic) => characteristic.type === "category")
       .map((characteristic) => [
         characteristic.name,
         new Map(normalizeResponses(characteristic).map((response) => [response.name, response])),
       ]),
-  );
+  ), [characteristics]);
 
   return (
     <div className="grid gap-4 py-4">

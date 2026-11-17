@@ -53,6 +53,7 @@ import { billingDetailsSchema } from "@shared/billing-details";
 import { calculatePreviousSchoolBalanceScore, calculatePreviousSchoolClassBalanceScore, getPreviousSchoolDistribution } from "./previousSchoolBalance";
 import { buildLearnerImportPlan } from "./learnerImportPlan";
 import { recognizeColumn, type LearnerImportInput } from "@shared/learner-import";
+import { studentRosterPatchSchema } from "./studentRosterValidation";
 import { getStudentTargetGrade, isIncomingGradeRAwaitingAllocation, normalizeGradeValue } from "@shared/grades";
 import { z } from "zod";
 import { isRuleMandatory } from "@shared/schema";
@@ -620,16 +621,39 @@ export async function registerRoutes(
 
   // Students CRUD (protected)
   app.get("/api/students", isAuthenticated, async (req, res) => {
-    console.log("[api/students] request entered GET /api/students");
     try {
-      const students = await storage.getStudents(accountIdFor(req));
-      console.log(`[api/students] request completed with row count: ${students.length}`);
+      const grade = z.string().trim().min(1).max(100).optional().parse(req.query.grade);
+      const students = await storage.getStudents(accountIdFor(req), grade);
       res.json(students);
     } catch (error) {
+      if (error instanceof z.ZodError) return res.status(400).json({ error: "Invalid grade filter" });
       console.error("[api/students] caught error", {
         message: error instanceof Error ? error.message : String(error),
       });
       res.status(500).json({ message: "Failed to fetch students" });
+    }
+  });
+
+  app.get("/api/students/roster-options", isAuthenticated, async (req, res) => {
+    try {
+      res.json(await storage.getStudentRosterOptions(accountIdFor(req)));
+    } catch (error) {
+      console.error("[api/students/roster-options]", error);
+      res.status(500).json({ error: "Failed to fetch roster options" });
+    }
+  });
+
+  app.patch("/api/students/:id/roster", isAuthenticated, requireWritableWorkspace, async (req, res) => {
+    try {
+      const patch = studentRosterPatchSchema.parse(req.body);
+      if (isDemoWorkspace(req) && (hasAnyField(patch, ["firstName", "lastName", "studentId"]) || hasAnyField(patch.characteristics, ["studentId"]))) {
+        return res.status(403).json({ error: "Student identity fields are disabled in demo workspaces" });
+      }
+      const student = await storage.updateStudentRosterFields(accountIdFor(req), req.params.id, patch);
+      if (!student) return res.status(404).json({ error: "Student not found" });
+      res.json(student);
+    } catch (error) {
+      res.status(400).json({ error: error instanceof z.ZodError ? "Invalid learner changes" : "Failed to save learner changes" });
     }
   });
 

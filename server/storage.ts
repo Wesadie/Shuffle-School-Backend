@@ -48,6 +48,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { randomUUID } from "crypto";
 import { buildSwapPlacements, PlacementNotFoundError, runRevisionedMutation, validatePlacements } from "./placementSafety";
 import type { LearnerImportPlan } from "./learnerImportPlan";
+import { normalizeRosterGrade, type StudentRosterOptions } from "@shared/student-roster";
 
 type StorageTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -87,9 +88,39 @@ export class DatabaseStorage {
     return user;
   }
 
-  async getStudents(accountId: string): Promise<Student[]> {
+  async getStudents(accountId: string, grade?: string): Promise<Student[]> {
     accountId = requireAccountId(accountId);
-    return await db.select().from(students).where(eq(students.accountId, accountId));
+    const gradeCondition = grade === undefined ? undefined
+      : sql`upper(trim(regexp_replace(trim(${students.grade}), '^grade\\s+', '', 'i'))) = ${normalizeRosterGrade(grade)}`;
+    return await db.select().from(students).where(and(eq(students.accountId, accountId), gradeCondition));
+  }
+
+  async getStudentRosterOptions(accountId: string): Promise<StudentRosterOptions> {
+    accountId = requireAccountId(accountId);
+    const [result] = await db.select({
+      grades: sql<string[]>`coalesce(array_agg(distinct ${students.grade}) filter (where ${students.grade} <> ''), '{}'::text[])`,
+      currentClasses: sql<string[]>`coalesce(array_agg(distinct ${students.currentClass}) filter (where ${students.currentClass} is not null and ${students.currentClass} <> ''), '{}'::text[])`,
+      genders: sql<string[]>`coalesce(array_agg(distinct ${students.gender}) filter (where ${students.gender} is not null and ${students.gender} <> ''), '{}'::text[])`,
+      newGrades: sql<string[]>`coalesce(array_agg(distinct case
+        when jsonb_typeof(${students.characteristics}->'newGrade') = 'array'
+        then (select string_agg(value, ', ') from jsonb_array_elements_text(${students.characteristics}->'newGrade') as entry(value) where trim(value) <> '')
+        else ${students.characteristics}->>'newGrade' end)
+        filter (where ${students.characteristics} ? 'newGrade'), '{}'::text[])`,
+      totalCount: sql<number>`count(*)::integer`,
+    }).from(students).where(eq(students.accountId, accountId));
+    return result;
+  }
+
+  async updateStudentRosterFields(accountId: string, id: string, patch: Partial<InsertStudent>): Promise<Student | undefined> {
+    accountId = requireAccountId(accountId);
+    const updates = { ...patch };
+    const [student] = await db.update(students).set({
+      ...updates,
+      ...(patch.characteristics ? {
+        characteristics: sql`coalesce(${students.characteristics}, '{}'::jsonb) || ${JSON.stringify(patch.characteristics)}::jsonb`,
+      } : {}),
+    }).where(and(eq(students.accountId, accountId), eq(students.id, id))).returning();
+    return student;
   }
 
   async getStudent(accountId: string, id: string): Promise<Student | undefined> {
