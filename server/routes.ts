@@ -51,7 +51,8 @@ import {
 import { CHARACTERISTIC_TYPES, characteristicValueToArray, defaultResponseColor, getStableResponseId, isCharacteristicApplicableToGrade, normalizeResponses } from "@shared/characteristics";
 import { billingDetailsSchema } from "@shared/billing-details";
 import { calculatePreviousSchoolBalanceScore, calculatePreviousSchoolClassBalanceScore, getPreviousSchoolDistribution } from "./previousSchoolBalance";
-import { importedStudentIsNew, importedStudentNewGrade, partitionStudentImportRows } from "./studentImport";
+import { buildLearnerImportPlan } from "./learnerImportPlan";
+import { recognizeColumn, type LearnerImportInput } from "@shared/learner-import";
 import { getStudentTargetGrade, isIncomingGradeRAwaitingAllocation, normalizeGradeValue } from "@shared/grades";
 import { z } from "zod";
 import { isRuleMandatory } from "@shared/schema";
@@ -682,147 +683,69 @@ export async function registerRoutes(
 
   app.post("/api/students/bulk-import", isAuthenticated, requireWritableWorkspace, async (req, res) => {
     try {
-      const { students } = req.body;
-      if (!Array.isArray(students)) {
-        return res.status(400).json({ error: "students must be an array" });
-      }
-
       const context = getAccountContext(req);
       const accountId = accountIdFor(req);
-      const existingStudents = await storage.getStudents(accountId);
-      const { rowsToImport, skippedExisting, duplicateRows, existingDuplicateStudentIds } =
-        partitionStudentImportRows(students, existingStudents);
-      const currentStudentCount = existingStudents.length;
-      if (wouldExceedLearnerCapacity(context, currentStudentCount, rowsToImport.length)) {
-        return res.status(403).json(learnerCapacityExceededResponse(context));
+      const account = await storage.getLearnerImportAccount(accountId);
+      if (!account || account.name.trim().toLowerCase() === "test school" || isDemoWorkspace(req)) {
+        return res.status(403).json({ error: "Test School and demonstration workspaces are read-only for learner imports." });
       }
-      
-      const standardFields = ["studentId", "firstName", "lastName", "grade", "currentClass", "gender", "notes", "parentRequests", "parentNotes", "isNew", "New Student", "New Grade", "newGrade"];
-      const existingCharacteristics = await storage.getCharacteristics(accountId);
-      const characteristicByName = new Map(existingCharacteristics.map((char) => [char.name, char]));
-      const importedValuesByCharacteristic = new Map<string, Set<string>>();
-
-      for (const student of rowsToImport) {
-        for (const [key, value] of Object.entries(student)) {
-          if (!standardFields.includes(key) && value !== undefined && value !== null && value !== "") {
-            if (!importedValuesByCharacteristic.has(key)) {
-              importedValuesByCharacteristic.set(key, new Set());
-            }
-            importedValuesByCharacteristic.get(key)!.add(String(value));
-          }
-        }
+      if (!["owner", "admin"].includes(context.accountRole)) {
+        return res.status(403).json({ error: "Only school administrators can import learners or create characteristics." });
       }
-
-      for (const [name, values] of importedValuesByCharacteristic) {
-        const characteristic = characteristicByName.get(name);
-        if (characteristic?.type !== "scale" && characteristic?.type !== "percentage") continue;
-        for (const value of values) {
-          const numericValue = Number(value);
-          if (!Number.isFinite(numericValue)) {
-            return res.status(400).json({ error: `${name} must contain numeric values` });
-          }
-          if (characteristic.type === "percentage" && (numericValue < 0 || numericValue > 100)) {
-            return res.status(400).json({ error: `${name} must contain values between 0 and 100` });
-          }
-        }
-      }
-
-      const allCharacteristicNames = new Set([
-        ...Array.from(characteristicByName.keys()),
-        ...Array.from(importedValuesByCharacteristic.keys()),
+      const [existingStudents, existingCharacteristics] = await Promise.all([
+        storage.getStudents(accountId), storage.getCharacteristics(accountId),
       ]);
-      if (allCharacteristicNames.size > 50) {
-        return res.status(400).json({ error: "A maximum of 50 active characteristics is supported" });
-      }
-      
-      for (const [name, values] of importedValuesByCharacteristic) {
-        const existing = characteristicByName.get(name);
-        const type = existing?.type || (name.includes("%") ? "percentage" : "category");
-        if (!existing) {
-          const responseConfig = type === "category"
-            ? Array.from(values).map((value, index) => ({
-                id: getStableResponseId(name, value),
-                name: value,
-                color: defaultResponseColor(index),
-                description: "",
-                sortOrder: index + 1,
-              }))
-            : [];
-          const created = await storage.createCharacteristic(accountIdFor(req), {
-            name,
-            type,
-            options: responseConfig.map((response) => response.name),
-            responseConfig,
-            priority: 1,
-          });
-          characteristicByName.set(name, created);
-        } else if (type === "category") {
-          const responses = normalizeResponses(existing);
-          const existingResponseNames = new Set(responses.map((response) => response.name));
-          for (const value of values) {
-            if (!existingResponseNames.has(value)) {
-              responses.push({
-                id: getStableResponseId(existing.id, value),
-                name: value,
-                color: defaultResponseColor(responses.length),
-                description: "",
-                sortOrder: responses.length + 1,
-              });
-              existingResponseNames.add(value);
-            }
-          }
-          await storage.updateCharacteristic(accountIdFor(req), existing.id, {
-            options: responses.map((response) => response.name),
-            responseConfig: responses,
-          });
+      let input: unknown = req.body;
+      // Keep the original CSV API shape working, with the same validation and safe writes.
+      if (Array.isArray(req.body?.students)) {
+        const uploaded = req.body.students;
+        if (uploaded.some((row: unknown) => !row || typeof row !== "object" || Array.isArray(row))) {
+          return res.status(400).json({ error: "Every student must be a row object" });
         }
+        const headings = Array.from(new Set<string>(uploaded.flatMap((row: Record<string, unknown>) => Object.keys(row))));
+        input = {
+          mode: req.body.mode || "add", preview: req.body.preview === true,
+          columns: headings.map((heading) => recognizeColumn(heading, existingCharacteristics)),
+          rows: uploaded.map((row: Record<string, unknown>) => headings.map((heading) => String(row[heading] ?? ""))),
+        } satisfies LearnerImportInput;
+      } else if (req.body.preview !== true && typeof req.body.reviewedRevision !== "string") {
+        return res.status(400).json({ error: "Validate and review the spreadsheet before importing." });
       }
-      
-      // Process students and extract characteristics from extra columns
-      const processedStudents = rowsToImport.map(student => {
-        const characteristics: Record<string, string> = {};
-        for (const [key, value] of Object.entries(student)) {
-          if (!standardFields.includes(key) && value !== undefined && value !== null && value !== "") {
-            characteristics[key] = String(value);
-          }
+      const prepare = (roster: Student[], definitions: Characteristic[]) => {
+        const plan = buildLearnerImportPlan(input, roster, definitions);
+        if (wouldExceedLearnerCapacity(context, roster.length, plan.inserts.length)) {
+          plan.review.errors.push(learnerCapacityExceededResponse(context).message);
         }
-        return insertStudentSchema.parse({
-          studentId: student.studentId,
-          firstName: student.firstName,
-          lastName: student.lastName,
-          grade: student.grade,
-          currentClass: student.currentClass || null,
-          gender: student.gender,
-          isNew: importedStudentIsNew(student),
-          notes: student.notes,
-          characteristics: {
-            ...characteristics,
-            ...(importedStudentNewGrade(student) !== undefined ? { newGrade: importedStudentNewGrade(student)! } : {}),
-          },
-        });
-      });
-      
-      const result = await storage.bulkImportStudents(accountId, processedStudents);
+        return plan;
+      };
+      const initial = prepare(existingStudents, existingCharacteristics);
+      if (req.body.preview === true) return res.json(initial.review);
+      if (initial.review.errors.length) return res.status(400).json({ error: "Resolve validation errors before importing. No data was changed.", ...initial.review });
+      const result = await storage.applyLearnerImport(accountId, prepare);
+      if (result.review.errors.length) return res.status(409).json({ error: "The roster changed. Review the import again. No data was changed.", ...result.review });
+      const skipped = result.review.rows.filter((row) => row.status === "skipped");
       res.status(201).json({
-        ...result,
-        skippedExisting,
-        duplicateRows,
-        existingDuplicateStudentIds,
+        ...result.review,
+        added: result.inserts.length, updated: result.updates.length,
+        skippedExisting: skipped.filter((row) => row.explanation.startsWith("Student ID already")).length,
+        duplicateRows: skipped.filter((row) => row.explanation.startsWith("Duplicate Student ID")).length,
+        existingDuplicateStudentIds: [],
       });
     } catch (error) {
-      if (error instanceof z.ZodError) {
-        const issue = error.issues[0];
-        const field = issue.path.length > 0 ? issue.path.join(".") : "student";
-        return res.status(400).json({ error: `Invalid ${field}: ${issue.message}` });
-      }
-      const message = error instanceof Error ? error.message : "Failed to import students";
-      res.status(400).json({ error: message });
+      if (error instanceof z.ZodError) return res.status(400).json({ error: error.issues.map((issue) => issue.path.join(".") + ": " + issue.message).join("; ") });
+      res.status(400).json({ error: error instanceof Error ? error.message : "Failed to import learners. No data was changed." });
     }
-
   });
 
   app.post("/api/students/bulk-import-characteristics", isAuthenticated, requireWritableWorkspace, async (req, res) => {
     try {
+      const account = await storage.getLearnerImportAccount(accountIdFor(req));
+      if (!account || account.name.trim().toLowerCase() === "test school" || isDemoWorkspace(req)) {
+        return res.status(403).json({ error: "Test School and demonstration workspaces are read-only for learner imports." });
+      }
+      if (!["owner", "admin"].includes(getAccountContext(req).accountRole)) {
+        return res.status(403).json({ error: "Only school administrators can import characteristic responses." });
+      }
       const rows = req.body?.students;
       if (!Array.isArray(rows)) {
         return res.status(400).json({ error: "students must be an array" });

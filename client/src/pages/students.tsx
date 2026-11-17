@@ -800,7 +800,7 @@ export default function StudentsPage() {
             </div>
             <h3 className="text-lg font-medium mb-2">No students yet</h3>
             <p className="text-muted-foreground text-center max-w-sm mb-4">
-              Get started by adding students manually or importing a CSV file.
+              Get started by adding students manually or importing an Excel (.xlsx) or CSV (.csv) file.
             </p>
             <Button onClick={() => setIsAddDialogOpen(true)} data-testid="button-add-first-student">
               <Plus className="h-4 w-4 mr-2" />

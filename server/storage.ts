@@ -47,6 +47,7 @@ import { db, pool } from "./db";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { randomUUID } from "crypto";
 import { buildSwapPlacements, PlacementNotFoundError, runRevisionedMutation, validatePlacements } from "./placementSafety";
+import type { LearnerImportPlan } from "./learnerImportPlan";
 
 type StorageTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -130,6 +131,43 @@ export class DatabaseStorage {
       count++;
     }
     return { count };
+  }
+
+  async getLearnerImportAccount(accountId: string) {
+    const [account] = await db.select().from(accounts).where(eq(accounts.id, requireAccountId(accountId)));
+    return account;
+  }
+
+  async applyLearnerImport(
+    accountId: string,
+    prepare: (roster: Student[], definitions: Characteristic[]) => LearnerImportPlan,
+  ): Promise<LearnerImportPlan> {
+    accountId = requireAccountId(accountId);
+    return db.transaction(async (tx) => {
+      // Serialize learner imports per school and revalidate against the current roster.
+      const [account] = await tx.select().from(accounts).where(eq(accounts.id, accountId)).for("update");
+      if (!account || account.name.trim().toLowerCase() === "test school") throw new Error("Test School is read-only. Learner imports are disabled.");
+      const roster = await tx.select().from(students).where(eq(students.accountId, accountId)).for("update");
+      const definitions = await tx.select().from(characteristics).where(eq(characteristics.accountId, accountId)).for("update");
+      const plan = prepare(roster, definitions);
+      if (plan.review.errors.length || !plan.review.count) return plan;
+      for (const data of plan.createCharacteristics) {
+        await tx.insert(characteristics).values({ ...data, id: randomUUID(), accountId });
+      }
+      for (const update of plan.updateCharacteristics) {
+        await tx.update(characteristics).set(update.data).where(and(eq(characteristics.accountId, accountId), eq(characteristics.id, update.id)));
+      }
+      for (const data of plan.inserts) {
+        await tx.insert(students).values({ ...data, id: randomUUID(), accountId });
+      }
+      for (const update of plan.updates) {
+        // Update only characteristics; merge preserves unrelated saved values and newGrade.
+        await tx.update(students).set({
+          characteristics: sql`coalesce(${students.characteristics}, '{}'::jsonb) || ${JSON.stringify(update.characteristics)}::jsonb`,
+        }).where(and(eq(students.accountId, accountId), eq(students.id, update.id)));
+      }
+      return plan;
+    });
   }
 
   async deleteAllStudents(accountId: string): Promise<void> {
