@@ -428,10 +428,11 @@ export default function ReviewPage() {
     parentNotes: "",
   });
   const [newLearnerId, setNewLearnerId] = useState("");
-  const [newLearnerClassId, setNewLearnerClassId] = useState("");
-  const [removingLearner, setRemovingLearner] = useState<{ student: Student; className: string; placementId: string } | null>(null);
-
-  const { data: classConfigs = [], isLoading: configsLoading } = useQuery<ClassConfig[]>({
+    const [newLearnerClassId, setNewLearnerClassId] = useState("");
+    const [removingLearner, setRemovingLearner] = useState<{ student: Student; className: string; placementId: string } | null>(null);
+    const [manualOverride, setManualOverride] = useState(false);
+  
+    const { data: classConfigs = [], isLoading: configsLoading } = useQuery<ClassConfig[]>({
     queryKey: ["/api/class-configs"],
   });
 
@@ -473,9 +474,9 @@ export default function ReviewPage() {
   };
 
   const moveMutation = useMutation({
-    mutationFn: ({ studentId, targetClassId }: { studentId: string; targetClassId: string; historySnapshot?: PlacementSnapshot }) =>
-      apiRequest("POST", "/api/placements/move", { studentId, targetClassId, expectedRevision: currentPlacementRevision() }),
-    onMutate: async ({ studentId, targetClassId }) => {
+      mutationFn: ({ studentId, targetClassId }: { studentId: string; targetClassId: string; historySnapshot?: PlacementSnapshot }) =>
+        apiRequest("POST", "/api/placements/move", { studentId, targetClassId, expectedRevision: currentPlacementRevision(), manualOverride }),
+      onMutate: async ({ studentId, targetClassId }) => {
       await queryClient.cancelQueries({ queryKey: ["/api/placements/state"] });
       const previousPlacements = queryClient.getQueryData<PlacementState>(["/api/placements/state"]);
       queryClient.setQueryData<PlacementState>(["/api/placements/state"], (current) => current && ({
@@ -510,14 +511,15 @@ export default function ReviewPage() {
   });
 
   const addPlacementMutation = useMutation({
-    mutationFn: async ({ studentId, classId }: { studentId: string; classId: string }) => {
-      const response = await apiRequest("POST", "/api/placements", {
-        studentId,
-        classId,
-        expectedRevision: currentPlacementRevision(),
-      });
-      return response.json() as Promise<{ placement: Placement; revision: number }>;
-    },
+      mutationFn: async ({ studentId, classId }: { studentId: string; classId: string }) => {
+        const response = await apiRequest("POST", "/api/placements", {
+          studentId,
+          classId,
+          expectedRevision: currentPlacementRevision(),
+          manualOverride,
+        });
+        return response.json() as Promise<{ placement: Placement; revision: number }>;
+      },
     onSuccess: ({ placement, revision }) => {
       queryClient.setQueryData<PlacementState>(["/api/placements/state"], (current) => current
         ? { placements: [...current.placements, placement], revision }
@@ -578,19 +580,20 @@ export default function ReviewPage() {
   });
 
   const applyGuidedSwapMutation = useMutation({
-    mutationFn: async ({ student1Id, student2Id }: { student1Id: string; student2Id: string; historySnapshot: PlacementSnapshot }) => {
-      const placement1 = placements.find((placement) => placement.studentId === student1Id);
-      const placement2 = placements.find((placement) => placement.studentId === student2Id);
-      if (!placement1 || !placement2) throw new Error("Both learners must have an active class placement.");
-      const response = await apiRequest("POST", "/api/boost/apply", {
-        student1Id,
-        student1NewClassId: placement2.classId,
-        student2Id,
-        student2NewClassId: placement1.classId,
-        expectedRevision: currentPlacementRevision(),
-      });
-      return response.json() as Promise<{ revision: number }>;
-    },
+      mutationFn: async ({ student1Id, student2Id }: { student1Id: string; student2Id: string; historySnapshot: PlacementSnapshot }) => {
+        const placement1 = placements.find((placement) => placement.studentId === student1Id);
+        const placement2 = placements.find((placement) => placement.studentId === student2Id);
+        if (!placement1 || !placement2) throw new Error("Both learners must have an active class placement.");
+        const response = await apiRequest("POST", "/api/boost/apply", {
+          student1Id,
+          student1NewClassId: placement2.classId,
+          student2Id,
+          student2NewClassId: placement1.classId,
+          expectedRevision: currentPlacementRevision(),
+          manualOverride,
+        });
+        return response.json() as Promise<{ revision: number }>;
+      },
     onSuccess: ({ revision }, variables) => {
       setUndoStack((current) => [...current, variables.historySnapshot].slice(-20));
       queryClient.setQueryData<PlacementState>(["/api/placements/state"], (current) => {
@@ -632,14 +635,15 @@ export default function ReviewPage() {
   });
 
   const applyBoostMutation = useMutation({
-    mutationFn: ({ suggestion }: { suggestion: BoostSuggestion; historySnapshot?: PlacementSnapshot }) =>
-      apiRequest("POST", "/api/boost/apply", {
-        student1Id: suggestion.student1.id,
-        student1NewClassId: suggestion.student2.currentClassId,
-        student2Id: suggestion.student2.id,
-        student2NewClassId: suggestion.student1.currentClassId,
-        expectedRevision: currentPlacementRevision(),
-      }),
+      mutationFn: ({ suggestion }: { suggestion: BoostSuggestion; historySnapshot?: PlacementSnapshot }) =>
+        apiRequest("POST", "/api/boost/apply", {
+          student1Id: suggestion.student1.id,
+          student1NewClassId: suggestion.student2.currentClassId,
+          student2Id: suggestion.student2.id,
+          student2NewClassId: suggestion.student1.currentClassId,
+          expectedRevision: currentPlacementRevision(),
+          manualOverride,
+        }),
     onSuccess: (_data, variables) => {
       if (variables.historySnapshot) {
         setUndoStack((current) => [...current, variables.historySnapshot!].slice(-20));
@@ -657,20 +661,21 @@ export default function ReviewPage() {
   // Boost a single characteristic: fetch the best swap for that characteristic
   // from /api/boost (characteristicId filter) and apply it via /api/boost/apply.
   const characteristicBoostMutation = useMutation({
-    mutationFn: ({ characteristicId }: { characteristicId: string; name: string; historySnapshot: PlacementSnapshot }) =>
-      (async () => {
-        const res = await apiRequest("POST", "/api/boost", { characteristicId });
-        const data = await res.json() as BoostResponse;
-        const best = data.suggestions[0];
-        if (!best) throw new Error("No improving swap found for this characteristic");
-        await apiRequest("POST", "/api/boost/apply", {
-          student1Id: best.student1.id,
-          student1NewClassId: best.student2.currentClassId,
-          student2Id: best.student2.id,
-          student2NewClassId: best.student1.currentClassId,
-          expectedRevision: currentPlacementRevision(),
-        });
-      })(),
+      mutationFn: ({ characteristicId }: { characteristicId: string; name: string; historySnapshot: PlacementSnapshot }) =>
+        (async () => {
+          const res = await apiRequest("POST", "/api/boost", { characteristicId });
+          const data = await res.json() as BoostResponse;
+          const best = data.suggestions[0];
+          if (!best) throw new Error("No improving swap found for this characteristic");
+          await apiRequest("POST", "/api/boost/apply", {
+            student1Id: best.student1.id,
+            student1NewClassId: best.student2.currentClassId,
+            student2Id: best.student2.id,
+            student2NewClassId: best.student1.currentClassId,
+            expectedRevision: currentPlacementRevision(),
+            manualOverride,
+          });
+        })(),
     onSuccess: (_data, variables) => {
       setUndoStack((current) => [...current, variables.historySnapshot].slice(-20));
       queryClient.invalidateQueries({ queryKey: ["/api/placements/state"] });
@@ -717,27 +722,28 @@ export default function ReviewPage() {
   });
 
   const undoMutation = useMutation({
-    mutationFn: async (snapshot: PlacementSnapshot) => {
-      const current = queryClient.getQueryData<PlacementState>(["/api/placements/state"]);
-      if (!current) throw new Error("Placement data is still loading. Try again shortly.");
-      let revision = current.revision;
-      let restoredCount = 0;
-      for (const entry of snapshot) {
-        const latest = queryClient.getQueryData<PlacementState>(["/api/placements/state"]) ?? current;
-        const placement = latest.placements.find((p) => p.studentId === entry.studentId);
-        if (placement && placement.classId !== entry.classId) {
-          const response = await apiRequest("POST", "/api/placements/move", {
-            studentId: entry.studentId,
-            targetClassId: entry.classId,
-            expectedRevision: revision,
-          });
-          const result = await response.json() as { revision: number };
-          revision = result.revision;
-          restoredCount += 1;
+      mutationFn: async (snapshot: PlacementSnapshot) => {
+        const current = queryClient.getQueryData<PlacementState>(["/api/placements/state"]);
+        if (!current) throw new Error("Placement data is still loading. Try again shortly.");
+        let revision = current.revision;
+        let restoredCount = 0;
+        for (const entry of snapshot) {
+          const latest = queryClient.getQueryData<PlacementState>(["/api/placements/state"]) ?? current;
+          const placement = latest.placements.find((p) => p.studentId === entry.studentId);
+          if (placement && placement.classId !== entry.classId) {
+            const response = await apiRequest("POST", "/api/placements/move", {
+              studentId: entry.studentId,
+              targetClassId: entry.classId,
+              expectedRevision: revision,
+              manualOverride,
+            });
+            const result = await response.json() as { revision: number };
+            revision = result.revision;
+            restoredCount += 1;
+          }
         }
-      }
-      return restoredCount;
-    },
+        return restoredCount;
+      },
     onMutate: async (snapshot) => {
       await queryClient.cancelQueries({ queryKey: ["/api/placements/state"] });
       const previousPlacements = queryClient.getQueryData<PlacementState>(["/api/placements/state"]);
@@ -797,114 +803,140 @@ export default function ReviewPage() {
 
   const learnerForPlacement = unplacedStudents.find((student) => student.id === newLearnerId) ?? null;
   const placementRecommendation = useMemo(() => {
-    if (!learnerForPlacement) return null;
-    const targetGrade = getStudentTargetGrade(learnerForPlacement);
-    if (!targetGrade) return null;
-
-    const cohort = students.filter((student) => getStudentTargetGrade(student) === targetGrade);
-    const genderShares = getGenderCohortShares(cohort);
-    const activeCharacteristics = characteristics.filter((characteristic) => !characteristic.tagOnly);
-    const characteristicTargets = activeCharacteristics.map((characteristic) =>
-      [characteristic, getCharacteristicCohortTarget(cohort, characteristic)] as const,
-    );
-    const existingClassByStudent = new Map(placements.map((placement) => [placement.studentId, placement.classId]));
-    const teacherPreferenceIds = new Set(
-      placementRequests
-        .filter((request) => request.studentId === learnerForPlacement.id)
-        .map((request) => request.teacherId),
-    );
-    const requestedTeacherClasses = teachers
-      .filter((teacher) => teacherPreferenceIds.has(teacher.id))
-      .flatMap((teacher) => [teacher.currentClass, teacher.allocatedClass].filter(Boolean));
-
-    const candidates = classConfigs
-      .filter((config) => normalizeGradeValue(config.grade) === targetGrade)
-      .map((config) => {
-        const classStudents = classesWithStudents.find(({ config: item }) => item.id === config.id)?.students ?? [];
-        if (classStudents.length >= (config.capacity || 30)) return null;
-
-        for (const rule of rules) {
-          if (rule.importance === "important") continue;
-          const partnerId = rule.studentId1 === learnerForPlacement.id
-            ? rule.studentId2
-            : rule.studentId2 === learnerForPlacement.id ? rule.studentId1 : null;
-          if (!partnerId) continue;
-          const partnerClassId = existingClassByStudent.get(partnerId);
-          if (rule.type === "pair" && (!partnerClassId || partnerClassId !== config.id)) return null;
-          if (rule.type === "separate" && partnerClassId === config.id) return null;
-        }
-
-        const withLearner = [...classStudents, learnerForPlacement];
-        const genderScore = computeGenderClassScore(withLearner, genderShares);
-        const academicScore = characteristicTargets.length === 0
-          ? 100
-          : characteristicTargets.reduce((sum, [characteristic, target]) =>
-              sum + computeCharacteristicClassScore(withLearner, characteristic, target), 0,
-            ) / characteristicTargets.length;
-        const teacherPreferenceScore = requestedTeacherClasses.some((className) =>
-          className?.trim().toLowerCase() === config.name.trim().toLowerCase(),
-        ) ? 100 : 0;
-
-        const capacityScore = (1 - classStudents.length / (config.capacity || 30)) * 100;
-        return {
-          config,
-          score: genderScore * 0.3 + academicScore * 0.5 + capacityScore * 0.1 + teacherPreferenceScore * 0.1,
-          classSize: classStudents.length,
-        };
-      })
-      .filter((candidate): candidate is NonNullable<typeof candidate> => candidate !== null)
-      .sort((a, b) => b.score - a.score || a.classSize - b.classSize);
-
-    return candidates[0] ?? null;
-  }, [learnerForPlacement, students, characteristics, placements, placementRequests, teachers, classConfigs, classesWithStudents, rules]);
+      if (!learnerForPlacement) return null;
+      const targetGrade = getStudentTargetGrade(learnerForPlacement);
+      if (!targetGrade) return null;
+  
+      const cohort = students.filter((student) => getStudentTargetGrade(student) === targetGrade);
+      const genderShares = getGenderCohortShares(cohort);
+      const activeCharacteristics = characteristics.filter((characteristic) => !characteristic.tagOnly);
+      const characteristicTargets = activeCharacteristics.map((characteristic) =>
+        [characteristic, getCharacteristicCohortTarget(cohort, characteristic)] as const,
+      );
+      const existingClassByStudent = new Map(placements.map((placement) => [placement.studentId, placement.classId]));
+      const teacherPreferenceIds = new Set(
+        placementRequests
+          .filter((request) => request.studentId === learnerForPlacement.id)
+          .map((request) => request.teacherId),
+      );
+      const requestedTeacherClasses = teachers
+        .filter((teacher) => teacherPreferenceIds.has(teacher.id))
+        .flatMap((teacher) => [teacher.currentClass, teacher.allocatedClass].filter(Boolean));
+  
+      const candidates = classConfigs
+        .filter((config) => normalizeGradeValue(config.grade) === targetGrade)
+        .map((config) => {
+          const classStudents = classesWithStudents.find(({ config: item }) => item.id === config.id)?.students ?? [];
+          // When manual override is ON, don't filter out classes at capacity
+          if (!manualOverride && classStudents.length >= (config.capacity || 30)) return null;
+  
+          for (const rule of rules) {
+            if (rule.importance === "important") continue;
+            const partnerId = rule.studentId1 === learnerForPlacement.id
+              ? rule.studentId2
+              : rule.studentId2 === learnerForPlacement.id ? rule.studentId1 : null;
+            if (!partnerId) continue;
+            const partnerClassId = existingClassByStudent.get(partnerId);
+            if (rule.type === "pair" && (!partnerClassId || partnerClassId !== config.id)) return null;
+            // When manual override is ON, don't filter out classes with separation conflicts
+            if (!manualOverride && rule.type === "separate" && partnerClassId === config.id) return null;
+          }
+  
+          const withLearner = [...classStudents, learnerForPlacement];
+          const genderScore = computeGenderClassScore(withLearner, genderShares);
+          const academicScore = characteristicTargets.length === 0
+            ? 100
+            : characteristicTargets.reduce((sum, [characteristic, target]) =>
+                sum + computeCharacteristicClassScore(withLearner, characteristic, target), 0,
+              ) / characteristicTargets.length;
+          const teacherPreferenceScore = requestedTeacherClasses.some((className) =>
+            className?.trim().toLowerCase() === config.name.trim().toLowerCase(),
+          ) ? 100 : 0;
+  
+          const capacityScore = (1 - classStudents.length / (config.capacity || 30)) * 100;
+          return {
+            config,
+            score: genderScore * 0.3 + academicScore * 0.5 + capacityScore * 0.1 + teacherPreferenceScore * 0.1,
+            classSize: classStudents.length,
+          };
+        })
+        .filter((candidate): candidate is NonNullable<typeof candidate> => candidate !== null)
+        .sort((a, b) => b.score - a.score || a.classSize - b.classSize);
+  
+      return candidates[0] ?? null;
+    }, [learnerForPlacement, students, characteristics, placements, placementRequests, teachers, classConfigs, classesWithStudents, rules, manualOverride]);
 
   const conflicts: ConflictWarning[] = useMemo(() => {
-    const warnings: ConflictWarning[] = [];
-    
-    rules.forEach((rule) => {
-      // Important requests are preferences the solver may trade off — only
-      // mandatory requirements surface as conflicts.
-      if (rule.importance === "important") return;
-
-      const student1Placement = placements.find((p) => p.studentId === rule.studentId1);
-      const student2Placement = placements.find((p) => p.studentId === rule.studentId2);
+      const warnings: ConflictWarning[] = [];
       
-      if (student1Placement && student2Placement) {
-        if (rule.type === "pair" && student1Placement.classId !== student2Placement.classId) {
-          const s1 = students.find((s) => s.id === rule.studentId1);
-          const s2 = students.find((s) => s.id === rule.studentId2);
-          warnings.push({
-            type: "pairing",
-            message: `${s1?.firstName} ${s1?.lastName} and ${s2?.firstName} ${s2?.lastName} should be together`,
-            studentIds: [rule.studentId1, rule.studentId2],
-            ruleId: rule.id,
-          });
-        }
-        if (rule.type === "separate" && student1Placement.classId === student2Placement.classId) {
-          const s1 = students.find((s) => s.id === rule.studentId1);
-          const s2 = students.find((s) => s.id === rule.studentId2);
-          warnings.push({
-            type: "separation",
-            message: `${s1?.firstName} ${s1?.lastName} and ${s2?.firstName} ${s2?.lastName} should be apart`,
-            studentIds: [rule.studentId1, rule.studentId2],
-            ruleId: rule.id,
-          });
-        }
-      }
-    });
-
-    classesWithStudents.forEach(({ config, students: classStudents }) => {
-      if (classStudents.length > (config.capacity || 30)) {
-        warnings.push({
-          type: "capacity",
-          message: `${config.name} exceeds capacity (${classStudents.length}/${config.capacity})`,
-          studentIds: classStudents.map((s) => s.id),
+      // When manual override is ON, don't show capacity or separation conflicts
+      // (pairing conflicts are still shown as they represent learners who should be together)
+      if (!manualOverride) {
+        rules.forEach((rule) => {
+          // Important requests are preferences the solver may trade off — only
+          // mandatory requirements surface as conflicts.
+          if (rule.importance === "important") return;
+  
+          const student1Placement = placements.find((p) => p.studentId === rule.studentId1);
+          const student2Placement = placements.find((p) => p.studentId === rule.studentId2);
+          
+          if (student1Placement && student2Placement) {
+            if (rule.type === "pair" && student1Placement.classId !== student2Placement.classId) {
+              const s1 = students.find((s) => s.id === rule.studentId1);
+              const s2 = students.find((s) => s.id === rule.studentId2);
+              warnings.push({
+                type: "pairing",
+                message: `${s1?.firstName} ${s1?.lastName} and ${s2?.firstName} ${s2?.lastName} should be together`,
+                studentIds: [rule.studentId1, rule.studentId2],
+                ruleId: rule.id,
+              });
+            }
+            if (rule.type === "separate" && student1Placement.classId === student2Placement.classId) {
+              const s1 = students.find((s) => s.id === rule.studentId1);
+              const s2 = students.find((s) => s.id === rule.studentId2);
+              warnings.push({
+                type: "separation",
+                message: `${s1?.firstName} ${s1?.lastName} and ${s2?.firstName} ${s2?.lastName} should be apart`,
+                studentIds: [rule.studentId1, rule.studentId2],
+                ruleId: rule.id,
+              });
+            }
+          }
+        });
+  
+        classesWithStudents.forEach(({ config, students: classStudents }) => {
+          if (classStudents.length > (config.capacity || 30)) {
+            warnings.push({
+              type: "capacity",
+              message: `${config.name} exceeds capacity (${classStudents.length}/${config.capacity})`,
+              studentIds: classStudents.map((s) => s.id),
+            });
+          }
+        });
+      } else {
+        // When manual override is ON, only show pairing conflicts (learners who should be together)
+        rules.forEach((rule) => {
+          if (rule.importance === "important") return;
+          if (rule.type !== "pair") return;
+  
+          const student1Placement = placements.find((p) => p.studentId === rule.studentId1);
+          const student2Placement = placements.find((p) => p.studentId === rule.studentId2);
+          
+          if (student1Placement && student2Placement && student1Placement.classId !== student2Placement.classId) {
+            const s1 = students.find((s) => s.id === rule.studentId1);
+            const s2 = students.find((s) => s.id === rule.studentId2);
+            warnings.push({
+              type: "pairing",
+              message: `${s1?.firstName} ${s1?.lastName} and ${s2?.firstName} ${s2?.lastName} should be together`,
+              studentIds: [rule.studentId1, rule.studentId2],
+              ruleId: rule.id,
+            });
+          }
         });
       }
-    });
-
-    return warnings;
-  }, [rules, placements, students, classesWithStudents]);
+  
+      return warnings;
+    }, [rules, placements, students, classesWithStudents, manualOverride]);
 
   const getStudentPreviousSchoolDistribution = (classStudents: Student[]) => {
     const distribution: Record<string, number> = {};
@@ -1032,42 +1064,44 @@ export default function ReviewPage() {
     .map((studentId) => students.find((student) => student.id === studentId))
     .filter((student): student is Student => Boolean(student));
   const guidedSwapPreview = useMemo(() => {
-    if (selectedSwapStudents.length !== 2) return null;
-    const [student1, student2] = selectedSwapStudents;
-    const placement1 = placements.find((placement) => placement.studentId === student1.id);
-    const placement2 = placements.find((placement) => placement.studentId === student2.id);
-    if (!placement1 || !placement2) return null;
-    const class1 = classesWithStudents.find(({ config }) => config.id === placement1.classId);
-    const class2 = classesWithStudents.find(({ config }) => config.id === placement2.classId);
-    if (!class1 || !class2) return null;
-
-    const warnings: string[] = [];
-    if (placement1.classId === placement2.classId) warnings.push("Both learners are already in the same class, so swapping them has no placement effect.");
-    if (getStudentTargetGrade(student1) !== normalizeGradeValue(class2.config.grade)
-      || getStudentTargetGrade(student2) !== normalizeGradeValue(class1.config.grade)) {
-      warnings.push("The swap would move a learner outside their target grade.");
-    }
-
-    const nextClass1Students = class1.students.filter((student) => student.id !== student1.id).concat(student2);
-    const nextClass2Students = class2.students.filter((student) => student.id !== student2.id).concat(student1);
-    if (nextClass1Students.length > (class1.config.capacity || 30)) warnings.push(`${class1.config.name} would exceed capacity.`);
-    if (nextClass2Students.length > (class2.config.capacity || 30)) warnings.push(`${class2.config.name} would exceed capacity.`);
-
-    const nextClassByStudent = new Map(placements.map((placement) => [placement.studentId, placement.classId]));
-    nextClassByStudent.set(student1.id, placement2.classId);
-    nextClassByStudent.set(student2.id, placement1.classId);
-    rules.forEach((rule) => {
-      if (rule.importance === "important") return;
-      const classForFirst = nextClassByStudent.get(rule.studentId1);
-      const classForSecond = nextClassByStudent.get(rule.studentId2);
-      if (!classForFirst || !classForSecond) return;
-      if (rule.type === "pair" && classForFirst !== classForSecond) {
-        warnings.push(`Mandatory pairing would be broken for ${students.find((student) => student.id === rule.studentId1)?.firstName ?? "a learner"} and ${students.find((student) => student.id === rule.studentId2)?.firstName ?? "a learner"}.`);
+      if (selectedSwapStudents.length !== 2) return null;
+      const [student1, student2] = selectedSwapStudents;
+      const placement1 = placements.find((placement) => placement.studentId === student1.id);
+      const placement2 = placements.find((placement) => placement.studentId === student2.id);
+      if (!placement1 || !placement2) return null;
+      const class1 = classesWithStudents.find(({ config }) => config.id === placement1.classId);
+      const class2 = classesWithStudents.find(({ config }) => config.id === placement2.classId);
+      if (!class1 || !class2) return null;
+  
+      const warnings: string[] = [];
+      if (placement1.classId === placement2.classId) warnings.push("Both learners are already in the same class, so swapping them has no placement effect.");
+      if (getStudentTargetGrade(student1) !== normalizeGradeValue(class2.config.grade)
+        || getStudentTargetGrade(student2) !== normalizeGradeValue(class1.config.grade)) {
+        warnings.push("The swap would move a learner outside their target grade.");
       }
-      if (rule.type === "separate" && classForFirst === classForSecond) {
-        warnings.push(`Mandatory separation would be broken for ${students.find((student) => student.id === rule.studentId1)?.firstName ?? "a learner"} and ${students.find((student) => student.id === rule.studentId2)?.firstName ?? "a learner"}.`);
+  
+      const nextClass1Students = class1.students.filter((student) => student.id !== student1.id).concat(student2);
+      const nextClass2Students = class2.students.filter((student) => student.id !== student2.id).concat(student1);
+      if (!manualOverride) {
+        if (nextClass1Students.length > (class1.config.capacity || 30)) warnings.push(`${class1.config.name} would exceed capacity.`);
+        if (nextClass2Students.length > (class2.config.capacity || 30)) warnings.push(`${class2.config.name} would exceed capacity.`);
       }
-    });
+  
+      const nextClassByStudent = new Map(placements.map((placement) => [placement.studentId, placement.classId]));
+      nextClassByStudent.set(student1.id, placement2.classId);
+      nextClassByStudent.set(student2.id, placement1.classId);
+      rules.forEach((rule) => {
+        if (rule.importance === "important") return;
+        const classForFirst = nextClassByStudent.get(rule.studentId1);
+        const classForSecond = nextClassByStudent.get(rule.studentId2);
+        if (!classForFirst || !classForSecond) return;
+        if (rule.type === "pair" && classForFirst !== classForSecond) {
+          warnings.push(`Mandatory pairing would be broken for ${students.find((student) => student.id === rule.studentId1)?.firstName ?? "a learner"} and ${students.find((student) => student.id === rule.studentId2)?.firstName ?? "a learner"}.`);
+        }
+        if (!manualOverride && rule.type === "separate" && classForFirst === classForSecond) {
+          warnings.push(`Mandatory separation would be broken for ${students.find((student) => student.id === rule.studentId1)?.firstName ?? "a learner"} and ${students.find((student) => student.id === rule.studentId2)?.firstName ?? "a learner"}.`);
+        }
+      });
 
     const activeCharacteristics = characteristics.filter((characteristic) => !characteristic.tagOnly);
     const targets = activeCharacteristics.map((characteristic) => [characteristic, getCharacteristicCohortTarget(students, characteristic)] as const);
@@ -1621,25 +1655,54 @@ export default function ReviewPage() {
           <p className="text-xs text-muted-foreground">Review & Adjust · Drag students between class columns · Click a learner to find similar</p>
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
-          <Badge variant={conflicts.length === 0 ? "default" : "destructive"} className="h-7 gap-1 text-xs">
-            {conflicts.length === 0 ? <><CheckCircle className="h-3.5 w-3.5" /> No conflicts</> : <><AlertTriangle className="h-3.5 w-3.5" /> {conflicts.length} conflict{conflicts.length !== 1 ? "s" : ""}</>}
-          </Badge>
-          <Badge variant="outline" className="h-7 gap-1 text-xs"><BarChart3 className="h-3.5 w-3.5" /> {overallBalance}% balance</Badge>
-          <Button variant="outline" size="sm" className="h-7 px-2.5 text-xs" onClick={() => { setNewLearnerId(""); setNewLearnerClassId(""); setIsCreatingLearner(false); setIsAddLearnerOpen(true); }} data-testid="button-add-learner"><Plus className="mr-1 h-3.5 w-3.5" /> Add learner</Button>
-          <Button variant={showBoostPanel ? "default" : "outline"} size="sm" className="h-7 px-2.5 text-xs" onClick={() => setShowBoostPanel(!showBoostPanel)} data-testid="button-toggle-boost"><Zap className="mr-1 h-3.5 w-3.5" /> Boost</Button>
-        </div>
+                  <Badge variant={conflicts.length === 0 ? "default" : "destructive"} className="h-7 gap-1 text-xs">
+                    {conflicts.length === 0 ? <><CheckCircle className="h-3.5 w-3.5" /> No conflicts</> : <><AlertTriangle className="h-3.5 w-3.5" /> {conflicts.length} conflict{conflicts.length !== 1 ? "s" : ""}</>}
+                  </Badge>
+                  <Badge variant="outline" className="h-7 gap-1 text-xs"><BarChart3 className="h-3.5 w-3.5" /> {overallBalance}% balance</Badge>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant={manualOverride ? "default" : "outline"}
+                        size="sm"
+                        className="h-7 px-2.5 text-xs"
+                        onClick={() => setManualOverride(!manualOverride)}
+                        data-testid="button-manual-override"
+                      >
+                        <UserRoundMinus className="mr-1 h-3.5 w-3.5" />
+                        Manual Override
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p>{manualOverride ? "Disable manual override — validation rules will be enforced" : "Enable manual override — allow unrestricted learner movements"}</p>
+                    </TooltipContent>
+                  </Tooltip>
+                  <Button variant="outline" size="sm" className="h-7 px-2.5 text-xs" onClick={() => { setNewLearnerId(""); setNewLearnerClassId(""); setIsCreatingLearner(false); setIsAddLearnerOpen(true); }} data-testid="button-add-learner"><Plus className="mr-1 h-3.5 w-3.5" /> Add learner</Button>
+                  <Button variant={showBoostPanel ? "default" : "outline"} size="sm" className="h-7 px-2.5 text-xs" onClick={() => setShowBoostPanel(!showBoostPanel)} data-testid="button-toggle-boost"><Zap className="mr-1 h-3.5 w-3.5" /> Boost</Button>
+                </div>
       </div>
 
-      {conflicts.length > 0 && (
-        <Alert variant="destructive" className="py-2">
-          <AlertTriangle className="h-4 w-4" />
-          <AlertTitle className="text-sm">Conflicts need attention</AlertTitle>
-          <AlertDescription className="text-xs">
-            {conflicts.slice(0, 3).map((conflict) => conflict.message).join(" · ")}
-            {conflicts.length > 3 ? ` · +${conflicts.length - 3} more` : ""}
-          </AlertDescription>
-        </Alert>
-      )}
+      {manualOverride && (
+              <Alert className="py-2 border-amber-300 bg-amber-50 dark:bg-amber-950/30" data-testid="alert-manual-override">
+                <AlertTriangle className="h-4 w-4 text-amber-600" />
+                <AlertTitle className="text-sm text-amber-800 dark:text-amber-200">Manual Placement Override is ON</AlertTitle>
+                <AlertDescription className="text-xs text-amber-700 dark:text-amber-300">
+                            Validation rules are disabled. You can move learners freely between classes without capacity or separation restrictions.
+                            <Button variant="ghost" size="sm" className="ml-2 p-0 h-auto" onClick={() => setManualOverride(false)}>
+                              Turn OFF
+                            </Button>
+                          </AlertDescription>
+              </Alert>
+            )}
+            {conflicts.length > 0 && (
+              <Alert variant="destructive" className="py-2">
+                <AlertTriangle className="h-4 w-4" />
+                <AlertTitle className="text-sm">Conflicts need attention</AlertTitle>
+                <AlertDescription className="text-xs">
+                  {conflicts.slice(0, 3).map((conflict) => conflict.message).join(" · ")}
+                  {conflicts.length > 3 ? ` · +${conflicts.length - 3} more` : ""}
+                </AlertDescription>
+              </Alert>
+            )}
 
       <div className="grid items-start gap-3 lg:grid-cols-[250px_minmax(0,1fr)]">
         <aside className="space-y-3 lg:sticky lg:top-[76px]">
@@ -2244,19 +2307,19 @@ export default function ReviewPage() {
                     <SelectTrigger data-testid="select-recommended-class"><SelectValue placeholder="Select a class" /></SelectTrigger>
                     <SelectContent>
                       {classConfigs
-                        .filter((config) => normalizeGradeValue(config.grade) === getStudentTargetGrade(learnerForPlacement))
-                        .map((config) => {
-                          const count = classesWithStudents.find((entry) => entry.config.id === config.id)?.students.length ?? 0;
-                          const isFull = count >= (config.capacity || 30);
-                          return <SelectItem key={config.id} value={config.id} disabled={isFull}>{config.name} · {count}/{config.capacity || 30}{placementRecommendation?.config.id === config.id ? " · Recommended" : ""}</SelectItem>;
-                        })}
+                                              .filter((config) => normalizeGradeValue(config.grade) === getStudentTargetGrade(learnerForPlacement))
+                                              .map((config) => {
+                                                const count = classesWithStudents.find((entry) => entry.config.id === config.id)?.students.length ?? 0;
+                                                const isFull = !manualOverride && count >= (config.capacity || 30);
+                                                return <SelectItem key={config.id} value={config.id} disabled={isFull}>{config.name} · {count}/{config.capacity || 30}{placementRecommendation?.config.id === config.id ? " · Recommended" : ""}</SelectItem>;
+                                              })}
                     </SelectContent>
                   </Select>
                   {placementRecommendation ? (
-                    <p className="text-xs text-muted-foreground">Recommended: {placementRecommendation.config.name} based on capacity, gender balance, academic results, mandatory rules, and teacher placement requests.</p>
-                  ) : (
-                    <p className="text-xs text-destructive">No available class meets the learner’s grade, capacity, and mandatory rule requirements.</p>
-                  )}
+                                      <p className="text-xs text-muted-foreground">Recommended: {placementRecommendation.config.name} based on capacity, gender balance, academic results, mandatory rules, and teacher placement requests.</p>
+                                    ) : (
+                                      <p className="text-xs text-destructive">{manualOverride ? "No class matches the learner's target grade." : "No available class meets the learner's grade, capacity, and mandatory rule requirements."}</p>
+                                    )}
                 </div>
               )}
                 </div>

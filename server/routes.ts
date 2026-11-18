@@ -1611,19 +1611,19 @@ export async function registerRoutes(
   });
 
   app.post("/api/placements", isAuthenticated, requireWritableWorkspace, async (req, res) => {
-    try {
-      const data = insertPlacementSchema.parse(req.body);
-      const { expectedRevision } = req.body;
-      const result = await storage.createPlacement(accountIdFor(req), data, readPlacementRevision(expectedRevision));
-      res.status(201).json(result);
-    } catch (error) {
-      if (error instanceof PlacementRevisionConflictError || error instanceof InvalidPlacementError) {
-        placementError(res, error);
-      } else {
-        res.status(400).json({ error: "Invalid placement data" });
+      try {
+        const data = insertPlacementSchema.parse(req.body);
+        const { expectedRevision, manualOverride } = req.body;
+        const result = await storage.createPlacement(accountIdFor(req), data, readPlacementRevision(expectedRevision), manualOverride === true);
+        res.status(201).json(result);
+      } catch (error) {
+        if (error instanceof PlacementRevisionConflictError || error instanceof InvalidPlacementError) {
+          placementError(res, error);
+        } else {
+          res.status(400).json({ error: "Invalid placement data" });
+        }
       }
-    }
-  });
+    });
 
   app.patch("/api/placements/:id", isAuthenticated, requireWritableWorkspace, async (req, res) => {
     try {
@@ -1669,26 +1669,27 @@ export async function registerRoutes(
   });
 
   // Move student (reassign to different class) (protected)
-  app.post("/api/placements/move", isAuthenticated, requireWritableWorkspace, async (req, res) => {
-    try {
-      const { studentId, targetClassId, expectedRevision } = req.body;
-      const accountId = accountIdFor(req);
-      const result = await storage.movePlacement(
-        accountId,
-        studentId,
-        targetClassId,
-        readPlacementRevision(expectedRevision),
-      );
-      const [placements, rules] = await Promise.all([
-        storage.getPlacements(accountId),
-        storage.getRules(accountId),
-      ]);
-      const conflicts = await checkConflicts(studentId, targetClassId, rules, placements);
-      res.json({ ...result, conflicts });
-    } catch (error) {
-      placementError(res, error);
-    }
-  });
+    app.post("/api/placements/move", isAuthenticated, requireWritableWorkspace, async (req, res) => {
+      try {
+        const { studentId, targetClassId, expectedRevision, manualOverride } = req.body;
+        const accountId = accountIdFor(req);
+        const result = await storage.movePlacement(
+          accountId,
+          studentId,
+          targetClassId,
+          readPlacementRevision(expectedRevision),
+          manualOverride === true,
+        );
+        const [placements, rules] = await Promise.all([
+          storage.getPlacements(accountId),
+          storage.getRules(accountId),
+        ]);
+        const conflicts = await checkConflicts(studentId, targetClassId, rules, placements);
+        res.json({ ...result, conflicts });
+      } catch (error) {
+        placementError(res, error);
+      }
+    });
 
   // Class generation algorithm (protected)
   app.post("/api/generate-classes", isAuthenticated, async (req, res) => {
@@ -2116,45 +2117,46 @@ export async function registerRoutes(
   });
 
   // Apply a boost suggestion (swap two students) (protected)
-  app.post("/api/boost/apply", isAuthenticated, requireWritableWorkspace, async (req, res) => {
-    try {
-      const { student1Id, student1NewClassId, student2Id, student2NewClassId, expectedRevision } = req.body;
-      const accountId = accountIdFor(req);
-      const [placements, students, classConfigs] = await Promise.all([
-        storage.getPlacements(accountId),
-        storage.getStudents(accountId),
-        storage.getClassConfigs(accountId),
-      ]);
-      const placement1 = placements.find(p => p.studentId === student1Id);
-      const placement2 = placements.find(p => p.studentId === student2Id);
-      const student1 = students.find((student) => student.id === student1Id);
-      const student2 = students.find((student) => student.id === student2Id);
-      const class1 = classConfigs.find((config) => config.id === student1NewClassId);
-      const class2 = classConfigs.find((config) => config.id === student2NewClassId);
-
-      if (!placement1 || !placement2 || !student1 || !student2 || !class1 || !class2) {
-        return res.status(404).json({ error: "One or both students or target classes were not found" });
+    app.post("/api/boost/apply", isAuthenticated, requireWritableWorkspace, async (req, res) => {
+      try {
+        const { student1Id, student1NewClassId, student2Id, student2NewClassId, expectedRevision, manualOverride } = req.body;
+        const accountId = accountIdFor(req);
+        const [placements, students, classConfigs] = await Promise.all([
+          storage.getPlacements(accountId),
+          storage.getStudents(accountId),
+          storage.getClassConfigs(accountId),
+        ]);
+        const placement1 = placements.find(p => p.studentId === student1Id);
+        const placement2 = placements.find(p => p.studentId === student2Id);
+        const student1 = students.find((student) => student.id === student1Id);
+        const student2 = students.find((student) => student.id === student2Id);
+        const class1 = classConfigs.find((config) => config.id === student1NewClassId);
+        const class2 = classConfigs.find((config) => config.id === student2NewClassId);
+  
+        if (!placement1 || !placement2 || !student1 || !student2 || !class1 || !class2) {
+          return res.status(404).json({ error: "One or both students or target classes were not found" });
+        }
+        if (
+          getStudentTargetGrade(student1) !== normalizeGradeValue(class1.grade) ||
+          getStudentTargetGrade(student2) !== normalizeGradeValue(class2.grade)
+        ) {
+          return res.status(400).json({ error: "Boost cannot move a learner outside their New Grade" });
+        }
+        
+        const revision = await storage.swapPlacements(
+          accountId,
+          student1Id,
+          student1NewClassId,
+          student2Id,
+          student2NewClassId,
+          readPlacementRevision(expectedRevision),
+          manualOverride === true,
+        );
+        res.json({ success: true, revision });
+      } catch (error) {
+        placementError(res, error);
       }
-      if (
-        getStudentTargetGrade(student1) !== normalizeGradeValue(class1.grade) ||
-        getStudentTargetGrade(student2) !== normalizeGradeValue(class2.grade)
-      ) {
-        return res.status(400).json({ error: "Boost cannot move a learner outside their New Grade" });
-      }
-      
-      const revision = await storage.swapPlacements(
-        accountId,
-        student1Id,
-        student1NewClassId,
-        student2Id,
-        student2NewClassId,
-        readPlacementRevision(expectedRevision),
-      );
-      res.json({ success: true, revision });
-    } catch (error) {
-      placementError(res, error);
-    }
-  });
+    });
 
   // Surveys CRUD (protected)
   app.get("/api/surveys", isAuthenticated, async (req, res) => {

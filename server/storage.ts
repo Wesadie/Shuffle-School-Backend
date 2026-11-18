@@ -593,17 +593,18 @@ export class DatabaseStorage {
   }
 
   private async validatePlacementCandidate(
-    transaction: StorageTransaction,
-    accountId: string,
-    candidate: Pick<Placement, "studentId" | "classId">[],
-  ): Promise<void> {
-    const [accountStudents, configs, accountRules] = await Promise.all([
-      transaction.select().from(students).where(eq(students.accountId, accountId)),
-      transaction.select().from(classConfigs).where(eq(classConfigs.accountId, accountId)),
-      transaction.select().from(rules).where(eq(rules.accountId, accountId)),
-    ]);
-    validatePlacements(candidate, accountStudents, configs, accountRules);
-  }
+      transaction: StorageTransaction,
+      accountId: string,
+      candidate: Pick<Placement, "studentId" | "classId">[],
+      manualOverride: boolean = false,
+    ): Promise<void> {
+      const [accountStudents, configs, accountRules] = await Promise.all([
+        transaction.select().from(students).where(eq(students.accountId, accountId)),
+        transaction.select().from(classConfigs).where(eq(classConfigs.accountId, accountId)),
+        transaction.select().from(rules).where(eq(rules.accountId, accountId)),
+      ]);
+      validatePlacements(candidate, accountStudents, configs, accountRules, manualOverride);
+    }
 
   async getPlacement(accountId: string, id: string): Promise<Placement | undefined> {
     accountId = requireAccountId(accountId);
@@ -612,29 +613,31 @@ export class DatabaseStorage {
   }
 
   async createPlacement(
-    accountId: string,
-    insertPlacement: InsertPlacement,
-    expectedRevision: number,
-  ): Promise<{ placement: Placement; revision: number }> {
-    accountId = requireAccountId(accountId);
-    return this.withPlacementRevision(accountId, expectedRevision, async (transaction, revision) => {
-      const candidate = await transaction.select().from(placements).where(eq(placements.accountId, accountId));
-      validatePlacements(
-        [...candidate, insertPlacement],
-        await transaction.select().from(students).where(eq(students.accountId, accountId)),
-        await transaction.select().from(classConfigs).where(eq(classConfigs.accountId, accountId)),
-        await transaction.select().from(rules).where(eq(rules.accountId, accountId)),
-      );
-      const [placement] = await transaction.insert(placements).values({
-        id: randomUUID(),
-        accountId,
-        studentId: insertPlacement.studentId,
-        classId: insertPlacement.classId,
-        locked: insertPlacement.locked ?? false,
-      }).returning();
-      return { placement, revision };
-    });
-  }
+      accountId: string,
+      insertPlacement: InsertPlacement,
+      expectedRevision: number,
+      manualOverride: boolean = false,
+    ): Promise<{ placement: Placement; revision: number }> {
+      accountId = requireAccountId(accountId);
+      return this.withPlacementRevision(accountId, expectedRevision, async (transaction, revision) => {
+        const candidate = await transaction.select().from(placements).where(eq(placements.accountId, accountId));
+        validatePlacements(
+          [...candidate, insertPlacement],
+          await transaction.select().from(students).where(eq(students.accountId, accountId)),
+          await transaction.select().from(classConfigs).where(eq(classConfigs.accountId, accountId)),
+          await transaction.select().from(rules).where(eq(rules.accountId, accountId)),
+          manualOverride,
+        );
+        const [placement] = await transaction.insert(placements).values({
+          id: randomUUID(),
+          accountId,
+          studentId: insertPlacement.studentId,
+          classId: insertPlacement.classId,
+          locked: insertPlacement.locked ?? false,
+        }).returning();
+        return { placement, revision };
+      });
+    }
 
   async updatePlacement(
     accountId: string,
@@ -660,32 +663,33 @@ export class DatabaseStorage {
   }
 
   async movePlacement(
-    accountId: string,
-    studentId: string,
-    targetClassId: string,
-    expectedRevision: number,
-  ): Promise<{ placement: Placement; revision: number }> {
-    accountId = requireAccountId(accountId);
-    return this.withPlacementRevision(accountId, expectedRevision, async (transaction, revision) => {
-      const current = await transaction.select().from(placements).where(eq(placements.accountId, accountId));
-      const existing = current.find((placement) => placement.studentId === studentId);
-      const candidate = existing
-        ? current.map((placement) => placement.id === existing.id ? { ...placement, classId: targetClassId } : placement)
-        : [...current, { studentId, classId: targetClassId }];
-      await this.validatePlacementCandidate(transaction, accountId, candidate);
-      if (existing) {
-        const [placement] = await transaction.update(placements)
-          .set({ classId: targetClassId })
-          .where(and(eq(placements.accountId, accountId), eq(placements.id, existing.id)))
+      accountId: string,
+      studentId: string,
+      targetClassId: string,
+      expectedRevision: number,
+      manualOverride: boolean = false,
+    ): Promise<{ placement: Placement; revision: number }> {
+      accountId = requireAccountId(accountId);
+      return this.withPlacementRevision(accountId, expectedRevision, async (transaction, revision) => {
+        const current = await transaction.select().from(placements).where(eq(placements.accountId, accountId));
+        const existing = current.find((placement) => placement.studentId === studentId);
+        const candidate = existing
+          ? current.map((placement) => placement.id === existing.id ? { ...placement, classId: targetClassId } : placement)
+          : [...current, { studentId, classId: targetClassId }];
+        await this.validatePlacementCandidate(transaction, accountId, candidate, manualOverride);
+        if (existing) {
+          const [placement] = await transaction.update(placements)
+            .set({ classId: targetClassId })
+            .where(and(eq(placements.accountId, accountId), eq(placements.id, existing.id)))
+            .returning();
+          return { placement, revision };
+        }
+        const [placement] = await transaction.insert(placements)
+          .values({ id: randomUUID(), accountId, studentId, classId: targetClassId, locked: false })
           .returning();
         return { placement, revision };
-      }
-      const [placement] = await transaction.insert(placements)
-        .values({ id: randomUUID(), accountId, studentId, classId: targetClassId, locked: false })
-        .returning();
-      return { placement, revision };
-    });
-  }
+      });
+    }
 
   async deletePlacement(
     accountId: string,
@@ -711,28 +715,29 @@ export class DatabaseStorage {
   }
 
   async swapPlacements(
-    accountId: string,
-    student1Id: string,
-    class1Id: string,
-    student2Id: string,
-    class2Id: string,
-    expectedRevision: number,
-  ): Promise<number> {
-    accountId = requireAccountId(accountId);
-    return this.withPlacementRevision(accountId, expectedRevision, async (transaction, revision) => {
-      const current = await transaction.select().from(placements).where(eq(placements.accountId, accountId));
-      const candidate = buildSwapPlacements(current, student1Id, class1Id, student2Id, class2Id);
-      await this.validatePlacementCandidate(transaction, accountId, candidate);
-      const first = current.find((placement) => placement.studentId === student1Id)!;
-      const second = current.find((placement) => placement.studentId === student2Id)!;
-      const updated = await transaction.update(placements)
-        .set({ classId: sql`CASE WHEN ${placements.id} = ${first.id} THEN ${class1Id} ELSE ${class2Id} END` })
-        .where(and(eq(placements.accountId, accountId), inArray(placements.id, [first.id, second.id])))
-        .returning({ id: placements.id });
-      if (updated.length !== 2) throw new Error("Both swap placements must still exist");
-      return revision;
-    });
-  }
+      accountId: string,
+      student1Id: string,
+      class1Id: string,
+      student2Id: string,
+      class2Id: string,
+      expectedRevision: number,
+      manualOverride: boolean = false,
+    ): Promise<number> {
+      accountId = requireAccountId(accountId);
+      return this.withPlacementRevision(accountId, expectedRevision, async (transaction, revision) => {
+        const current = await transaction.select().from(placements).where(eq(placements.accountId, accountId));
+        const candidate = buildSwapPlacements(current, student1Id, class1Id, student2Id, class2Id);
+        await this.validatePlacementCandidate(transaction, accountId, candidate, manualOverride);
+        const first = current.find((placement) => placement.studentId === student1Id)!;
+        const second = current.find((placement) => placement.studentId === student2Id)!;
+        const updated = await transaction.update(placements)
+          .set({ classId: sql`CASE WHEN ${placements.id} = ${first.id} THEN ${class1Id} ELSE ${class2Id} END` })
+          .where(and(eq(placements.accountId, accountId), inArray(placements.id, [first.id, second.id])))
+          .returning({ id: placements.id });
+        if (updated.length !== 2) throw new Error("Both swap placements must still exist");
+        return revision;
+      });
+    }
 
   async replacePlacements(
     accountId: string,

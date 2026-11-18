@@ -39,6 +39,7 @@ export function validatePlacements(
   students: Student[],
   classConfigs: ClassConfig[],
   rules: Rule[],
+  manualOverride: boolean = false,
 ): void {
   const studentById = new Map(students.map((student) => [student.id, student]));
   const classById = new Map(classConfigs.map((config) => [config.id, config]));
@@ -56,11 +57,14 @@ export function validatePlacements(
     classCounts.set(placement.classId, (classCounts.get(placement.classId) ?? 0) + 1);
   }
 
-  for (const [classId, count] of classCounts) {
-    const config = classById.get(classId)!;
-    const capacity = config.capacity || 30;
-    if (count > capacity) {
-      throw new InvalidPlacementError(`${config.name} exceeds capacity (${count}/${capacity})`);
+  // When manual override is ON, skip capacity validation
+  if (!manualOverride) {
+    for (const [classId, count] of classCounts) {
+      const config = classById.get(classId)!;
+      const capacity = config.capacity || 30;
+      if (count > capacity) {
+        throw new InvalidPlacementError(`${config.name} exceeds capacity (${count}/${capacity})`);
+      }
     }
   }
 
@@ -71,7 +75,8 @@ export function validatePlacements(
     if (class1 && class2 && rule.type === "pair" && class1 !== class2) {
       throw new InvalidPlacementError("This placement would separate learners with a mandatory together request");
     }
-    if (class1 && class2 && rule.type === "separate" && class1 === class2) {
+    // When manual override is ON, skip separation validation
+    if (!manualOverride && class1 && class2 && rule.type === "separate" && class1 === class2) {
       throw new InvalidPlacementError("This placement would place learners with a mandatory separation request together");
     }
   }
