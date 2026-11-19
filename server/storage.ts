@@ -52,7 +52,7 @@ import {
 import { db, pool } from "./db";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { randomUUID } from "crypto";
-import { buildSwapPlacements, PlacementNotFoundError, runRevisionedMutation, validatePlacements } from "./placementSafety";
+import { buildSwapPlacements, PlacementNotFoundError, runRevisionedMutation, validatePlacements, InvalidPlacementError } from "./placementSafety";
 import type { LearnerImportPlan } from "./learnerImportPlan";
 import { normalizeRosterGrade, type StudentRosterOptions } from "@shared/student-roster";
 
@@ -317,7 +317,7 @@ export class DatabaseStorage {
         invitedAt: accountMemberships.invitedAt,
         acceptedAt: accountMemberships.acceptedAt,
         createdAt: accountMemberships.createdAt,
-        updatedAt: accountMemberships.updateAt,
+        updatedAt: accountMemberships.updatedAt,
         email: profiles.email,
         firstName: profiles.firstName,
         lastName: profiles.lastName,

@@ -1741,14 +1741,15 @@ export async function registerRoutes(
           .map((t) => ({ teacherId: t.id, className: t.currentClass! }));
   
         const snapshot = await storage.createGradeSnapshot(accountIdFor(req), {
-          grade,
-          name,
-          description: description || null,
-          placements: gradePlacements.map((p) => ({ studentId: p.studentId, classId: p.classId })),
-          classConfigs: gradeClassConfigs.map((c) => ({ id: c.id, name: c.name, grade: c.grade, capacity: c.capacity ?? 30 })),
-          teacherAllocations: gradeTeacherAllocations,
-          savedBy: userId,
-        });
+                  accountId: accountIdFor(req),
+                  grade,
+                  name,
+                  description: description || null,
+                  placements: gradePlacements.map((p) => ({ studentId: p.studentId, classId: p.classId })),
+                  classConfigs: gradeClassConfigs.map((c) => ({ id: c.id, name: c.name, grade: c.grade, capacity: c.capacity ?? 30 })),
+                  teacherAllocations: gradeTeacherAllocations,
+                  savedBy: userId,
+                });
   
         res.status(201).json(snapshot);
       } catch (error) {
@@ -1969,29 +1970,33 @@ export async function registerRoutes(
       }
 
       const generatedClasses: GeneratedClass[] = [];
-      const conflicts: ConflictWarning[] = [];
-      const unassignedStudentIds: string[] = [];
-      for (const targetGrade of targetGrades) {
-        const gradeStudents = generationStudents.filter((student) => getStudentTargetGrade(student) === targetGrade);
-        const gradeStudentIds = new Set(gradeStudents.map((student) => student.id));
-        const gradeClasses = targetConfigs.filter((config) => normalizeGradeValue(config.grade) === targetGrade);
-        const gradeRules = rules.filter(
-          (rule) => gradeStudentIds.has(rule.studentId1) && gradeStudentIds.has(rule.studentId2),
-        );
-        const gradePlacementPreferences = teacherPlacementPreferences.filter((preference) =>
-          gradeStudentIds.has(preference.studentId),
-        );
-        const gradeResult = await generateBalancedClasses(
-          gradeStudents,
-          gradeClasses,
-          gradeRules,
-          characteristics,
-          gradePlacementPreferences,
-        );
-        generatedClasses.push(...gradeResult.classes);
-        conflicts.push(...gradeResult.conflicts);
-        unassignedStudentIds.push(...gradeResult.unassignedStudentIds);
-      }
+            const conflicts: ConflictWarning[] = [];
+            const unassignedStudentIds: string[] = [];
+            for (const targetGrade of targetGrades) {
+              // Skip locked grades in full-school generation
+              if (lockedGrades.has(targetGrade)) {
+                continue;
+              }
+              const gradeStudents = generationStudents.filter((student) => getStudentTargetGrade(student) === targetGrade);
+              const gradeStudentIds = new Set(gradeStudents.map((student) => student.id));
+              const gradeClasses = targetConfigs.filter((config) => normalizeGradeValue(config.grade) === targetGrade);
+              const gradeRules = rules.filter(
+                (rule) => gradeStudentIds.has(rule.studentId1) && gradeStudentIds.has(rule.studentId2),
+              );
+              const gradePlacementPreferences = teacherPlacementPreferences.filter((preference) =>
+                gradeStudentIds.has(preference.studentId),
+              );
+              const gradeResult = await generateBalancedClasses(
+                gradeStudents,
+                gradeClasses,
+                gradeRules,
+                characteristics,
+                gradePlacementPreferences,
+              );
+              generatedClasses.push(...gradeResult.classes);
+              conflicts.push(...gradeResult.conflicts);
+              unassignedStudentIds.push(...gradeResult.unassignedStudentIds);
+            }
 
       const invalidAssignments = generatedClasses.flatMap((generatedClass) =>
         generatedClass.students
