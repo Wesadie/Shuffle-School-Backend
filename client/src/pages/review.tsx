@@ -2487,7 +2487,7 @@ export default function ReviewPage() {
                         <div className="space-y-2">
                           <input
                             type="text"
-                            placeholder="Snapshot name (e.g., \"Before Term 2 changes\")"
+                            placeholder="Snapshot name (e.g., &quot;Before Term 2 changes&quot;)"
                             className="w-full rounded border bg-background px-3 py-2 text-sm"
                             onChange={(e) => setSaveLockGrade(e.target.value)}
                             defaultValue={`Grade ${saveLockGrade} - ${new Date().toLocaleDateString()}`}
