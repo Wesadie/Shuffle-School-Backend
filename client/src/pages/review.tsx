@@ -32,7 +32,6 @@ import {
 } from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
-import { downloadXlsx, type SpreadsheetCell, type SpreadsheetSheet } from "@/lib/xlsx-export";
 import { StudentFormFields } from "@/components/student-form-fields";
 import { GradeSaveLockControls } from "@/components/grade-save-lock-controls";
 import { Link } from "wouter";
@@ -95,7 +94,7 @@ const getCharacteristicColourValues = (student: Student, characteristic: Charact
 
 const getExportCharacteristic = (student: Student, aliases: string[]) => {
   const entries = Object.entries(student.characteristics || {});
-  const match = entries.find(([name]) => aliases.some((alias) => name.toLowerCase() === alias.toLowerCase()));
+  const match = entries.find(([name]) => aliases.some((alias) => name.trim().toLowerCase() === alias.trim().toLowerCase()));
   if (!match) return "";
   return Array.isArray(match[1]) ? match[1].join(", ") : match[1];
 };
@@ -1565,84 +1564,341 @@ export default function ReviewPage() {
     return colourLegend.map((item) => ({ ...item, count: counts.get(item.value) || 0 }));
   };
 
-  const handleExportClasses = () => {
-    const exportHeader = ["Class", "Grade", "Teacher", "First name", "Surname", "Student ID", "Gender", "Aggregate", "English %", "Maths %", "2nd Language %", "2nd Language choice", "Medication", "Learner Support", "Race"];
-    const summaryHeader = ["Class", "Teacher", "Grade", "Learners", "Boys", "Girls", "Aggregate avg", "Maths avg", "English avg", "2nd Language avg", "Balance"];
+  const handleExportClasses = async () => {
+    try {
+    const { default: ExcelJS } = await import("exceljs");
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = "ShuffleSchool";
+    workbook.subject = "Class lists and learner summary";
+    workbook.created = new Date();
 
-    const summaryRows: SpreadsheetCell[][] = [
-      summaryHeader,
-      ...classStatistics.map((stat): SpreadsheetCell[] => [
-        stat.className,
-        classToTeacher[stat.className] ?? "",
-        classConfigs.find((config) => config.id === stat.classId)?.grade ?? "",
-        stat.totalStudents,
-        stat.maleCount,
-        stat.femaleCount,
-        stat.averages["Aggregate %"],
-        stat.averages["Maths %"],
-        stat.averages["English %"],
-        stat.averages["Afrikaans/Isizulu %"],
-        `${overallBalance}%`,
-      ]),
+    const languageChoiceAliases = ["second language choice", "2nd language choice", "afrikaans/isizulu", "second language", "2nd language"];
+    const mathsGroupAvailable = characteristics.some((item) => item.name.trim().toLowerCase() === "maths group")
+      || classesWithStudents.some(({ students: classStudents }) => classStudents.some((student) =>
+        Object.keys(student.characteristics || {}).some((key) => key.trim().toLowerCase() === "maths group"),
+      ));
+    const headers = [
+      "No.", "Child's Name", "Previous Class", "Race", "Maths %",
+      ...(mathsGroupAvailable ? ["Maths Group"] : []),
+      "English %", "isiZulu %", "Afrik %", "Aggregate %", "Learner Support",
+      "Medication", "Other problems", "Family history", "Comment",
     ];
+    const headerIndex = (name: string) => headers.indexOf(name) + 1;
+    const normalizeText = (value: unknown) => String(value ?? "").trim();
+    const characteristic = (student: Student, aliases: string[]) => getExportCharacteristic(student, aliases);
+    const getLanguage = (student: Student) => {
+      const choice = characteristic(student, languageChoiceAliases).toLowerCase();
+      if (choice.includes("afrikaans") || choice.includes("afrik")) return "afrik";
+      if (choice.includes("isizulu") || choice.includes("isi zulu") || choice === "zulu") return "zulu";
+      return "";
+    };
+    const numericMark = (value: string) => {
+      if (!value.trim()) return null;
+      const parsed = Number.parseFloat(value.replace(/%/g, "").trim());
+      return Number.isFinite(parsed) ? parsed : null;
+    };
+    const yesValue = (value: string) => /^(yes|y|true)$/i.test(value.trim());
+    const genderKey = (student: Student) => normalizeGenderKey(student.gender);
+    const raceKey = (student: Student) => {
+      const race = characteristic(student, ["race"]).toLowerCase();
+      if (race.includes("indian")) return "Indian";
+      if (race.includes("coloured") || race.includes("colored")) return "Coloured";
+      if (race.includes("black")) return "Black";
+      if (race.includes("white")) return "White";
+      return "Unspecified";
+    };
+    const previousClass = (student: Student) => student.isNew ? "New" : normalizeText(student.currentClass);
+    const sortLearners = (a: Student, b: Student) =>
+      `${a.lastName || ""} ${a.firstName || ""}`.localeCompare(`${b.lastName || ""} ${b.firstName || ""}`);
+    const applyHeaderStyle = (row: any) => {
+      row.height = 30;
+      row.eachCell((cell) => {
+        cell.font = { bold: true, color: { argb: "FFFFFFFF" }, size: 10 };
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF24476B" } };
+        cell.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
+        cell.border = { bottom: { style: "medium", color: { argb: "FF17324D" } } };
+      });
+    };
+    const applySectionStyle = (row: any) => {
+      row.height = 22;
+      row.eachCell((cell) => {
+        cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF527A9F" } };
+      });
+    };
+    const setWidths = (sheet: any) => {
+      const widths: Record<string, number> = {
+        "No.": 6, "Child's Name": 27, "Previous Class": 15, Race: 13, "Maths %": 11,
+        "Maths Group": 13, "English %": 11, "isiZulu %": 11, "Afrik %": 11,
+        "Aggregate %": 12, "Learner Support": 17, Medication: 14,
+        "Other problems": 28, "Family history": 26, Comment: 32,
+      };
+      headers.forEach((header, index) => { sheet.getColumn(index + 1).width = widths[header] || 13; });
+    };
 
-    const sheets: SpreadsheetSheet[] = [
-      { name: "Summary", rows: summaryRows },
-      ...classesWithStudents.map(({ config, students: classStudents }) => {
-        const studentRows = classStudents.map((student): SpreadsheetCell[] => [
-          config.name,
-          config.grade,
-          classToTeacher[config.name] ?? "",
-          student.firstName,
-          student.lastName,
-          student.studentId ?? "",
-          student.gender ?? "",
-          getExportCharacteristic(student, ["aggregate %", "aggregate"]),
-          getExportCharacteristic(student, ["english %", "english"]),
-          getExportCharacteristic(student, ["maths %", "maths"]),
-          getExportCharacteristic(student, ["afrikaans/isizulu %", "2nd language %", "second language %"]),
-          getExportCharacteristic(student, ["2nd language choice", "second language choice", "afrikaans/isizulu", "2nd language", "second language"]),
-          getExportCharacteristic(student, ["medication"]),
-          getExportCharacteristic(student, ["learner support", "learning support"]),
-          getExportCharacteristic(student, ["race"]),
-        ]).map((row) => row.map((cell, colIndex) => {
-          if (!isAcademicResultsColumn(exportHeader[colIndex]) || typeof cell !== "string" || !cell.trim()) return cell;
-          const value = cell.trim().replace(/%$/, "");
-          const numericValue = Number(value);
-          return Number.isFinite(numericValue) ? numericValue : cell;
-        }));
+    const summaryRows: Array<Record<string, string | number | null>> = [];
+    const languageChecks: Array<{ className: string; learner: string; mark: string; choice: string }> = [];
+    const allExportStudents = classesWithStudents.flatMap(({ students: classStudents }) => classStudents);
+    const usedSheetNames = new Set<string>(["summary"]);
+    const safeSheetName = (input: string) => {
+      const base = (input || "Class").replace(/[\\/*?:\[\]]/g, " ").trim().slice(0, 31) || "Class";
+      let candidate = base;
+      let suffix = 2;
+      while (usedSheetNames.has(candidate.toLowerCase())) {
+        const ending = ` (${suffix++})`;
+        candidate = `${base.slice(0, 31 - ending.length)}${ending}`;
+      }
+      usedSheetNames.add(candidate.toLowerCase());
+      return candidate;
+    };
 
-        const classAverageRow: SpreadsheetCell[] = exportHeader.map((header, colIndex) => {
-          if (colIndex === 0) return "Class Average";
-          if (!isAcademicResultsColumn(header)) return "";
-          const values = studentRows
-            .map((row) => {
-              const cell = row[colIndex];
-              if (cell == null) return null;
-              const num = Number.parseFloat(String(cell).replace("%", "").trim());
-              return Number.isFinite(num) ? num : null;
-            })
-            .filter((value): value is number => value !== null);
-          if (values.length === 0) return "—";
-          return Math.round((values.reduce((sum, value) => sum + value, 0) / values.length) * 10) / 10;
+    classesWithStudents.forEach(({ config, students: classStudents }) => {
+      const sheet = workbook.addWorksheet(safeSheetName(config.name));
+      sheet.views = [{ state: "frozen", ySplit: 2, xSplit: 2 }];
+      sheet.mergeCells(1, 1, 1, headers.length);
+      const title = sheet.getCell(1, 1);
+      title.value = `Class List ${new Date().getFullYear()} — ${config.name}`;
+      title.font = { bold: true, size: 15, color: { argb: "FF17324D" } };
+      title.alignment = { vertical: "middle" };
+      sheet.getRow(1).height = 28;
+      const headerRow = sheet.addRow(headers);
+      applyHeaderStyle(headerRow);
+      setWidths(sheet);
+
+      const boys = classStudents.filter((student) => genderKey(student) === "m").sort(sortLearners);
+      const girls = classStudents.filter((student) => genderKey(student) === "f").sort(sortLearners);
+      const otherGender = classStudents.filter((student) => !genderKey(student)).sort(sortLearners);
+      const allOrdered = [...boys, ...girls, ...otherGender];
+      const appendGroup = (label: string, group: Student[]) => {
+        const section = sheet.addRow([label]);
+        sheet.mergeCells(section.number, 1, section.number, headers.length);
+        applySectionStyle(section);
+        group.forEach((student, index) => {
+          const secondLanguage = characteristic(student, ["afrikaans/isizulu %", "second language %", "2nd language %", "second language", "2nd language"]);
+          const language = getLanguage(student);
+          if (secondLanguage.trim() && !language) {
+            languageChecks.push({
+              className: config.name,
+              learner: `${student.firstName || ""} ${student.lastName || ""}`.trim(),
+              mark: secondLanguage,
+              choice: characteristic(student, languageChoiceAliases) || "Missing",
+            });
+          }
+          const maths = characteristic(student, ["maths %", "maths"]);
+          const english = characteristic(student, ["english %", "english"]);
+          const aggregate = characteristic(student, ["aggregate %", "aggregate"]);
+          const support = characteristic(student, ["learner support", "learning support"]);
+          const meds = characteristic(student, ["medication", "meds"]);
+          const values: Record<string, unknown> = {
+            "No.": index + 1,
+            "Child's Name": `${student.firstName || ""} ${student.lastName || ""}`.trim(),
+            "Previous Class": previousClass(student),
+            Race: characteristic(student, ["race"]),
+            "Maths %": numericMark(maths),
+            "Maths Group": characteristic(student, ["maths group"]),
+            "English %": numericMark(english),
+            "isiZulu %": language === "zulu" ? numericMark(secondLanguage) : null,
+            "Afrik %": language === "afrik" ? numericMark(secondLanguage) : null,
+            "Aggregate %": numericMark(aggregate),
+            "Learner Support": support,
+            Medication: meds,
+            "Other problems": characteristic(student, ["other problems", "other problem"]),
+            "Family history": characteristic(student, ["family history"]),
+            Comment: characteristic(student, ["comment", "comments"]) || normalizeText(student.notes),
+          };
+          const row = sheet.addRow(headers.map((header) => values[header] ?? null));
+          if (secondLanguage.trim() && !language) {
+            ["isiZulu %", "Afrik %"].forEach((header) => {
+              const cell = row.getCell(headerIndex(header));
+              cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFF2CC" } };
+              cell.note = "CHECK LANGUAGE: A second-language mark exists, but the learner’s language choice is missing or not recognised. Confirm before using this mark.";
+            });
+          }
+          row.alignment = { vertical: "top", wrapText: true };
+          row.height = 22;
+          ["Maths %", "English %", "isiZulu %", "Afrik %", "Aggregate %"].forEach((header) => {
+            const cell = row.getCell(headerIndex(header));
+            if (typeof cell.value === "number") cell.numFmt = '0.0"%"';
+          });
         });
+      };
+      appendGroup("Boys", boys);
+      appendGroup("Girls", girls);
+      if (otherGender.length) appendGroup("Other / Unspecified gender", otherGender);
 
-        return {
-          name: config.name,
-          rows: [
-            exportHeader,
-            ...studentRows,
-            classAverageRow,
-          ],
-        };
-      }),
-    ];
+      const statsCol = headers.length + 2;
+      let statRow = 3;
+      const previousClassColours: Record<string, string> = {
+        "4F": "FFFFFF00",
+        "4R": "FF00B0F0",
+        "4A": "FF92D050",
+        "4B": "FFFFC000",
+      };
+      const fallbackPreviousClassColours = ["FFD9EAD3", "FFDDEBF7", "FFFCE4D6", "FFE4DFEC", "FFFFF2CC"];
+      const putStat = (label: string, value: number, fill?: string) => {
+        const labelCell = sheet.getCell(statRow, statsCol);
+        const valueCell = sheet.getCell(statRow, statsCol + 1);
+        labelCell.value = label;
+        valueCell.value = value;
+        labelCell.font = { bold: true };
+        valueCell.font = { bold: true };
+        valueCell.alignment = { horizontal: "center" };
+        if (fill) {
+          labelCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: fill } };
+          valueCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: fill } };
+        }
+        statRow += 1;
+      };
+      sheet.getColumn(statsCol).width = 18;
+      sheet.getColumn(statsCol + 1).width = 12;
+      const genderRaceLabels = [
+        ["IND B", "m", "Indian"], ["COL B", "m", "Coloured"], ["BL B", "m", "Black"], ["WH B", "m", "White"],
+        ["BOYS", "m", ""], ["IND G", "f", "Indian"], ["COL G", "f", "Coloured"], ["BL G", "f", "Black"], ["WH G", "f", "White"], ["GIRLS", "f", ""],
+      ] as const;
+      genderRaceLabels.forEach(([label, gender, race]) => putStat(label, classStudents.filter((student) =>
+        genderKey(student) === gender && (race ? raceKey(student) === race : true),
+      ).length));
+      const previousClasses = Array.from(new Set(classStudents.map(previousClass).filter(Boolean))).sort((a, b) => {
+        if (a === "New") return -1;
+        if (b === "New") return 1;
+        return a.localeCompare(b, undefined, { numeric: true });
+      });
+      previousClasses.forEach((className, index) => {
+        const fill = className === "New"
+          ? "FFE7E6E6"
+          : previousClassColours[className.toUpperCase()] || fallbackPreviousClassColours[index % fallbackPreviousClassColours.length];
+        putStat(className, classStudents.filter((student) => previousClass(student) === className).length, fill);
+      });
+      putStat("ROLL", classStudents.filter((student) => previousClass(student)).length);
+      putStat("AFR", classStudents.filter((student) => getLanguage(student) === "afrik").length);
+      putStat("ZULU", classStudents.filter((student) => getLanguage(student) === "zulu").length);
+      putStat("ROLL", classStudents.filter((student) => ["afrik", "zulu"].includes(getLanguage(student))).length);
+      putStat("LS", classStudents.filter((student) => yesValue(characteristic(student, ["learner support", "learning support"]))).length);
+      putStat("MEDS", classStudents.filter((student) => yesValue(characteristic(student, ["medication", "meds"]))).length);
+      statRow += 1;
+      const averageRow = Math.max(sheet.rowCount + 1, statRow);
+      sheet.getCell(averageRow, 1).value = "AVERAGE";
+      sheet.getCell(averageRow, 1).font = { bold: true };
+      ["Maths %", "English %", "isiZulu %", "Afrik %", "Aggregate %"].forEach((header) => {
+        const index = headerIndex(header);
+        const values = allOrdered.map((student) => {
+          const second = characteristic(student, ["afrikaans/isizulu %", "second language %", "2nd language %", "second language", "2nd language"]);
+          if (header === "Maths %") return numericMark(characteristic(student, ["maths %", "maths"]));
+          if (header === "English %") return numericMark(characteristic(student, ["english %", "english"]));
+          if (header === "Aggregate %") return numericMark(characteristic(student, ["aggregate %", "aggregate"]));
+          if (header === "isiZulu %") return getLanguage(student) === "zulu" ? numericMark(second) : null;
+          return getLanguage(student) === "afrik" ? numericMark(second) : null;
+        }).filter((value): value is number => value !== null);
+        if (values.length) {
+          const avg = values.reduce((sum, value) => sum + value, 0) / values.length;
+          const cell = sheet.getCell(averageRow, index);
+          cell.value = Math.round(avg * 10) / 10;
+          cell.numFmt = '0.0"%"';
+          cell.font = { bold: true };
+        }
+      });
+      sheet.eachRow((row) => row.eachCell((cell) => {
+        cell.border = { ...cell.border, bottom: { style: "hair", color: { argb: "FFD9E2EA" } } };
+      }));
 
-    downloadXlsx(`shuffleschool-classes-${new Date().toISOString().slice(0, 10)}`, sheets);
+      const avg = (aliases: string[]) => {
+        const values = classStudents.map((student) => numericMark(characteristic(student, aliases))).filter((value): value is number => value !== null);
+        return values.length ? Math.round(values.reduce((sum, value) => sum + value, 0) / values.length * 10) / 10 : null;
+      };
+      const summary: Record<string, string | number | null> = {
+        Class: config.name,
+        Total: classStudents.length,
+        Boys: boys.length,
+        Girls: girls.length,
+        Other: otherGender.length,
+        Meds: classStudents.filter((student) => yesValue(characteristic(student, ["medication", "meds"]))).length,
+        LS: classStudents.filter((student) => yesValue(characteristic(student, ["learner support", "learning support"]))).length,
+        "Black B's": classStudents.filter((student) => genderKey(student) === "m" && raceKey(student) === "Black").length,
+        "White B's": classStudents.filter((student) => genderKey(student) === "m" && raceKey(student) === "White").length,
+        "Black G's": classStudents.filter((student) => genderKey(student) === "f" && raceKey(student) === "Black").length,
+        "White G's": classStudents.filter((student) => genderKey(student) === "f" && raceKey(student) === "White").length,
+        "I and C Boys": classStudents.filter((student) => genderKey(student) === "m" && ["Indian", "Coloured"].includes(raceKey(student))).length,
+        "I and C Girls": classStudents.filter((student) => genderKey(student) === "f" && ["Indian", "Coloured"].includes(raceKey(student))).length,
+        Isizulu: classStudents.filter((student) => getLanguage(student) === "zulu").length,
+        Afrik: classStudents.filter((student) => getLanguage(student) === "afrik").length,
+        "Avg Maths": avg(["maths %", "maths"]),
+        "Avg Eng": avg(["english %", "english"]),
+        "Avg isiZulu": (() => { const values = classStudents.filter((student) => getLanguage(student) === "zulu").map((student) => numericMark(characteristic(student, ["afrikaans/isizulu %", "second language %", "2nd language %", "second language", "2nd language"]))).filter((value): value is number => value !== null); return values.length ? Math.round(values.reduce((sum, value) => sum + value, 0) / values.length * 10) / 10 : null; })(),
+        "Avg Afrik": (() => { const values = classStudents.filter((student) => getLanguage(student) === "afrik").map((student) => numericMark(characteristic(student, ["afrikaans/isizulu %", "second language %", "2nd language %", "second language", "2nd language"]))).filter((value): value is number => value !== null); return values.length ? Math.round(values.reduce((sum, value) => sum + value, 0) / values.length * 10) / 10 : null; })(),
+        "Avg Agg": avg(["aggregate %", "aggregate"]),
+        "Maths Class A": mathsGroupAvailable ? classStudents.filter((student) => characteristic(student, ["maths group"]).toUpperCase() === "A").length : null,
+        "Maths Class B": mathsGroupAvailable ? classStudents.filter((student) => characteristic(student, ["maths group"]).toUpperCase() === "B").length : null,
+        "Maths Class C": mathsGroupAvailable ? classStudents.filter((student) => characteristic(student, ["maths group"]).toUpperCase() === "C").length : null,
+        "Maths Class D": mathsGroupAvailable ? classStudents.filter((student) => characteristic(student, ["maths group"]).toUpperCase() === "D").length : null,
+      };
+      summaryRows.push(summary);
+    });
+
+    const summarySheet = workbook.addWorksheet("Summary", { views: [{ state: "frozen", ySplit: 1 }] });
+    const summaryHeaders = ["Class", "Total", "Boys", "Girls", "Other", "Meds", "LS", "Black B's", "White B's", "Black G's", "White G's", "I and C Boys", "I and C Girls", "Isizulu", "Afrik", "Avg Maths", "Avg Eng", "Avg isiZulu", "Avg Afrik", "Avg Agg", ...(mathsGroupAvailable ? ["Maths Class A", "Maths Class B", "Maths Class C", "Maths Class D"] : [])];
+    const summaryHeaderRow = summarySheet.addRow(summaryHeaders);
+    applyHeaderStyle(summaryHeaderRow);
+    summaryRows.forEach((row) => summarySheet.addRow(summaryHeaders.map((header) => row[header] ?? null)));
+    summarySheet.columns.forEach((column, index) => { column.width = index === 0 ? 16 : 13; });
+    summarySheet.autoFilter = { from: { row: 1, column: 1 }, to: { row: Math.max(1, summarySheet.rowCount), column: summaryHeaders.length } };
+    summarySheet.addRow([]);
+    const totalAverage = (aliases: string[], language?: "zulu" | "afrik") => {
+      const values = allExportStudents
+        .filter((student) => !language || getLanguage(student) === language)
+        .map((student) => numericMark(characteristic(student, aliases)))
+        .filter((value): value is number => value !== null);
+      return values.length ? Math.round(values.reduce((sum, value) => sum + value, 0) / values.length * 10) / 10 : null;
+    };
+    const totalsRow = summarySheet.addRow(["TOTAL", ...summaryHeaders.slice(1).map((header) => {
+      if (header === "Avg Maths") return totalAverage(["maths %", "maths"]);
+      if (header === "Avg Eng") return totalAverage(["english %", "english"]);
+      if (header === "Avg isiZulu") return totalAverage(["afrikaans/isizulu %", "second language %", "2nd language %", "second language", "2nd language"], "zulu");
+      if (header === "Avg Afrik") return totalAverage(["afrikaans/isizulu %", "second language %", "2nd language %", "second language", "2nd language"], "afrik");
+      if (header === "Avg Agg") return totalAverage(["aggregate %", "aggregate"]);
+      return summaryRows.reduce((sum, row) => sum + (typeof row[header] === "number" ? row[header] as number : 0), 0);
+    })]);
+    totalsRow.eachCell((cell) => { cell.font = { bold: true }; cell.border = { top: { style: "medium", color: { argb: "FF24476B" } } }; });
+    if (languageChecks.length) {
+      summarySheet.addRow([]);
+      const checkTitle = summarySheet.addRow(["LANGUAGE CHECKS REQUIRED"]);
+      summarySheet.mergeCells(checkTitle.number, 1, checkTitle.number, 5);
+      applySectionStyle(checkTitle);
+      const checksHeader = summarySheet.addRow(["Class", "Learner", "Second-language mark", "Stored language choice", "Action"]);
+      applyHeaderStyle(checksHeader);
+      languageChecks.forEach((item) => summarySheet.addRow([
+        item.className,
+        item.learner,
+        item.mark,
+        item.choice,
+        "Confirm language before assigning mark to isiZulu % or Afrik %",
+      ]));
+      [16, 28, 20, 24, 62].forEach((width, index) => {
+        if (summarySheet.getColumn(index + 1).width < width) summarySheet.getColumn(index + 1).width = width;
+      });
+    }
+
+    const buffer = await workbook.xlsx.writeBuffer();
+    const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `shuffleschool-class-lists-${new Date().toISOString().slice(0, 10)}.xlsx`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
     toast({
       title: "Export ready",
       description: `${classesWithStudents.length} class sheet${classesWithStudents.length === 1 ? "" : "s"} plus summary downloaded.`,
     });
+    } catch (error) {
+      console.error("Failed to export class lists:", error);
+      toast({
+        title: "Export failed",
+        description: error instanceof Error ? error.message : "The class-list workbook could not be created. Please try again.",
+        variant: "destructive",
+      });
+    }
   };
 
   const handleDragStart = (event: React.DragEvent, student: Student) => {
