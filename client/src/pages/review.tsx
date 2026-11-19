@@ -525,7 +525,8 @@ export default function ReviewPage() {
       const lockGradeMutation = useMutation({
         mutationFn: ({ grade, locked }: { grade: string; locked: boolean }) =>
           apiRequest("POST", "/api/grade-locks", { grade, locked }),
-        onSuccess: () => {
+        onSuccess: async (response) => {
+          const { locked } = await response.json();
           queryClient.invalidateQueries({ queryKey: ["/api/grade-locks"] });
           toast({ title: locked ? "Grade locked" : "Grade unlocked" });
         },
