@@ -209,6 +209,55 @@ export type InsertAccountPaymentTransaction = typeof accountPaymentTransactions.
 export type AccountUsage = typeof accountUsage.$inferSelect;
 export type InsertAccountUsage = typeof accountUsage.$inferInsert;
 
+// Grade lock table: one row per account per grade
+export const gradeLocks = pgTable(
+  "grade_locks",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    accountId: uuid("account_id").notNull().references(() => accounts.id, { onDelete: "cascade" }),
+    grade: text("grade").notNull(),
+    locked: boolean("locked").notNull().default(false),
+    lockedBy: uuid("locked_by").references(() => profiles.id, { onDelete: "set null" }),
+    lockedAt: timestamp("locked_at", { withTimezone: true }),
+    unlockedBy: uuid("unlocked_by").references(() => profiles.id, { onDelete: "set null" }),
+    unlockedAt: timestamp("unlocked_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("grade_locks_account_id_idx").on(table.accountId),
+    unique("grade_locks_account_grade_unique").on(table.accountId, table.grade),
+  ],
+);
+
+export type GradeLock = typeof gradeLocks.$inferSelect;
+export type InsertGradeLock = typeof gradeLocks.$inferInsert;
+
+// Grade snapshot table: permanent saved snapshots per grade
+export const gradeSnapshots = pgTable(
+  "grade_snapshots",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    accountId: uuid("account_id").notNull().references(() => accounts.id, { onDelete: "cascade" }),
+    grade: text("grade").notNull(),
+    name: text("name").notNull(),
+    description: text("description"),
+    placements: jsonb("placements").$type<{ studentId: string; classId: string }[]>().notNull(),
+    classConfigs: jsonb("class_configs").$type<{ id: string; name: string; grade: string; capacity: number }[]>().notNull(),
+    teacherAllocations: jsonb("teacher_allocations").$type<{ teacherId: string; className: string }[]>().notNull(),
+    savedBy: uuid("saved_by").notNull().references(() => profiles.id, { onDelete: "cascade" }),
+    savedAt: timestamp("saved_at", { withTimezone: true }).notNull().defaultNow(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("grade_snapshots_account_id_idx").on(table.accountId),
+    index("grade_snapshots_account_grade_idx").on(table.accountId, table.grade),
+  ],
+);
+
+export type GradeSnapshot = typeof gradeSnapshots.$inferSelect;
+export type InsertGradeSnapshot = typeof gradeSnapshots.$inferInsert;
+
 // Short-lived, single-use cross-domain auth handoff codes
 export const authHandoffs = pgTable("auth_handoffs", {
   code: text("code").primaryKey(),
