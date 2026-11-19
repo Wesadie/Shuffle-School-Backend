@@ -4,7 +4,7 @@ BEGIN;
 -- Never use a connection string, password, API key, or pooler username here.
 DO $$
 DECLARE
-  backend_role name := 'REPLACE_WITH_VERIFIED_BACKEND_ROLE';
+  backend_role name := 'postgres';
 BEGIN
   IF backend_role = 'REPLACE_WITH_VERIFIED_BACKEND_ROLE'
     OR NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = backend_role) THEN
