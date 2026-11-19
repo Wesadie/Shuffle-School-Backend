@@ -13,6 +13,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 type GradeLock = { grade: string; locked: boolean; lockedAt: string | null; lockedBy: string | null };
 type GradeSnapshot = { id: string; grade: string; name: string; description: string | null; savedAt: string };
 type PlacementState = { revision: number };
+type DatabaseRoleReport = { currentRole: string; sessionRole: string; isSuperuser: boolean; bypassesRls: boolean; tables: unknown };
 
 export function GradeSaveLockControls({ grade }: { grade: string }) {
   const { toast } = useToast();
@@ -20,6 +21,13 @@ export function GradeSaveLockControls({ grade }: { grade: string }) {
   const [unlockConfirmOpen, setUnlockConfirmOpen] = useState(false);
   const [snapshotName, setSnapshotName] = useState("");
   const [snapshotDescription, setSnapshotDescription] = useState("");
+  const roleDiagnostic = useMutation({
+    mutationFn: async () => {
+      const response = await apiRequest("GET", "/api/admin/database-role");
+      return response.json() as Promise<DatabaseRoleReport>;
+    },
+    onError: (error: Error) => toast({ title: "Cannot read backend role", description: error.message, variant: "destructive" }),
+  });
 
   const { data: locks = [] } = useQuery<GradeLock[]>({ queryKey: ["/api/grade-locks"] });
   const { data: snapshots = [] } = useQuery<GradeSnapshot[]>({
@@ -65,6 +73,8 @@ export function GradeSaveLockControls({ grade }: { grade: string }) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/placements/state"] });
       queryClient.invalidateQueries({ queryKey: ["/api/placements"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/class-configs"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/teachers"] });
       toast({ title: `Grade ${grade} snapshot restored` });
     },
     onError: (error: Error) => toast({ title: "Failed to restore snapshot", description: error.message, variant: "destructive" }),
@@ -101,6 +111,12 @@ export function GradeSaveLockControls({ grade }: { grade: string }) {
             <DialogDescription>Save a permanent placement and class snapshot, then lock the grade to prevent future placement changes.</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
+            <section className="rounded-md border p-3">
+              <Button size="sm" variant="outline" onClick={() => roleDiagnostic.mutate()} disabled={roleDiagnostic.isPending}>
+                {roleDiagnostic.isPending ? "Checking…" : "Check backend database role (read-only)"}
+              </Button>
+              {roleDiagnostic.data && <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap break-all text-xs" aria-live="polite">{JSON.stringify(roleDiagnostic.data, null, 2)}</pre>}
+            </section>
             <section className="rounded-md border p-3">
               <div className="flex items-center justify-between gap-3">
                 <div>

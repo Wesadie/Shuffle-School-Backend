@@ -554,6 +554,8 @@ export default function ReviewPage() {
         onSuccess: () => {
           queryClient.invalidateQueries({ queryKey: ["/api/grade-snapshots"] });
           queryClient.invalidateQueries({ queryKey: ["/api/placements/state"] });
+          queryClient.invalidateQueries({ queryKey: ["/api/class-configs"] });
+          queryClient.invalidateQueries({ queryKey: ["/api/teachers"] });
           toast({ title: "Snapshot restored" });
         },
         onError: (error: Error) => {

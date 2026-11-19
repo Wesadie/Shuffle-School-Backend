@@ -23,6 +23,7 @@ import { generateInvoicePdf } from "./invoicePdf";
 import { mapTeacherPlacementRequests, persistCompleteGeneration, type TeacherPlacementPreference } from "./generationSafety";
 import { InvalidPlacementError, PlacementNotFoundError, PlacementRevisionConflictError } from "./placementSafety";
 import { buildIncrementalGeneration } from "./incrementalGeneration";
+import { registerGradeRoutes } from "./gradeRoutes";
 
 import {
   insertStudentSchema,
@@ -1668,139 +1669,7 @@ export async function registerRoutes(
       }
     });
   
-    // Grade lock routes (protected, admin only)
-    app.get("/api/grade-locks", isAuthenticated, async (req, res) => {
-      try {
-        const locks = await storage.getGradeLocks(accountIdFor(req));
-        res.json(locks);
-      } catch (error) {
-        res.status(500).json({ error: "Failed to fetch grade locks" });
-      }
-    });
-  
-    app.post("/api/grade-locks", isAuthenticated, requireWritableWorkspace, async (req, res) => {
-      try {
-        const { grade, locked } = req.body;
-        if (!grade || typeof locked !== "boolean") {
-          return res.status(400).json({ error: "Grade and locked status are required" });
-        }
-        const context = getAccountContext(req);
-        if (context.accountRole !== "owner" && context.accountRole !== "admin") {
-          return res.status(403).json({ error: "Only administrators can lock/unlock grades" });
-        }
-        const userId = (req as any).supabaseUser?.id ?? (req as any).user?.claims?.sub;
-        if (!userId) {
-          return res.status(401).json({ error: "Authentication required" });
-        }
-        const lock = await storage.upsertGradeLock(accountIdFor(req), grade, locked, userId);
-        res.json(lock);
-      } catch (error) {
-        res.status(500).json({ error: "Failed to update grade lock" });
-      }
-    });
-  
-    // Grade snapshot routes (protected, admin only)
-    app.get("/api/grade-snapshots", isAuthenticated, async (req, res) => {
-      try {
-        const { grade } = req.query;
-        const snapshots = await storage.getGradeSnapshots(accountIdFor(req), grade as string | undefined);
-        res.json(snapshots);
-      } catch (error) {
-        res.status(500).json({ error: "Failed to fetch grade snapshots" });
-      }
-    });
-  
-    app.post("/api/grade-snapshots", isAuthenticated, requireWritableWorkspace, async (req, res) => {
-      try {
-        const { grade, name, description } = req.body;
-        if (!grade || !name) {
-          return res.status(400).json({ error: "Grade and snapshot name are required" });
-        }
-        const context = getAccountContext(req);
-        if (context.accountRole !== "owner" && context.accountRole !== "admin") {
-          return res.status(403).json({ error: "Only administrators can save grade snapshots" });
-        }
-        const userId = (req as any).supabaseUser?.id ?? (req as any).user?.claims?.sub;
-        if (!userId) {
-          return res.status(401).json({ error: "Authentication required" });
-        }
-  
-        // Build the snapshot data
-        const [allStudents, allPlacements, classConfigs, teachers] = await Promise.all([
-          storage.getStudents(accountIdFor(req)),
-          storage.getPlacements(accountIdFor(req)),
-          storage.getClassConfigs(accountIdFor(req)),
-          storage.getTeachers(accountIdFor(req)),
-        ]);
-  
-        const gradeStudents = allStudents.filter((s) => getStudentTargetGrade(s) === grade);
-        const gradePlacements = allPlacements.filter((p) => gradeStudents.some((s) => s.id === p.studentId));
-        const gradeClassConfigs = classConfigs.filter((c) => normalizeGradeValue(c.grade) === grade);
-        const gradeTeacherAllocations = teachers
-          .filter((t) => t.currentClass && gradeClassConfigs.some((c) => c.name === t.currentClass))
-          .map((t) => ({ teacherId: t.id, className: t.currentClass! }));
-  
-        const snapshot = await storage.createGradeSnapshot(accountIdFor(req), {
-                  accountId: accountIdFor(req),
-                  grade,
-                  name,
-                  description: description || null,
-                  placements: gradePlacements.map((p) => ({ studentId: p.studentId, classId: p.classId })),
-                  classConfigs: gradeClassConfigs.map((c) => ({ id: c.id, name: c.name, grade: c.grade, capacity: c.capacity ?? 30 })),
-                  teacherAllocations: gradeTeacherAllocations,
-                  savedBy: userId,
-                });
-  
-        res.status(201).json(snapshot);
-      } catch (error) {
-        res.status(500).json({ error: "Failed to save grade snapshot" });
-      }
-    });
-  
-    app.post("/api/grade-snapshots/:id/restore", isAuthenticated, requireWritableWorkspace, async (req, res) => {
-      try {
-        const snapshot = await storage.getGradeSnapshot(accountIdFor(req), req.params.id);
-        if (!snapshot) {
-          return res.status(404).json({ error: "Snapshot not found" });
-        }
-        const context = getAccountContext(req);
-        if (context.accountRole !== "owner" && context.accountRole !== "admin") {
-          return res.status(403).json({ error: "Only administrators can restore grade snapshots" });
-        }
-  
-        // Check if grade is locked
-        const lock = await storage.getGradeLock(accountIdFor(req), snapshot.grade);
-        if (lock?.locked) {
-          return res.status(409).json({ error: `Grade ${snapshot.grade} is locked and cannot be modified` });
-        }
-  
-        const revision = await storage.replacePlacements(
-          accountIdFor(req),
-          snapshot.placements,
-          readPlacementRevision(req.body?.expectedRevision),
-          snapshot.placements.map((p) => p.studentId),
-        );
-        res.json({ success: true, revision });
-      } catch (error) {
-        if (error instanceof PlacementRevisionConflictError || error instanceof InvalidPlacementError) {
-          placementError(res, error);
-        } else {
-          res.status(500).json({ error: "Failed to restore grade snapshot" });
-        }
-      }
-    });
-  
-    app.delete("/api/grade-snapshots/:id", isAuthenticated, requireWritableWorkspace, async (req, res) => {
-      try {
-        const deleted = await storage.deleteGradeSnapshot(accountIdFor(req), req.params.id);
-        if (!deleted) {
-          return res.status(404).json({ error: "Snapshot not found" });
-        }
-        res.status(204).send();
-      } catch (error) {
-        res.status(500).json({ error: "Failed to delete grade snapshot" });
-      }
-    });
+    registerGradeRoutes(app, isAuthenticated, requireWritableWorkspace);
   
     // Move student (reassign to different class) (protected)
       app.post("/api/placements/move", isAuthenticated, requireWritableWorkspace, async (req, res) => {

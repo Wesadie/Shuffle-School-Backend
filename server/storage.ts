@@ -55,6 +55,8 @@ import { randomUUID } from "crypto";
 import { buildSwapPlacements, PlacementNotFoundError, runRevisionedMutation, validatePlacements, InvalidPlacementError } from "./placementSafety";
 import type { LearnerImportPlan } from "./learnerImportPlan";
 import { normalizeRosterGrade, type StudentRosterOptions } from "@shared/student-roster";
+import { normalizeGradeValue } from "@shared/grades";
+import { captureGradeSnapshot, planGradeSnapshotRestore, type GradeSnapshotState } from "./gradeSnapshotSafety";
 
 type StorageTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -582,6 +584,7 @@ export class DatabaseStorage {
     accountId: string,
     expectedRevision: number,
     mutate: (transaction: StorageTransaction, nextRevision: number) => Promise<T>,
+    isolationLevel?: "serializable",
   ): Promise<T> {
     accountId = requireAccountId(accountId);
     return db.transaction(async (transaction) => runRevisionedMutation(
@@ -595,7 +598,7 @@ export class DatabaseStorage {
         return account?.revision ?? null;
       },
       (nextRevision) => mutate(transaction, nextRevision),
-    ));
+    ), isolationLevel ? { isolationLevel } : undefined);
   }
 
   private async validatePlacementCandidate(
@@ -1077,32 +1080,27 @@ export class DatabaseStorage {
 
   async upsertGradeLock(accountId: string, grade: string, locked: boolean, userId: string): Promise<GradeLock> {
     accountId = requireAccountId(accountId);
-    const now = new Date();
-    const [lock] = await db
-      .insert(gradeLocks)
-      .values({
-        id: randomUUID(),
-        accountId,
-        grade,
-        locked,
-        lockedBy: locked ? userId : null,
-        lockedAt: locked ? now : null,
-        unlockedBy: !locked ? userId : null,
-        unlockedAt: !locked ? now : null,
-      })
-      .onConflictDoUpdate({
+    grade = normalizeGradeValue(grade);
+    return db.transaction(async (transaction) => {
+      // Serialize lock changes with placement writes and snapshot restoration.
+      const [account] = await transaction.select({ id: accounts.id }).from(accounts)
+        .where(eq(accounts.id, accountId)).for("update");
+      if (!account) throw new InvalidPlacementError("Account not found");
+      const now = new Date();
+      const [lock] = await transaction.insert(gradeLocks).values({
+        id: randomUUID(), accountId, grade, locked,
+        lockedBy: locked ? userId : null, lockedAt: locked ? now : null,
+        unlockedBy: !locked ? userId : null, unlockedAt: !locked ? now : null,
+      }).onConflictDoUpdate({
         target: [gradeLocks.accountId, gradeLocks.grade],
         set: {
-          locked,
-          lockedBy: locked ? userId : null,
-          lockedAt: locked ? now : null,
-          unlockedBy: !locked ? userId : null,
-          unlockedAt: !locked ? now : null,
+          locked, lockedBy: locked ? userId : null, lockedAt: locked ? now : null,
+          unlockedBy: !locked ? userId : null, unlockedAt: !locked ? now : null,
           updatedAt: now,
         },
-      })
-      .returning();
-    return lock;
+      }).returning();
+      return lock;
+    });
   }
 
   // Grade snapshot methods
@@ -1124,6 +1122,73 @@ export class DatabaseStorage {
     accountId = requireAccountId(accountId);
     const [created] = await db.insert(gradeSnapshots).values({ ...snapshot, id: randomUUID(), accountId }).returning();
     return created;
+  }
+
+  private async readGradeSnapshotState(transaction: StorageTransaction, accountId: string): Promise<GradeSnapshotState> {
+    const [accountStudents, accountPlacements, configs, accountTeachers] = await Promise.all([
+      transaction.select().from(students).where(eq(students.accountId, accountId)),
+      transaction.select().from(placements).where(eq(placements.accountId, accountId)),
+      transaction.select().from(classConfigs).where(eq(classConfigs.accountId, accountId)),
+      transaction.select().from(teachers).where(eq(teachers.accountId, accountId)),
+    ]);
+    return { students: accountStudents, placements: accountPlacements, classConfigs: configs, teachers: accountTeachers };
+  }
+
+  async saveGradeSnapshot(accountId: string, input: { grade: string; name: string; description?: string; savedBy: string }): Promise<GradeSnapshot> {
+    accountId = requireAccountId(accountId);
+    const grade = normalizeGradeValue(input.grade);
+    return db.transaction(async (transaction) => {
+      const [account] = await transaction.select({ id: accounts.id }).from(accounts)
+        .where(eq(accounts.id, accountId)).for("share");
+      if (!account) throw new InvalidPlacementError("Account not found");
+      const data = captureGradeSnapshot(accountId, grade, await this.readGradeSnapshotState(transaction, accountId));
+      const [snapshot] = await transaction.insert(gradeSnapshots).values({
+        id: randomUUID(), accountId, grade, name: input.name, description: input.description ?? null,
+        savedBy: input.savedBy, ...data,
+      }).returning();
+      return snapshot;
+    }, { isolationLevel: "repeatable read" });
+  }
+
+  async restoreGradeSnapshot(accountId: string, id: string, expectedRevision: number): Promise<number> {
+    accountId = requireAccountId(accountId);
+    return this.withPlacementRevision(accountId, expectedRevision, async (transaction, revision) => {
+      const [snapshot] = await transaction.select().from(gradeSnapshots)
+        .where(and(eq(gradeSnapshots.accountId, accountId), eq(gradeSnapshots.id, id))).for("share");
+      if (!snapshot) throw new PlacementNotFoundError();
+      const [lock] = await transaction.select().from(gradeLocks)
+        .where(and(eq(gradeLocks.accountId, accountId), eq(gradeLocks.grade, normalizeGradeValue(snapshot.grade))));
+      if (lock?.locked) throw new InvalidPlacementError(`Grade ${snapshot.grade} is locked and cannot be modified`);
+      const state = await this.readGradeSnapshotState(transaction, accountId);
+      const plan = planGradeSnapshotRestore(accountId, snapshot, state);
+      const accountRules = await transaction.select().from(rules).where(eq(rules.accountId, accountId));
+      validatePlacements(plan.placements, state.students, plan.classConfigs, accountRules);
+      await this.assertNoLockedPlacementChanges(transaction, accountId, state.placements, plan.placements);
+
+      if (plan.studentIds.length) {
+        await transaction.delete(placements).where(and(eq(placements.accountId, accountId), inArray(placements.studentId, plan.studentIds)));
+      }
+      if (plan.removedClassIds.length) {
+        await transaction.delete(classConfigs).where(and(eq(classConfigs.accountId, accountId), inArray(classConfigs.id, plan.removedClassIds)));
+      }
+      for (const config of plan.savedClassConfigs) {
+        if (state.classConfigs.some((current) => current.id === config.id)) {
+          await transaction.update(classConfigs).set({ name: config.name, grade: config.grade, capacity: config.capacity })
+            .where(and(eq(classConfigs.accountId, accountId), eq(classConfigs.id, config.id)));
+        } else {
+          // A globally conflicting ID fails the insert; never overwrite another account.
+          await transaction.insert(classConfigs).values({ ...config, accountId });
+        }
+      }
+      if (plan.savedPlacements.length) {
+        await transaction.insert(placements).values(plan.savedPlacements.map((placement) => ({ ...placement, id: randomUUID(), accountId })));
+      }
+      for (const teacher of plan.teacherUpdates) {
+        await transaction.update(teachers).set({ allocatedClass: teacher.allocatedClass })
+          .where(and(eq(teachers.accountId, accountId), eq(teachers.id, teacher.id)));
+      }
+      return revision;
+    }, "serializable");
   }
 
   async deleteGradeSnapshot(accountId: string, id: string): Promise<boolean> {

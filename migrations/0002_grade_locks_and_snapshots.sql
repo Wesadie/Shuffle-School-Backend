@@ -1,8 +1,23 @@
 BEGIN;
 
--- Validate the production prerequisites without changing existing data.
+-- Replace this value with currentRole from the Render-backed diagnostic.
+-- Never use a connection string, password, API key, or pooler username here.
 DO $$
+DECLARE
+  backend_role name := 'REPLACE_WITH_VERIFIED_BACKEND_ROLE';
 BEGIN
+  IF backend_role = 'REPLACE_WITH_VERIFIED_BACKEND_ROLE'
+    OR NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = backend_role) THEN
+    RAISE EXCEPTION 'Set backend_role to the verified Render PostgreSQL currentRole';
+  END IF;
+  IF backend_role IN ('anon', 'authenticated', 'authenticator')
+    OR pg_has_role('anon', backend_role, 'MEMBER')
+    OR pg_has_role('authenticated', backend_role, 'MEMBER') THEN
+    RAISE EXCEPTION 'Backend role must not be accessible to browser/Data API client roles';
+  END IF;
+  PERFORM set_config('shuffleschool.migration_backend_role', backend_role::text, true);
+
+  -- Validate the production prerequisites without changing existing data.
   IF NOT EXISTS (
     SELECT 1 FROM pg_catalog.pg_attribute
     WHERE attrelid = to_regclass('public.accounts')
@@ -60,21 +75,35 @@ CREATE TABLE public.grade_snapshots (
 CREATE INDEX grade_snapshots_account_id_idx ON public.grade_snapshots (account_id);
 CREATE INDEX grade_snapshots_account_grade_idx ON public.grade_snapshots (account_id, grade);
 
--- Backend-only tables: no browser/Data API policies are intentionally defined.
--- With RLS enabled and no policies, ordinary roles cannot access any rows.
+-- Backend-only tables: browser/Data API client roles have no access.
 ALTER TABLE public.grade_locks ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.grade_snapshots ENABLE ROW LEVEL SECURITY;
 
--- Remove privileges potentially inherited from Supabase default table grants.
+-- Reset standard Supabase default grants; re-grant the verified role below.
 REVOKE ALL PRIVILEGES ON TABLE public.grade_locks, public.grade_snapshots
-  FROM PUBLIC, anon, authenticated;
+  FROM PUBLIC, anon, authenticated, service_role;
 
--- Trusted server roles only. Never expose service-role credentials to clients.
--- The backend DB connection must use the table owner or a BYPASSRLS/superuser
--- role with these privileges; no per-request JWT is set on its pooled connection.
--- Do not FORCE RLS: owner access is needed by the backend-only architecture.
-GRANT SELECT, INSERT, UPDATE, DELETE
-  ON TABLE public.grade_locks, public.grade_snapshots
-  TO postgres, service_role;
+-- Grant only the verified backend role. Role identifiers are safely quoted.
+-- Explicit backend-only policies also support a custom role without BYPASSRLS.
+-- The trusted backend enforces account membership and account_id filtering;
+-- its pooled PostgreSQL connection does not set a per-request auth.uid().
+DO $$
+DECLARE
+  backend_role name := current_setting('shuffleschool.migration_backend_role');
+BEGIN
+  EXECUTE format(
+    'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.grade_locks, public.grade_snapshots TO %I',
+    backend_role
+  );
+  EXECUTE format(
+    'CREATE POLICY grade_locks_backend_access ON public.grade_locks FOR ALL TO %I USING (true) WITH CHECK (true)',
+    backend_role
+  );
+  EXECUTE format(
+    'CREATE POLICY grade_snapshots_backend_access ON public.grade_snapshots FOR ALL TO %I USING (true) WITH CHECK (true)',
+    backend_role
+  );
+END;
+$$;
 
 COMMIT;
