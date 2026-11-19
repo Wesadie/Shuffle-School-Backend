@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Sparkles, Plus, Trash2, Users, AlertCircle, CheckCircle, Pencil } from "lucide-react";
+import { Sparkles, Plus, Trash2, Users, AlertCircle, CheckCircle, Pencil, Lock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -72,10 +72,14 @@ export default function GeneratePage() {
   });
 
   const { data: teachers = [] } = useQuery<Teacher[]>({
-    queryKey: ["/api/teachers"],
-  });
-
-  const teacherClasses = teachers
+      queryKey: ["/api/teachers"],
+    });
+  
+    const { data: gradeLocks = [] } = useQuery<{ grade: string; locked: boolean }[]>({
+      queryKey: ["/api/grade-locks"],
+    });
+  
+    const teacherClasses = teachers
     .filter((t) => t.currentClass && t.currentClass.trim() !== "")
     .map((t) => ({
       teacherId: t.id,
@@ -348,11 +352,19 @@ export default function GeneratePage() {
               <Select value={destinationGrade || "all"} onValueChange={(value) => setDestinationGrade(value === "all" ? "" : value)}>
                 <SelectTrigger id="destination-grade" data-testid="select-destination-grade"><SelectValue placeholder="All grades (full generation)" /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">All grades (full generation)</SelectItem>
-                  {selectableDestinationGrades.map((grade) => (
-                    <SelectItem key={grade} value={grade}>Grade {grade}</SelectItem>
-                  ))}
-                </SelectContent>
+                                  <SelectItem value="all">All grades (full generation)</SelectItem>
+                                  {selectableDestinationGrades.map((grade) => {
+                                    const isLocked = gradeLocks.some((lock) => lock.grade === grade && lock.locked);
+                                    return (
+                                      <SelectItem key={grade} value={grade} disabled={isLocked}>
+                                        <div className="flex items-center justify-between">
+                                          <span>Grade {grade}</span>
+                                          {isLocked && <Lock className="h-3.5 w-3.5 text-amber-500" />}
+                                        </div>
+                                      </SelectItem>
+                                    );
+                                  })}
+                                </SelectContent>
               </Select>
             </div>
             <div className="space-y-2">

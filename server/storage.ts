@@ -612,26 +612,32 @@ export class DatabaseStorage {
         validatePlacements(candidate, accountStudents, configs, accountRules, manualOverride);
       }
   
-    private async checkGradeLocks(
-      transaction: StorageTransaction,
-      accountId: string,
-      candidate: Pick<Placement, "studentId" | "classId">[],
-    ): Promise<void> {
-      // Get all class configs for this account to map classId -> grade
-      const configs = await transaction.select().from(classConfigs).where(eq(classConfigs.accountId, accountId));
-      const classIdToGrade = new Map(configs.map((c) => [c.id, c.grade]));
-  
-      // Check each placement in the candidate
-      for (const placement of candidate) {
-        const grade = classIdToGrade.get(placement.classId);
-        if (grade) {
-          const lock = await transaction.select().from(gradeLocks).where(and(eq(gradeLocks.accountId, accountId), eq(gradeLocks.grade, grade)));
-          if (lock[0]?.locked) {
-            throw new InvalidPlacementError(`Grade ${grade} is locked and cannot be modified`);
-          }
+    private async assertNoLockedPlacementChanges(
+        transaction: StorageTransaction,
+        accountId: string,
+        current: Pick<Placement, "studentId" | "classId">[],
+        candidate: Pick<Placement, "studentId" | "classId">[],
+      ): Promise<void> {
+        const [configs, locks] = await Promise.all([
+          transaction.select().from(classConfigs).where(eq(classConfigs.accountId, accountId)),
+          transaction.select().from(gradeLocks).where(and(eq(gradeLocks.accountId, accountId), eq(gradeLocks.locked, true))),
+        ]);
+        const gradeByClassId = new Map(configs.map((config) => [config.id, config.grade]));
+        const lockedGrades = new Set(locks.map((lock) => lock.grade));
+        const oldClassByStudent = new Map(current.map((placement) => [placement.studentId, placement.classId]));
+        const newClassByStudent = new Map(candidate.map((placement) => [placement.studentId, placement.classId]));
+        const changedStudentIds = new Set([...oldClassByStudent.keys(), ...newClassByStudent.keys()]);
+    
+        for (const studentId of changedStudentIds) {
+          const oldClassId = oldClassByStudent.get(studentId);
+          const newClassId = newClassByStudent.get(studentId);
+          if (oldClassId === newClassId) continue;
+          const oldGrade = oldClassId ? gradeByClassId.get(oldClassId) : undefined;
+          const newGrade = newClassId ? gradeByClassId.get(newClassId) : undefined;
+          const lockedGrade = [oldGrade, newGrade].find((grade) => grade && lockedGrades.has(grade));
+          if (lockedGrade) throw new InvalidPlacementError(`Grade ${lockedGrade} is locked and cannot be modified`);
         }
       }
-    }
 
   async getPlacement(accountId: string, id: string): Promise<Placement | undefined> {
     accountId = requireAccountId(accountId);
@@ -647,15 +653,15 @@ export class DatabaseStorage {
       ): Promise<{ placement: Placement; revision: number }> {
         accountId = requireAccountId(accountId);
         return this.withPlacementRevision(accountId, expectedRevision, async (transaction, revision) => {
-          const candidate = await transaction.select().from(placements).where(eq(placements.accountId, accountId));
+          const current = await transaction.select().from(placements).where(eq(placements.accountId, accountId));
           validatePlacements(
-            [...candidate, insertPlacement],
+            [...current, insertPlacement],
             await transaction.select().from(students).where(eq(students.accountId, accountId)),
             await transaction.select().from(classConfigs).where(eq(classConfigs.accountId, accountId)),
             await transaction.select().from(rules).where(eq(rules.accountId, accountId)),
             manualOverride,
           );
-          await this.checkGradeLocks(transaction, accountId, [insertPlacement]);
+          await this.assertNoLockedPlacementChanges(transaction, accountId, current, [...current, insertPlacement]);
           const [placement] = await transaction.insert(placements).values({
             id: randomUUID(),
             accountId,
@@ -682,7 +688,7 @@ export class DatabaseStorage {
           ? { ...placement, ...updates }
           : placement);
         await this.validatePlacementCandidate(transaction, accountId, candidate);
-        await this.checkGradeLocks(transaction, accountId, candidate.filter((p) => p.id === id));
+        await this.assertNoLockedPlacementChanges(transaction, accountId, current, candidate);
         const [placement] = await transaction.update(placements)
           .set(updates)
           .where(and(eq(placements.accountId, accountId), eq(placements.id, id)))
@@ -706,7 +712,7 @@ export class DatabaseStorage {
             ? current.map((placement) => placement.id === existing.id ? { ...placement, classId: targetClassId } : placement)
             : [...current, { studentId, classId: targetClassId }];
           await this.validatePlacementCandidate(transaction, accountId, candidate, manualOverride);
-          await this.checkGradeLocks(transaction, accountId, candidate.filter((p) => p.studentId === studentId));
+          await this.assertNoLockedPlacementChanges(transaction, accountId, current, candidate);
           if (existing) {
             const [placement] = await transaction.update(placements)
               .set({ classId: targetClassId })
@@ -731,7 +737,8 @@ export class DatabaseStorage {
         const current = await transaction.select().from(placements).where(eq(placements.accountId, accountId));
         const existing = current.find((placement) => placement.id === id);
         if (!existing) throw new PlacementNotFoundError();
-        await this.checkGradeLocks(transaction, accountId, [{ studentId: existing.studentId, classId: existing.classId }]);
+        const candidate = current.filter((placement) => placement.id !== id);
+        await this.assertNoLockedPlacementChanges(transaction, accountId, current, candidate);
         const result = await transaction.delete(placements)
           .where(and(eq(placements.accountId, accountId), eq(placements.id, id)))
           .returning();
@@ -762,7 +769,7 @@ export class DatabaseStorage {
           const current = await transaction.select().from(placements).where(eq(placements.accountId, accountId));
           const candidate = buildSwapPlacements(current, student1Id, class1Id, student2Id, class2Id);
           await this.validatePlacementCandidate(transaction, accountId, candidate, manualOverride);
-          await this.checkGradeLocks(transaction, accountId, candidate.filter((p) => p.studentId === student1Id || p.studentId === student2Id));
+          await this.assertNoLockedPlacementChanges(transaction, accountId, current, candidate);
           const first = current.find((placement) => placement.studentId === student1Id)!;
           const second = current.find((placement) => placement.studentId === student2Id)!;
           const updated = await transaction.update(placements)
@@ -800,7 +807,7 @@ export class DatabaseStorage {
           ? currentPlacements.filter((placement) => !scopedSet.has(placement.studentId))
           : [];
         validatePlacements([...retained, ...placementList], currentStudents, configs, accountRules);
-        await this.checkGradeLocks(transaction, accountId, placementList);
+        await this.assertNoLockedPlacementChanges(transaction, accountId, currentPlacements, [...retained, ...placementList]);
   
         if (scopedStudentIds?.length) {
           const linkedStudents = await transaction
@@ -880,7 +887,7 @@ export class DatabaseStorage {
         // Validate the combined result, but insert only the new rows. Existing
         // placement IDs, class assignments, and lock flags remain untouched.
         validatePlacements([...currentPlacements, ...placementList], accountStudents, configs, accountRules);
-        await this.checkGradeLocks(transaction, accountId, placementList);
+        await this.assertNoLockedPlacementChanges(transaction, accountId, currentPlacements, [...currentPlacements, ...placementList]);
   
         const studentIds = Array.from(new Set(placementList.map((placement) => placement.studentId)));
         const classIds = Array.from(new Set(placementList.map((placement) => placement.classId)));

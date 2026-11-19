@@ -4,7 +4,8 @@ import { motion } from "framer-motion";
 import {
   Users, AlertTriangle, CheckCircle, ArrowRight, Download,
   GripVertical, Link2, Unlink, BarChart3, RefreshCw, Zap,
-  ArrowRightLeft, Check, Loader2, Undo2, X, Plus, UserRoundMinus
+  ArrowRightLeft, Check, Loader2, Undo2, X, Plus, UserRoundMinus,
+  Lock, Unlock, Save, FolderOpen, RotateCcw, Trash2, Eye
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -33,6 +34,7 @@ import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { downloadXlsx, type SpreadsheetCell, type SpreadsheetSheet } from "@/lib/xlsx-export";
 import { StudentFormFields } from "@/components/student-form-fields";
+import { GradeSaveLockControls } from "@/components/grade-save-lock-controls";
 import { Link } from "wouter";
 import { characteristicValueToArray, isCharacteristicApplicableToGrade } from "@shared/characteristics";
 import { getStudentTargetGrade, normalizeGradeValue } from "@shared/grades";
@@ -430,9 +432,11 @@ export default function ReviewPage() {
   const [newLearnerId, setNewLearnerId] = useState("");
     const [newLearnerClassId, setNewLearnerClassId] = useState("");
     const [removingLearner, setRemovingLearner] = useState<{ student: Student; className: string; placementId: string } | null>(null);
-    const [manualOverride, setManualOverride] = useState(false);
-  
-    const { data: classConfigs = [], isLoading: configsLoading } = useQuery<ClassConfig[]>({
+      const [manualOverride, setManualOverride] = useState(false);
+      const [saveLockDialogOpen, setSaveLockDialogOpen] = useState(false);
+      const [saveLockGrade, setSaveLockGrade] = useState("");
+     
+        const { data: classConfigs = [], isLoading: configsLoading } = useQuery<ClassConfig[]>({
     queryKey: ["/api/class-configs"],
   });
 
@@ -454,10 +458,18 @@ export default function ReviewPage() {
   });
 
   const { data: teachers = [] } = useQuery<Teacher[]>({
-    queryKey: ["/api/teachers"],
-  });
-
-  const classToTeacher = useMemo(() => {
+      queryKey: ["/api/teachers"],
+    });
+  
+    const { data: gradeLocks = [] } = useQuery<{ grade: string; locked: boolean }[]>({
+      queryKey: ["/api/grade-locks"],
+    });
+  
+    const { data: gradeSnapshots = [] } = useQuery<{ id: string; grade: string; name: string; description: string | null; savedAt: string; savedBy: string }[]>({
+      queryKey: ["/api/grade-snapshots"],
+    });
+  
+    const classToTeacher = useMemo(() => {
     const mapping: Record<string, string> = {};
     teachers.forEach((teacher) => {
       if (teacher.currentClass) {
@@ -506,11 +518,60 @@ export default function ReviewPage() {
       });
     },
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/placements/state"] });
-    },
-  });
-
-  const addPlacementMutation = useMutation({
+          queryClient.invalidateQueries({ queryKey: ["/api/placements/state"] });
+        },
+      });
+    
+      const lockGradeMutation = useMutation({
+        mutationFn: ({ grade, locked }: { grade: string; locked: boolean }) =>
+          apiRequest("POST", "/api/grade-locks", { grade, locked }),
+        onSuccess: () => {
+          queryClient.invalidateQueries({ queryKey: ["/api/grade-locks"] });
+          toast({ title: locked ? "Grade locked" : "Grade unlocked" });
+        },
+        onError: (error: Error) => {
+          toast({ title: "Failed to update lock", description: error.message, variant: "destructive" });
+        },
+      });
+    
+      const saveSnapshotMutation = useMutation({
+        mutationFn: ({ grade, name, description }: { grade: string; name: string; description?: string }) =>
+          apiRequest("POST", "/api/grade-snapshots", { grade, name, description }),
+        onSuccess: () => {
+          queryClient.invalidateQueries({ queryKey: ["/api/grade-snapshots"] });
+          setSaveLockDialogOpen(false);
+          toast({ title: "Snapshot saved" });
+        },
+        onError: (error: Error) => {
+          toast({ title: "Failed to save snapshot", description: error.message, variant: "destructive" });
+        },
+      });
+    
+      const restoreSnapshotMutation = useMutation({
+        mutationFn: ({ id, expectedRevision }: { id: string; expectedRevision: number }) =>
+          apiRequest("POST", `/api/grade-snapshots/${id}/restore`, { expectedRevision }),
+        onSuccess: () => {
+          queryClient.invalidateQueries({ queryKey: ["/api/grade-snapshots"] });
+          queryClient.invalidateQueries({ queryKey: ["/api/placements/state"] });
+          toast({ title: "Snapshot restored" });
+        },
+        onError: (error: Error) => {
+          toast({ title: "Failed to restore snapshot", description: error.message, variant: "destructive" });
+        },
+      });
+    
+      const deleteSnapshotMutation = useMutation({
+        mutationFn: (id: string) => apiRequest("DELETE", `/api/grade-snapshots/${id}`),
+        onSuccess: () => {
+          queryClient.invalidateQueries({ queryKey: ["/api/grade-snapshots"] });
+          toast({ title: "Snapshot deleted" });
+        },
+        onError: (error: Error) => {
+          toast({ title: "Failed to delete snapshot", description: error.message, variant: "destructive" });
+        },
+      });
+    
+      const addPlacementMutation = useMutation({
       mutationFn: async ({ studentId, classId }: { studentId: string; classId: string }) => {
         const response = await apiRequest("POST", "/api/placements", {
           studentId,
@@ -1756,15 +1817,16 @@ export default function ReviewPage() {
               </div>
 
               <div className="space-y-1.5">
-                <label className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Grade</label>
-                <Select value={selectedGrade} onValueChange={setSelectedGrade}>
-                  <SelectTrigger className="h-8 text-xs" data-testid="select-solver-grade"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All grades</SelectItem>
-                    {availableGrades.map((grade) => <SelectItem key={grade} value={grade}>Grade {grade}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-              </div>
+                              <label className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Grade</label>
+                              <Select value={selectedGrade} onValueChange={setSelectedGrade}>
+                                <SelectTrigger className="h-8 text-xs" data-testid="select-solver-grade"><SelectValue /></SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="all">All grades</SelectItem>
+                                  {availableGrades.map((grade) => <SelectItem key={grade} value={grade}>Grade {grade}</SelectItem>)}
+                                </SelectContent>
+                              </Select>
+                              {selectedGrade !== "all" && <GradeSaveLockControls grade={selectedGrade} />}
+                            </div>
 
               <div className="space-y-1.5">
                 <label className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Characteristic colours</label>
@@ -2362,7 +2424,140 @@ export default function ReviewPage() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
-      </div>
-    </div>
-  );
-}
+        
+                {/* Save & Lock Dialog */}
+                <Dialog open={saveLockDialogOpen} onOpenChange={setSaveLockDialogOpen}>
+                  <DialogContent className="max-w-md">
+                    <DialogHeader>
+                      <DialogTitle>Save & Lock Grade {saveLockGrade}</DialogTitle>
+                      <DialogDescription>
+                        Save a snapshot of current placements, lock the grade to prevent changes, or manage existing snapshots.
+                      </DialogDescription>
+                    </DialogHeader>
+                    <DialogContent className="space-y-4">
+                      {/* Current Lock Status */}
+                      <div className="rounded border bg-muted/30 p-3">
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm font-medium">Lock Status</span>
+                          <Badge variant={gradeLocks.find(l => l.grade === saveLockGrade)?.locked ? "destructive" : "default"}>
+                            {gradeLocks.find(l => l.grade === saveLockGrade)?.locked ? (
+                              <>🔒 Locked</>
+                            ) : (
+                              <>🔓 Unlocked</>
+                            )}
+                          </Badge>
+                        </div>
+                        {gradeLocks.find(l => l.grade === saveLockGrade)?.locked && (
+                          <p className="text-xs text-muted-foreground mt-1">
+                            This grade is locked. No placement changes are allowed until unlocked.
+                          </p>
+                        )}
+                      </div>
+        
+                      {/* Lock/Unlock Controls */}
+                      <div className="space-y-2">
+                        <label className="text-sm font-medium">Lock Grade</label>
+                        <div className="flex items-center gap-2">
+                          <Button
+                            variant={gradeLocks.find(l => l.grade === saveLockGrade)?.locked ? "outline" : "default"}
+                            size="sm"
+                            className="flex-1"
+                            onClick={() => lockGradeMutation.mutate({ grade: saveLockGrade, locked: true })}
+                            disabled={lockGradeMutation.isPending}
+                          >
+                            {lockGradeMutation.isPending ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Lock className="mr-1 h-3.5 w-3.5" />}
+                            Lock Grade
+                          </Button>
+                          <Button
+                            variant={gradeLocks.find(l => l.grade === saveLockGrade)?.locked ? "default" : "outline"}
+                            size="sm"
+                            className="flex-1"
+                            onClick={() => lockGradeMutation.mutate({ grade: saveLockGrade, locked: false })}
+                            disabled={lockGradeMutation.isPending || !gradeLocks.find(l => l.grade === saveLockGrade)?.locked}
+                          >
+                            {lockGradeMutation.isPending ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Unlock className="mr-1 h-3.5 w-3.5" />}
+                            Unlock Grade
+                          </Button>
+                        </div>
+                      </div>
+        
+                      {/* Save Snapshot */}
+                      <div className="space-y-2 border-t pt-4">
+                        <label className="text-sm font-medium">Save Snapshot</label>
+                        <div className="space-y-2">
+                          <input
+                            type="text"
+                            placeholder="Snapshot name (e.g., \"Before Term 2 changes\")"
+                            className="w-full rounded border bg-background px-3 py-2 text-sm"
+                            onChange={(e) => setSaveLockGrade(e.target.value)}
+                            defaultValue={`Grade ${saveLockGrade} - ${new Date().toLocaleDateString()}`}
+                          />
+                          <textarea
+                            placeholder="Optional description"
+                            className="w-full rounded border bg-background px-3 py-2 text-sm min-h-[60px]"
+                            onChange={(e) => setSaveLockGrade(e.target.value)}
+                          />
+                          <Button
+                            onClick={() => saveSnapshotMutation.mutate({ grade: saveLockGrade, name: `Grade ${saveLockGrade} - ${new Date().toLocaleDateString()}`, description: "" })}
+                            disabled={saveSnapshotMutation.isPending}
+                            className="w-full"
+                          >
+                            {saveSnapshotMutation.isPending ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Save className="mr-1 h-3.5 w-3.5" />}
+                            Save Snapshot
+                          </Button>
+                        </div>
+                      </div>
+        
+                      {/* Existing Snapshots */}
+                      <div className="space-y-2 border-t pt-4">
+                        <label className="text-sm font-medium">Saved Snapshots</label>
+                        {(() => {
+                          const snapshots = gradeSnapshots.filter(s => s.grade === saveLockGrade);
+                          if (snapshots.length === 0) {
+                            return <p className="text-xs text-muted-foreground">No snapshots saved for this grade.</p>;
+                          }
+                          return (
+                            <div className="space-y-1 max-h-40 overflow-y-auto">
+                              {snapshots.map(snapshot => (
+                                <div key={snapshot.id} className="flex items-center justify-between rounded border bg-muted/30 p-2 text-xs">
+                                  <div>
+                                    <p className="font-medium">{snapshot.name}</p>
+                                    <p className="text-muted-foreground">{new Date(snapshot.savedAt).toLocaleString()}</p>
+                                    {snapshot.description && <p className="text-muted-foreground">{snapshot.description}</p>}
+                                  </div>
+                                  <div className="flex items-center gap-1">
+                                    <Button
+                                      variant="outline"
+                                      size="icon"
+                                      className="h-6 w-6"
+                                      onClick={() => restoreSnapshotMutation.mutate({ id: snapshot.id, expectedRevision: currentPlacementRevision() })}
+                                      disabled={restoreSnapshotMutation.isPending}
+                                    >
+                                      <RotateCcw className="h-3.5 w-3.5" />
+                                    </Button>
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      className="h-6 w-6 text-destructive"
+                                      onClick={() => deleteSnapshotMutation.mutate(snapshot.id)}
+                                      disabled={deleteSnapshotMutation.isPending}
+                                    >
+                                      <Trash2 className="h-3.5 w-3.5" />
+                                    </Button>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          );
+                        })()}
+                      </div>
+                    </DialogContent>
+                    <DialogFooter>
+                      <Button variant="outline" onClick={() => setSaveLockDialogOpen(false)}>Close</Button>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
+              </div>
+            </div>
+          );
+        }
