@@ -356,7 +356,7 @@ test("rejects duplicate placements for a learner", () => {
     { studentId: "one", classId: "B" },
   ];
 
-  assert.throws(() => validatePlacements(candidate, students, configs, [], "account"), InvalidPlacementError);
+  assert.throws(() => validatePlacements(candidate, students, configs, []), InvalidPlacementError);
 });
 
 test("rejects placements over class capacity and invalid account references", () => {
@@ -364,11 +364,11 @@ test("rejects placements over class capacity and invalid account references", ()
   const configs = [makeClass("A", 1)];
 
   assert.throws(
-    () => validatePlacements([{ studentId: "one", classId: "A" }, { studentId: "two", classId: "A" }], students, configs, [], "account"),
+    () => validatePlacements([{ studentId: "one", classId: "A" }, { studentId: "two", classId: "A" }], students, configs, []),
     /exceeds capacity/,
   );
   assert.throws(
-    () => validatePlacements([{ studentId: "one", classId: "missing" }], students, configs, [], "account"),
+    () => validatePlacements([{ studentId: "one", classId: "missing" }], students, configs, []),
     /current account/,
   );
 });
@@ -383,7 +383,6 @@ test("rejects placements that violate mandatory pair and separation constraints"
       students,
       configs,
       [makeRule("pair", "one", "two")],
-      "account",
     ),
     /mandatory together/,
   );
@@ -393,10 +392,57 @@ test("rejects placements that violate mandatory pair and separation constraints"
       students,
       configs,
       [makeRule("separate", "one", "two")],
-      "account",
     ),
     /mandatory separation/,
   );
+});
+
+test("allows an unrelated move when another mandatory separation is already violated", () => {
+  const students = [
+    makeStudent("moving", "female"),
+    makeStudent("partner-a", "male"),
+    makeStudent("partner-b", "female"),
+  ];
+  const configs = [makeClass("A", 5), makeClass("B", 5), makeClass("C", 5)];
+  const baseline = [
+    { studentId: "moving", classId: "A" },
+    { studentId: "partner-a", classId: "B" },
+    { studentId: "partner-b", classId: "B" },
+  ];
+  const candidate = [
+    { studentId: "moving", classId: "C" },
+    { studentId: "partner-a", classId: "B" },
+    { studentId: "partner-b", classId: "B" },
+  ];
+
+  assert.doesNotThrow(() => validatePlacements(
+    candidate,
+    students,
+    configs,
+    [makeRule("separate", "partner-a", "partner-b")],
+    baseline,
+  ));
+});
+
+test("still rejects a move that creates a new mandatory separation conflict", () => {
+  const students = [makeStudent("moving", "female"), makeStudent("other", "male")];
+  const configs = [makeClass("A", 5), makeClass("B", 5)];
+  const baseline = [
+    { studentId: "moving", classId: "A" },
+    { studentId: "other", classId: "B" },
+  ];
+  const candidate = [
+    { studentId: "moving", classId: "B" },
+    { studentId: "other", classId: "B" },
+  ];
+
+  assert.throws(() => validatePlacements(
+    candidate,
+    students,
+    configs,
+    [makeRule("separate", "moving", "other")],
+    baseline,
+  ), /mandatory separation/);
 });
 
 test("a rejected swap leaves its placement snapshot unchanged", () => {
@@ -408,7 +454,7 @@ test("a rejected swap leaves its placement snapshot unchanged", () => {
   const configs = [makeClass("A", 1), makeClass("B", 1)];
   const invalidSwap = buildSwapPlacements(original, "one", "B", "two", "B");
 
-  assert.throws(() => validatePlacements(invalidSwap, students, configs, [], "account"), /exceeds capacity/);
+  assert.throws(() => validatePlacements(invalidSwap, students, configs, []), /exceeds capacity/);
   assert.deepEqual(original.map(({ studentId, classId }) => ({ studentId, classId })), [
     { studentId: "one", classId: "A" },
     { studentId: "two", classId: "B" },
