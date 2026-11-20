@@ -52,7 +52,7 @@ import {
 import { db, pool } from "./db";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { randomUUID } from "crypto";
-import { buildSwapPlacements, PlacementNotFoundError, runRevisionedMutation, validatePlacements, InvalidPlacementError } from "./placementSafety";
+import { buildSwapPlacements, PlacementNotFoundError, retainAccountOwnedPlacements, runRevisionedMutation, validatePlacements, InvalidPlacementError } from "./placementSafety";
 import type { LearnerImportPlan } from "./learnerImportPlan";
 import { normalizeRosterGrade, type StudentRosterOptions } from "@shared/student-roster";
 import { normalizeGradeValue } from "@shared/grades";
@@ -616,6 +616,7 @@ export class DatabaseStorage {
         transaction: StorageTransaction,
         accountId: string,
         candidate: Pick<Placement, "studentId" | "classId">[],
+        current: Placement[],
         manualOverride: boolean = false,
       ): Promise<void> {
         const [accountStudents, configs, accountRules] = await Promise.all([
@@ -623,7 +624,17 @@ export class DatabaseStorage {
           transaction.select().from(classConfigs).where(eq(classConfigs.accountId, accountId)),
           transaction.select().from(rules).where(eq(rules.accountId, accountId)),
         ]);
-        validatePlacements(candidate, accountStudents, configs, accountRules, manualOverride);
+        const currentByStudent = new Map(current.map((placement) => [placement.studentId, placement]));
+        const retained = candidate.flatMap((placement) => {
+          const old = currentByStudent.get(placement.studentId);
+          return old?.classId === placement.classId ? [old] : [];
+        });
+        const changed = candidate.filter((placement) => {
+          const old = currentByStudent.get(placement.studentId);
+          return !old || old.classId !== placement.classId;
+        });
+        const validRetained = retainAccountOwnedPlacements(retained, accountStudents, configs, accountId);
+        validatePlacements([...validRetained, ...changed], accountStudents, configs, accountRules, accountId, manualOverride);
       }
   
     private async assertNoLockedPlacementChanges(
@@ -668,11 +679,18 @@ export class DatabaseStorage {
         accountId = requireAccountId(accountId);
         return this.withPlacementRevision(accountId, expectedRevision, async (transaction, revision) => {
           const current = await transaction.select().from(placements).where(eq(placements.accountId, accountId));
+          const [accountStudents, configs, accountRules] = await Promise.all([
+            transaction.select().from(students).where(eq(students.accountId, accountId)),
+            transaction.select().from(classConfigs).where(eq(classConfigs.accountId, accountId)),
+            transaction.select().from(rules).where(eq(rules.accountId, accountId)),
+          ]);
+          const retained = retainAccountOwnedPlacements(current, accountStudents, configs, accountId);
           validatePlacements(
-            [...current, insertPlacement],
-            await transaction.select().from(students).where(eq(students.accountId, accountId)),
-            await transaction.select().from(classConfigs).where(eq(classConfigs.accountId, accountId)),
-            await transaction.select().from(rules).where(eq(rules.accountId, accountId)),
+            [...retained, insertPlacement],
+            accountStudents,
+            configs,
+            accountRules,
+            accountId,
             manualOverride,
           );
           await this.assertNoLockedPlacementChanges(transaction, accountId, current, [...current, insertPlacement]);
@@ -701,7 +719,7 @@ export class DatabaseStorage {
         const candidate = current.map((placement) => placement.id === id
           ? { ...placement, ...updates }
           : placement);
-        await this.validatePlacementCandidate(transaction, accountId, candidate);
+        await this.validatePlacementCandidate(transaction, accountId, candidate, current);
         await this.assertNoLockedPlacementChanges(transaction, accountId, current, candidate);
         const [placement] = await transaction.update(placements)
           .set(updates)
@@ -725,7 +743,7 @@ export class DatabaseStorage {
           const candidate = existing
             ? current.map((placement) => placement.id === existing.id ? { ...placement, classId: targetClassId } : placement)
             : [...current, { studentId, classId: targetClassId }];
-          await this.validatePlacementCandidate(transaction, accountId, candidate, manualOverride);
+          await this.validatePlacementCandidate(transaction, accountId, candidate, current, manualOverride);
           await this.assertNoLockedPlacementChanges(transaction, accountId, current, candidate);
           if (existing) {
             const [placement] = await transaction.update(placements)
@@ -782,7 +800,7 @@ export class DatabaseStorage {
         return this.withPlacementRevision(accountId, expectedRevision, async (transaction, revision) => {
           const current = await transaction.select().from(placements).where(eq(placements.accountId, accountId));
           const candidate = buildSwapPlacements(current, student1Id, class1Id, student2Id, class2Id);
-          await this.validatePlacementCandidate(transaction, accountId, candidate, manualOverride);
+          await this.validatePlacementCandidate(transaction, accountId, candidate, current, manualOverride);
           await this.assertNoLockedPlacementChanges(transaction, accountId, current, candidate);
           const first = current.find((placement) => placement.studentId === student1Id)!;
           const second = current.find((placement) => placement.studentId === student2Id)!;
@@ -818,10 +836,13 @@ export class DatabaseStorage {
         const accountRules = await transaction.select().from(rules).where(eq(rules.accountId, accountId));
         const scopedSet = scopedStudentIds ? new Set(scopedStudentIds) : null;
         const retained = scopedSet
-          ? currentPlacements.filter((placement) => !scopedSet.has(placement.studentId))
+          ? retainAccountOwnedPlacements(currentPlacements, currentStudents, configs, accountId, scopedSet)
           : [];
-        validatePlacements([...retained, ...placementList], currentStudents, configs, accountRules);
-        await this.assertNoLockedPlacementChanges(transaction, accountId, currentPlacements, [...retained, ...placementList]);
+        validatePlacements([...retained, ...placementList], currentStudents, configs, accountRules, accountId);
+        const placementsAfterReplacement = scopedSet
+          ? [...currentPlacements.filter((placement) => !scopedSet.has(placement.studentId)), ...placementList]
+          : placementList;
+        await this.assertNoLockedPlacementChanges(transaction, accountId, currentPlacements, placementsAfterReplacement);
   
         if (scopedStudentIds?.length) {
           const linkedStudents = await transaction
@@ -900,7 +921,8 @@ export class DatabaseStorage {
   
         // Validate the combined result, but insert only the new rows. Existing
         // placement IDs, class assignments, and lock flags remain untouched.
-        validatePlacements([...currentPlacements, ...placementList], accountStudents, configs, accountRules);
+        const retainedPlacements = retainAccountOwnedPlacements(currentPlacements, accountStudents, configs, accountId);
+        validatePlacements([...retainedPlacements, ...placementList], accountStudents, configs, accountRules, accountId);
         await this.assertNoLockedPlacementChanges(transaction, accountId, currentPlacements, [...currentPlacements, ...placementList]);
   
         const studentIds = Array.from(new Set(placementList.map((placement) => placement.studentId)));
@@ -1173,7 +1195,7 @@ export class DatabaseStorage {
       const state = await this.readGradeSnapshotState(transaction, accountId);
       const plan = planGradeSnapshotRestore(accountId, snapshot, state);
       const accountRules = await transaction.select().from(rules).where(eq(rules.accountId, accountId));
-      validatePlacements(plan.placements, state.students, plan.classConfigs, accountRules);
+      validatePlacements(plan.placements, state.students, plan.classConfigs, accountRules, accountId);
       await this.assertNoLockedPlacementChanges(transaction, accountId, state.placements, plan.placements);
 
       if (plan.studentIds.length) {

@@ -1812,6 +1812,7 @@ export async function registerRoutes(
 
       if (generationScope === "unallocated-grade" && requestedGrade) {
         const mapped = await buildIncrementalGeneration({
+          accountId,
           students,
           classConfigs,
           placements: allPlacements,

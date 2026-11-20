@@ -9,6 +9,8 @@ import { and, eq } from "drizzle-orm";
 import { db } from "./db";
 import { DatabaseStorage } from "./storage";
 import { registerGradeRoutes } from "./gradeRoutes";
+import { buildIncrementalGeneration } from "./incrementalGeneration";
+import { InvalidPlacementError, validatePlacements } from "./placementSafety";
 import type { AccountContext } from "./accountContext";
 import { accounts, profiles, students, classConfigs, placements, teachers, rules, gradeLocks, gradeSnapshots } from "@shared/schema";
 
@@ -80,6 +82,77 @@ test("grade snapshots and locks — isolated PostgreSQL regression suite", async
     assert.equal((await storage.getGradeSnapshots(b.accountId)).length, 0);
     assert.equal(await storage.getGradeSnapshot(b.accountId, snapshot.id), undefined);
     assert.ok(transactionModes.some((mode) => (mode as { isolationLevel?: string })?.isolationLevel === "repeatable read"));
+  });
+
+  await t.test("same-account learner move ignores an unchanged stale placement but keeps account checks", async () => {
+    const a = await fixture(), b = await fixture();
+    const [targetClass] = await memory.insert(classConfigs).values({
+      id: randomUUID(), accountId: a.accountId, name: "2B", grade: "2", capacity: 30,
+    }).returning();
+    const staleStudentId = randomUUID();
+    const [stalePlacement] = await memory.insert(placements).values({
+      id: randomUUID(), accountId: a.accountId, studentId: staleStudentId, classId: a.config.id,
+    }).returning();
+
+    const moved = await storage.movePlacement(a.accountId, a.student.id, targetClass.id, 0);
+    assert.equal(moved.placement.classId, targetClass.id);
+    assert.ok((await storage.getPlacements(a.accountId)).some((row) => row.id === stalePlacement.id));
+    await assert.rejects(
+      storage.movePlacement(a.accountId, b.student.id, targetClass.id, 1),
+      /Placement references must belong to the current account/,
+    );
+    await assert.rejects(storage.movePlacement(a.accountId, a.student.id, b.config.id, 1), /current account/);
+  });
+
+  await t.test("grade-scoped regeneration replaces only the selected grade and leaves protected placements intact", async () => {
+    const a = await fixture();
+    const [otherGradeStudent] = await memory.insert(students).values({
+      id: randomUUID(), accountId: a.accountId, firstName: "Other", lastName: "Grade", grade: "6",
+      characteristics: { newGrade: "6" },
+    }).returning();
+    const [otherGradeClass] = await memory.insert(classConfigs).values({
+      id: randomUUID(), accountId: a.accountId, name: "6A", grade: "6", capacity: 20,
+    }).returning();
+    const [protectedPlacement] = await memory.insert(placements).values({
+      id: randomUUID(), accountId: a.accountId, studentId: otherGradeStudent.id, classId: otherGradeClass.id,
+    }).returning();
+    await memory.update(students).set({ grade: "7", characteristics: { newGrade: "7" } }).where(eq(students.id, a.student.id));
+    await memory.update(classConfigs).set({ grade: "7" }).where(eq(classConfigs.id, a.config.id));
+
+    const replacementRevision = await storage.replacePlacements(
+      a.accountId, [{ studentId: a.student.id, classId: a.config.id }], 0, [a.student.id],
+    );
+    assert.equal(replacementRevision, 1);
+    assert.ok((await storage.getPlacements(a.accountId)).some((row) => row.id === protectedPlacement.id && row.classId === otherGradeClass.id));
+  });
+
+  await t.test("selected-grade generation accepts owned classes and rejects another account's destination class", async () => {
+    const a = await fixture(), b = await fixture();
+    const selectedStudents = [
+      { ...a.student, grade: "7", characteristics: { newGrade: "7" } },
+      { ...b.student, id: randomUUID(), accountId: a.accountId, grade: "7", characteristics: { newGrade: "7" } },
+    ];
+    const accountClasses = [
+      { ...a.config, grade: "7" },
+      { ...a.otherConfig, grade: "7" },
+    ];
+    const generated = await buildIncrementalGeneration({
+      accountId: a.accountId, students: selectedStudents, classConfigs: accountClasses,
+      placements: [], rules: [], characteristics: [], teacherPlacementPreferences: [],
+      targetGrade: "7", mode: "regenerate-grade",
+    }, async (learners, classes) => ({
+      classes: classes.map((classConfig, index) => ({ classConfig, students: index === 0 ? learners : [] })),
+      unassignedStudentIds: [], conflicts: [],
+    }));
+    assert.equal(generated.placementList.length, 2);
+
+    assert.throws(() => validatePlacements(
+      [{ studentId: selectedStudents[0].id, classId: b.config.id }],
+      selectedStudents,
+      [b.config],
+      [],
+      a.accountId,
+    ), InvalidPlacementError);
   });
 
   await t.test("locking blocks restore without changing state/revision; unlocking restores all three components", async () => {

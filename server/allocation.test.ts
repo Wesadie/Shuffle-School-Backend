@@ -356,7 +356,7 @@ test("rejects duplicate placements for a learner", () => {
     { studentId: "one", classId: "B" },
   ];
 
-  assert.throws(() => validatePlacements(candidate, students, configs, []), InvalidPlacementError);
+  assert.throws(() => validatePlacements(candidate, students, configs, [], "account"), InvalidPlacementError);
 });
 
 test("rejects placements over class capacity and invalid account references", () => {
@@ -364,11 +364,11 @@ test("rejects placements over class capacity and invalid account references", ()
   const configs = [makeClass("A", 1)];
 
   assert.throws(
-    () => validatePlacements([{ studentId: "one", classId: "A" }, { studentId: "two", classId: "A" }], students, configs, []),
+    () => validatePlacements([{ studentId: "one", classId: "A" }, { studentId: "two", classId: "A" }], students, configs, [], "account"),
     /exceeds capacity/,
   );
   assert.throws(
-    () => validatePlacements([{ studentId: "one", classId: "missing" }], students, configs, []),
+    () => validatePlacements([{ studentId: "one", classId: "missing" }], students, configs, [], "account"),
     /current account/,
   );
 });
@@ -383,6 +383,7 @@ test("rejects placements that violate mandatory pair and separation constraints"
       students,
       configs,
       [makeRule("pair", "one", "two")],
+      "account",
     ),
     /mandatory together/,
   );
@@ -392,6 +393,7 @@ test("rejects placements that violate mandatory pair and separation constraints"
       students,
       configs,
       [makeRule("separate", "one", "two")],
+      "account",
     ),
     /mandatory separation/,
   );
@@ -406,7 +408,7 @@ test("a rejected swap leaves its placement snapshot unchanged", () => {
   const configs = [makeClass("A", 1), makeClass("B", 1)];
   const invalidSwap = buildSwapPlacements(original, "one", "B", "two", "B");
 
-  assert.throws(() => validatePlacements(invalidSwap, students, configs, []), /exceeds capacity/);
+  assert.throws(() => validatePlacements(invalidSwap, students, configs, [], "account"), /exceeds capacity/);
   assert.deepEqual(original.map(({ studentId, classId }) => ({ studentId, classId })), [
     { studentId: "one", classId: "A" },
     { studentId: "two", classId: "B" },

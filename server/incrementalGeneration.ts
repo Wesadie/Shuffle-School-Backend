@@ -1,7 +1,7 @@
 import type { ClassConfig, Placement, Rule, Student, Characteristic } from "@shared/schema";
 import { getStudentTargetGrade, normalizeGradeValue } from "@shared/grades";
 import type { TeacherPlacementPreference } from "./generationSafety";
-import { InvalidPlacementError, validatePlacements } from "./placementSafety";
+import { InvalidPlacementError, retainAccountOwnedPlacements, validatePlacements } from "./placementSafety";
 
 export interface IncrementalGenerationResult {
   placementList: { studentId: string; classId: string }[];
@@ -12,6 +12,7 @@ export interface IncrementalGenerationResult {
 
 export async function buildIncrementalGeneration(
   input: {
+    accountId?: string;
     students: Student[];
     classConfigs: ClassConfig[];
     placements: Placement[];
@@ -32,7 +33,14 @@ export async function buildIncrementalGeneration(
   ) => Promise<{ classes: { classConfig: ClassConfig; students: Student[] }[]; unassignedStudentIds: string[]; conflicts: { message: string }[] }>,
 ): Promise<IncrementalGenerationResult> {
   const grade = normalizeGradeValue(input.targetGrade);
-  const currentPlacements = input.existingPlacements ?? input.placements;
+  const accountId = input.accountId ?? input.students[0]?.accountId ?? "";
+  const allCurrentPlacements = input.existingPlacements ?? input.placements;
+  const currentPlacements = retainAccountOwnedPlacements(
+    allCurrentPlacements,
+    input.students,
+    input.classConfigs,
+    accountId,
+  );
   const gradeStudents = input.students.filter((student) => getStudentTargetGrade(student) === grade);
   const gradeIds = new Set(gradeStudents.map((student) => student.id));
   const placementByStudent = new Map(currentPlacements.map((placement) => [placement.studentId, placement]));
@@ -99,15 +107,25 @@ export async function buildIncrementalGeneration(
   // class-balance summaries. Persist only newly generated/re-generated learners.
   const generatedPlacements = result.classes.flatMap((generatedClass) => generatedClass.students
     .filter((student) => studentsToPlaceIds.has(student.id))
-    .map((student) => ({ studentId: student.id, classId: generatedClass.classConfig.id })));
+    .map((student) => {
+      if (student.accountId !== accountId || generatedClass.classConfig.accountId !== accountId) {
+        throw new InvalidPlacementError("Placement references must belong to the current account");
+      }
+      return { studentId: student.id, classId: generatedClass.classConfig.id };
+    }));
   const affectedStudentIds = studentsToPlace.map((student) => student.id);
-  const nextPlacements = input.mode === "regenerate-grade"
-    ? [
-        ...input.placements.filter((placement) => !gradeIds.has(placement.studentId)).map(({ studentId, classId }) => ({ studentId, classId })),
-        ...generatedPlacements,
-      ]
-    : input.placements.map(({ studentId, classId }) => ({ studentId, classId })).concat(generatedPlacements);
-  validatePlacements(nextPlacements, input.students, input.classConfigs, input.rules);
+  const preservedPlacements = retainAccountOwnedPlacements(
+    input.placements,
+    input.students,
+    input.classConfigs,
+    accountId,
+    input.mode === "regenerate-grade" ? gradeIds : new Set(),
+  );
+  const nextPlacements = [
+    ...preservedPlacements.map(({ studentId, classId }) => ({ studentId, classId })),
+    ...generatedPlacements,
+  ];
+  validatePlacements(nextPlacements, input.students, input.classConfigs, input.rules, accountId);
 
   return {
     placementList: generatedPlacements,
