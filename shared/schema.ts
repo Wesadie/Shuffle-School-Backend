@@ -299,8 +299,8 @@ export const rules = pgTable("rules", {
   id: varchar("id", { length: 36 }).primaryKey(),
   accountId: uuid("account_id").notNull().default(developmentAccountSql).references(() => accounts.id, { onDelete: "cascade" }),
   type: text("type").notNull(), // "pair" or "separate"
-  studentId1: varchar("student_id_1", { length: 36 }).notNull(),
-  studentId2: varchar("student_id_2", { length: 36 }).notNull(),
+  studentId1: varchar("student_id_1", { length: 36 }).notNull().references(() => students.id, { onDelete: "cascade" }),
+  studentId2: varchar("student_id_2", { length: 36 }).notNull().references(() => students.id, { onDelete: "cascade" }),
   reason: text("reason"),
   importance: text("importance").notNull().default("mandatory"), // "mandatory" or "important"
   comment: text("comment"),
@@ -365,7 +365,7 @@ export type ClassConfig = typeof classConfigs.$inferSelect;
 export const placements = pgTable("placements", {
   id: varchar("id", { length: 36 }).primaryKey(),
   accountId: uuid("account_id").notNull().default(developmentAccountSql).references(() => accounts.id, { onDelete: "cascade" }),
-  studentId: varchar("student_id", { length: 36 }).notNull(),
+  studentId: varchar("student_id", { length: 36 }).notNull().references(() => students.id, { onDelete: "cascade" }),
   classId: varchar("class_id", { length: 36 }).notNull(),
   locked: boolean("locked").default(false),
 }, (table) => [
@@ -501,7 +501,7 @@ export const surveys = pgTable("surveys", {
   id: varchar("id", { length: 36 }).primaryKey(),
   accountId: uuid("account_id").notNull().default(developmentAccountSql).references(() => accounts.id, { onDelete: "cascade" }),
   teacherName: text("teacher_name").notNull(),
-  studentId: varchar("student_id", { length: 36 }).notNull(),
+  studentId: varchar("student_id", { length: 36 }).notNull().references(() => students.id, { onDelete: "cascade" }),
   characteristicRatings: jsonb("characteristic_ratings").$type<Record<string, string>>().default({}),
   pairWith: jsonb("pair_with").$type<string[]>().default([]),
   separateFrom: jsonb("separate_from").$type<string[]>().default([]),

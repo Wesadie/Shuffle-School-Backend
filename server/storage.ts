@@ -158,8 +158,16 @@ export class DatabaseStorage {
 
   async deleteStudent(accountId: string, id: string): Promise<boolean> {
     accountId = requireAccountId(accountId);
-    const result = await db.delete(students).where(and(eq(students.accountId, accountId), eq(students.id, id))).returning();
-    return result.length > 0;
+    return db.transaction(async (transaction) => {
+      const deletedPlacements = await transaction.delete(placements)
+        .where(and(eq(placements.accountId, accountId), eq(placements.studentId, id)))
+        .returning({ id: placements.id });
+      const result = await transaction.delete(students)
+        .where(and(eq(students.accountId, accountId), eq(students.id, id)))
+        .returning({ id: students.id });
+      if (result.length === 0) return false;
+      return true;
+    });
   }
 
   async bulkImportStudents(accountId: string, studentList: InsertStudent[]): Promise<{ count: number }> {
@@ -210,9 +218,12 @@ export class DatabaseStorage {
   }
 
   async deleteAllStudents(accountId: string): Promise<void> {
-    accountId = requireAccountId(accountId);
-    await db.delete(students).where(eq(students.accountId, accountId));
-  }
+      accountId = requireAccountId(accountId);
+      await db.transaction(async (transaction) => {
+        await transaction.delete(placements).where(eq(placements.accountId, accountId));
+        await transaction.delete(students).where(eq(students.accountId, accountId));
+      });
+    }
 
   async getRules(accountId: string): Promise<Rule[]> {
     accountId = requireAccountId(accountId);
