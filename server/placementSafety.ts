@@ -34,11 +34,29 @@ export async function runRevisionedMutation<T>(
   return mutate(nextRevision);
 }
 
+export function retainAccountOwnedPlacements(
+  placements: Placement[],
+  students: Student[],
+  classConfigs: ClassConfig[],
+  accountId: string,
+  excludedStudentIds: ReadonlySet<string> = new Set(),
+): Placement[] {
+  const studentById = new Map(students.map((student) => [student.id, student]));
+  const classById = new Map(classConfigs.map((config) => [config.id, config]));
+  return placements.filter((placement) => {
+    if (excludedStudentIds.has(placement.studentId) || placement.accountId !== accountId) return false;
+    return studentById.get(placement.studentId)?.accountId === accountId
+      && classById.get(placement.classId)?.accountId === accountId;
+  });
+}
+
 export function validatePlacements(
   candidatePlacements: Pick<Placement, "studentId" | "classId">[],
   students: Student[],
   classConfigs: ClassConfig[],
   rules: Rule[],
+  accountId: string,
+  manualOverride: boolean = false,
   baselinePlacements: Pick<Placement, "studentId" | "classId">[] = [],
 ): void {
   const studentById = new Map(students.map((student) => [student.id, student]));
@@ -50,26 +68,36 @@ export function validatePlacements(
     if (classByStudent.has(placement.studentId)) {
       throw new InvalidPlacementError("A learner can only be assigned once");
     }
-    if (!studentById.has(placement.studentId) || !classById.has(placement.classId)) {
+    if (
+      studentById.get(placement.studentId)?.accountId !== accountId
+      || classById.get(placement.classId)?.accountId !== accountId
+    ) {
       throw new InvalidPlacementError("Placement references must belong to the current account");
     }
     classByStudent.set(placement.studentId, placement.classId);
     classCounts.set(placement.classId, (classCounts.get(placement.classId) ?? 0) + 1);
   }
 
-  for (const [classId, count] of classCounts) {
-    const config = classById.get(classId)!;
-    const capacity = config.capacity || 30;
-    if (count > capacity) {
-      throw new InvalidPlacementError(`${config.name} exceeds capacity (${count}/${capacity})`);
+  for (const rule of rules) {
+    if (rule.accountId !== accountId) {
+      throw new InvalidPlacementError("Placement rules must belong to the current account");
     }
   }
 
-  // Existing allocations may already contain a rule conflict (for example,
-  // after a historical import or a changed request). A normal move must not be
-  // blocked by an unrelated, pre-existing conflict elsewhere in the account.
-  // Compare the proposed state with the current state and reject only a rule
-  // violation newly introduced by this mutation.
+  if (!manualOverride) {
+    for (const [classId, count] of classCounts) {
+      const config = classById.get(classId)!;
+      const capacity = config.capacity || 30;
+      if (count > capacity) {
+        throw new InvalidPlacementError(`${config.name} exceeds capacity (${count}/${capacity})`);
+      }
+    }
+  }
+
+  // Existing allocations can contain historical rule conflicts. A normal
+  // move should reject only conflicts introduced by this change, not unrelated
+  // conflicts elsewhere in the account. Ignore stale baseline rows whose
+  // learner or class no longer exists in this account.
   const getRuleViolations = (
     placements: Pick<Placement, "studentId" | "classId">[],
   ): Set<string> => {
@@ -77,9 +105,10 @@ export function validatePlacements(
     const violations = new Set<string>();
     for (const rule of rules) {
       if (rule.importance === "important") continue;
+      if (!studentById.has(rule.studentId1) || !studentById.has(rule.studentId2)) continue;
       const class1 = classForStudent.get(rule.studentId1);
       const class2 = classForStudent.get(rule.studentId2);
-      if (!class1 || !class2) continue;
+      if (!class1 || !class2 || !classById.has(class1) || !classById.has(class2)) continue;
       if (rule.type === "pair" && class1 !== class2) violations.add(`${rule.id}:pair`);
       if (rule.type === "separate" && class1 === class2) violations.add(`${rule.id}:separate`);
     }
@@ -92,7 +121,9 @@ export function validatePlacements(
     if (violation.endsWith(":pair")) {
       throw new InvalidPlacementError("This placement would separate learners with a mandatory together request");
     }
-    throw new InvalidPlacementError("This placement would place learners with a mandatory separation request together");
+    if (!manualOverride) {
+      throw new InvalidPlacementError("This placement would place learners with a mandatory separation request together");
+    }
   }
 }
 

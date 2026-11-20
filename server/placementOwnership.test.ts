@@ -76,3 +76,39 @@ test("stale unrelated placements do not prevent a selected-grade candidate; cros
     (error: unknown) => error instanceof InvalidPlacementError && /current account/.test(error.message),
   );
 });
+
+test("an existing mandatory separation conflict elsewhere does not block an unrelated move", () => {
+  const moving = student("moving", "7");
+  const separatedA = student("separated-a", "7");
+  const separatedB = student("separated-b", "7");
+  const classes = [classConfig("7a", "7"), classConfig("7b", "7"), classConfig("7c", "7")];
+  const baseline = [
+    placement("pm", moving.id, "7a"),
+    placement("pa", separatedA.id, "7b"),
+    placement("pb", separatedB.id, "7b"),
+  ];
+  const rules = [{
+    id: "existing-separation", accountId: accountA, type: "separate" as const,
+    studentId1: separatedA.id, studentId2: separatedB.id,
+    reason: null, importance: "mandatory" as const, comment: null,
+  }];
+  const candidate = baseline.map((row) => row.studentId === moving.id ? { ...row, classId: "7c" } : row);
+  assert.doesNotThrow(() => validatePlacements(candidate, [moving, separatedA, separatedB], classes, rules, accountA, false, baseline));
+});
+
+test("a move that introduces a new mandatory separation conflict is still rejected", () => {
+  const moving = student("moving", "7");
+  const partner = student("partner", "7");
+  const classes = [classConfig("7a", "7"), classConfig("7b", "7")];
+  const baseline = [placement("pm", moving.id, "7a"), placement("pp", partner.id, "7b")];
+  const candidate = [placement("pm", moving.id, "7b"), placement("pp", partner.id, "7b")];
+  const rules = [{
+    id: "new-separation", accountId: accountA, type: "separate" as const,
+    studentId1: moving.id, studentId2: partner.id,
+    reason: null, importance: "mandatory" as const, comment: null,
+  }];
+  assert.throws(
+    () => validatePlacements(candidate, [moving, partner], classes, rules, accountA, false, baseline),
+    /mandatory separation request/,
+  );
+});
